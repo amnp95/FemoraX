@@ -18,7 +18,7 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
-| ElasticIsotropic | in progress (1a) | |
+| ElasticIsotropic | **supported** | `ThreeDimensional` form; bit-identical to OpenSees `955ceb0` on 76,650 stress/tangent values (`test_elastic_isotropic_reference`) |
 | DruckerPrager, J2CyclicBoundingSurface, LinearElasticGGmax, PressureDependMultiYield, PressureIndependMultiYield | planned | |
 
 ## Uniaxial materials and sections

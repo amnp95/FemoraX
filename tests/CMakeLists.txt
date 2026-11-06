@@ -7,8 +7,12 @@ include(GoogleTest)
 add_executable(femorax_unit_tests
   unit/main.cpp
   unit/test_contracts.cpp
+  unit/test_elastic_isotropic.cpp
+  unit/test_elastic_isotropic_reference.cpp
   unit/test_runtime.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec GTest::gtest)
+target_compile_definitions(femorax_unit_tests PRIVATE
+  FEMORAX_REFERENCE_DATA="${PROJECT_SOURCE_DIR}/tests/reference/data")
 femorax_set_warnings(femorax_unit_tests)
 
 gtest_discover_tests(femorax_unit_tests

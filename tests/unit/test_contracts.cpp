@@ -28,6 +28,7 @@ struct Mat3D {
   static void update(const Params&, const double*, double*, const double*, double*,
                      double (*)[NSTRAIN]) {}
   static void initial_tangent(const Params&, double (*)[NSTRAIN]) {}
+  static void committed_tangent(const Params&, const double*, double (*)[NSTRAIN]) {}
   static double density(const Params& p) { return p.rho; }
 };
 
@@ -39,6 +40,7 @@ struct MatUniaxial {
   static void update(const Params&, const double*, double*, const double*, double*,
                      double (*)[NSTRAIN]) {}
   static void initial_tangent(const Params&, double (*)[NSTRAIN]) {}
+  static void committed_tangent(const Params&, const double*, double (*)[NSTRAIN]) {}
   static double density(const Params&) { return 0.0; }
 };
 

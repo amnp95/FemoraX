@@ -69,6 +69,9 @@ concept Material = requires {
               const double* eps, double* sig, double (*D)[M::NSTRAIN]) {
   { M::update(p, committed, trial, eps, sig, D) } -> std::same_as<void>;
   { M::initial_tangent(p, D) } -> std::same_as<void>;
+  // Tangent at the committed state (betaKcomm damping, stable time step). A material may
+  // recompute it from its committed state or keep a copy in its state.
+  { M::committed_tangent(p, committed, D) } -> std::same_as<void>;
   { M::density(p) } -> std::same_as<double>;
 };
 
