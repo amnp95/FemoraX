@@ -20,7 +20,7 @@ struct SchemaVersion {
 
 // The schema version this reader implements. It reads files of the same major version
 // with a minor version up to this one.
-inline constexpr SchemaVersion reader_schema_version{0, 1};
+inline constexpr SchemaVersion reader_schema_version{0, 2};
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
 struct Metadata {
@@ -76,6 +76,9 @@ struct Fix {
 
 struct EqualDof {
   std::vector<std::int32_t> retained, constrained, dof;
+  // equalDOF command of each row (schema 0.2), or empty: each (retained, constrained) pair
+  // is then one command.
+  std::vector<std::int32_t> command;
 };
 
 struct RayleighRegion {

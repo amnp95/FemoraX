@@ -4,7 +4,9 @@ GPU-native finite element solver for dynamic geotechnical and soil-structure ana
 FemoraX is the solver backend for Femora (separate repo: GeotechUW/Femora). Femora builds
 the model; FemoraX runs it on GPU or CPU through Kokkos.
 
-Goal: the same element and material formulations as OpenSees, the same results, at GPU speed.
+Goal: correct physics at GPU speed. FemoraX takes its ideas and its first element and
+material formulations from OpenSees, matches OpenSees where OpenSees is correct, and grows
+into its own solver.
 
 The full architecture is in the design document, imported here:
 @docs/design.md
@@ -37,9 +39,16 @@ Sessions start with: `claude --add-dir ../Femora --add-dir ../OpenSees`
 
 ## Non-negotiable rules
 
-1. **Same answers as OpenSees.** Every element and material port is verified against the
-   original OpenSees class (material strain-path tests, element patch tests, system tests
-   on Femora examples). A port is not done until its verification test passes.
+1. **Correct physics, verified.**
+   - Correct physics first: verify against analytical solutions, manufactured solutions
+     and published benchmarks, not only against OpenSees.
+   - Match OpenSees where OpenSees is correct, for every element and material we port
+     (material strain-path tests, element tests, system tests on Femora examples).
+     Comparisons against OpenSees remain a main bug-finding tool.
+   - Deviate deliberately where we know better (bug fixes, better algorithms, new elements
+     and materials), and record every difference in `docs/deviations.md` with the reason
+     and the evidence.
+   - A component is not done until its verification tests pass.
 2. **The physics layer is framework-free.** Code in `src/physics/` is plain C++20 functions
    marked `FEMORAX_HD` (host + device). No Kokkos types, no heap allocation, no virtual
    functions, no static or global mutable state, no exceptions, fixed-size arrays only.

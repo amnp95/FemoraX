@@ -88,6 +88,14 @@ std::vector<std::string> ordered_children(const Group& g) {
   return names;  // already sorted; equal width makes this numeric order
 }
 
+// An item a later minor version added: reading it from an older file is an error.
+void require_minor(const Model& m, int minor, const std::string& what) {
+  if (m.version.minor < minor) {
+    invalid(what + " was added in schema 0." + std::to_string(minor) + ", but the file declares " +
+            std::to_string(m.version.major) + "." + std::to_string(m.version.minor));
+  }
+}
+
 Metadata read_meta(Group& g) {
   Metadata m;
   m.femora_tag = g.opt_attr_int("femora_tag");
@@ -268,11 +276,20 @@ void read_constraints(Group& root, Model& m) {
       auto retained = eq->dataset_int("retained");
       auto constrained = eq->dataset_int("constrained");
       auto dof = eq->dataset_int("dof");
+      std::vector<std::int32_t> command;
+      if (eq->has_child("command")) {
+        require_minor(m, 2, eq->item("command"));
+        command = eq->dataset_int("command").data;
+      }
       eq->finish();
       if (constrained.rows() != retained.rows() || dof.rows() != retained.rows()) {
         invalid("/constraints/mp/equal_dof: retained, constrained and dof differ in length");
       }
-      m.equal_dof = {std::move(retained.data), std::move(constrained.data), std::move(dof.data)};
+      if (!command.empty() && static_cast<std::int64_t>(command.size()) != retained.rows()) {
+        invalid("/constraints/mp/equal_dof: command must have one entry per row");
+      }
+      m.equal_dof = {std::move(retained.data), std::move(constrained.data), std::move(dof.data),
+                     std::move(command)};
     }
     mp->finish();
   }
@@ -385,14 +402,6 @@ NodeResponse parse_node_response(const std::string& s, const std::string& where)
   if (s == "vel") return NodeResponse::Vel;
   if (s == "accel") return NodeResponse::Accel;
   unsupported("Node recorder response " + quoted(s) + " in " + where, "disp, vel, accel");
-}
-
-// An item a later minor version added: reading it from an older file is an error.
-void require_minor(const Model& m, int minor, const std::string& what) {
-  if (m.version.minor < minor) {
-    invalid(what + " was added in schema 0." + std::to_string(minor) + ", but the file declares " +
-            std::to_string(m.version.major) + "." + std::to_string(m.version.minor));
-  }
 }
 
 void read_recorders(Group& root, Model& m) {
@@ -642,6 +651,17 @@ void validate(Model& m) {
   {
     const std::string where = "/constraints/mp/equal_dof";
     std::set<std::pair<std::int32_t, std::int32_t>> constrained;
+    std::unordered_map<std::int32_t, std::pair<std::int32_t, std::int32_t>> nodes_of_command;
+    for (std::size_t i = 0; i < m.equal_dof.command.size(); ++i) {
+      const auto cmd = m.equal_dof.command[i];
+      if (cmd < 0) invalid(where + "/command: command index " + std::to_string(cmd) + " is negative");
+      const auto pair = std::make_pair(m.equal_dof.retained[i], m.equal_dof.constrained[i]);
+      const auto [it, fresh] = nodes_of_command.emplace(cmd, pair);
+      if (!fresh && it->second != pair) {
+        invalid(where + "/command: command " + std::to_string(cmd) + " has rows with different " +
+                "retained or constrained nodes; one equalDOF command ties one node pair");
+      }
+    }
     for (std::size_t i = 0; i < m.equal_dof.retained.size(); ++i) {
       const auto r = m.equal_dof.retained[i], c = m.equal_dof.constrained[i], d = m.equal_dof.dof[i];
       check_dof(r, d, where);

@@ -148,6 +148,89 @@ std::vector<std::int64_t> emulate_transformation_handler(const io::Model& model,
 
 namespace {
 
+std::string dof_list(const std::vector<std::int32_t>& d0) {
+  std::string s;
+  for (std::size_t k = 0; k < d0.size(); ++k) s += (k ? " " : "") + std::to_string(d0[k] + 1);
+  return s;
+}
+
+// The message when OpenSees' handler and the constraints as written disagree: which of the
+// refused patterns the model contains, what OpenSees does with it, and how to fix the model.
+// Harmless forms of the same patterns (a fix on a tied DOF whose retained DOF is fixed too, a
+// full chain in ascending tag order) are not blamed.
+std::string refusal(const io::Model& model, const DofNumbering& n, std::int32_t fail_node,
+                    std::int32_t fail_dof, std::int64_t opensees_value) {
+  const auto& eqd = model.equal_dof;
+  std::unordered_map<std::int32_t, std::int32_t> retained_of;           // tag -> tag
+  std::unordered_map<std::int32_t, std::vector<std::int32_t>> dofs_of;  // constrained tag -> DOFs
+  for (std::size_t r = 0; r < eqd.retained.size(); ++r) {
+    retained_of[eqd.constrained[r]] = eqd.retained[r];
+    dofs_of[eqd.constrained[r]].push_back(eqd.dof[r]);
+  }
+  std::unordered_map<std::int64_t, char> fixed;
+  for (std::size_t r = 0; r < model.fix.node.size(); ++r)
+    fixed[static_cast<std::int64_t>(model.fix.node[r]) * 64 + model.fix.dof[r]] = 1;
+  auto is_fixed = [&](std::int32_t tag, std::int32_t d1) {
+    return fixed.count(static_cast<std::int64_t>(tag) * 64 + d1) > 0;
+  };
+  auto list = [](const std::vector<std::int32_t>& d1) {
+    std::string s;
+    for (std::size_t k = 0; k < d1.size(); ++k) s += (k ? " " : "") + std::to_string(d1[k]);
+    return s;
+  };
+  const std::string tail = " FemoraX refuses the model rather than give a different answer "
+                           "(docs/deviations.md, \"Constraint handling\").";
+
+  // A fix on a tied DOF whose retained DOF is free: OpenSees loses the fix.
+  for (std::size_t r = 0; r < model.fix.node.size(); ++r) {
+    const std::int32_t C = model.fix.node[r], d1 = model.fix.dof[r];
+    const auto it = dofs_of.find(C);
+    if (it == dofs_of.end() || std::find(it->second.begin(), it->second.end(), d1) == it->second.end())
+      continue;
+    const std::int32_t R = retained_of.at(C);
+    if (is_fixed(R, d1)) continue;
+    return "node " + std::to_string(C) + " DOF " + std::to_string(d1) +
+           " is fixed and also tied by equalDOF to node " + std::to_string(R) + " DOF " +
+           std::to_string(d1) + ", which is free. OpenSees' addSP_Constraint puts the fix at a "
+           "different position of the node's transformed DOFs, so in OpenSees the fix is "
+           "silently lost and node " + std::to_string(C) + " moves with node " +
+           std::to_string(R) + ". Fix the model: fix node " + std::to_string(R) + " DOF " +
+           std::to_string(d1) + " instead (the tie then holds node " + std::to_string(C) +
+           " fixed too), or remove that DOF from the tie." + tail;
+  }
+  // Chains: C tied to R, R tied to M.
+  for (const auto& [C, R] : retained_of) {
+    const auto rm = retained_of.find(R);
+    if (rm == retained_of.end()) continue;
+    const std::int32_t M = rm->second;
+    const auto& dCR = dofs_of.at(C);
+    const auto& dRM = dofs_of.at(R);
+    const std::string chain = "node " + std::to_string(C) + " is tied to node " + std::to_string(R) +
+                              " (DOFs " + list(dCR) + "), which is itself tied to node " +
+                              std::to_string(M) + " (DOFs " + list(dRM) + "). ";
+    const std::string fix = " Fix the model: tie node " + std::to_string(C) + " directly to node " +
+                            std::to_string(M) + ", the final retained node.";
+    if (dCR != dRM) {
+      return chain + "This is a partial chain: OpenSees resolves it through node " +
+             std::to_string(R) + "'s internal DOF layout, which no longer lines up with its "
+             "nodal DOFs, so in OpenSees the DOFs of node " + std::to_string(C) +
+             " are silently connected to the wrong DOFs (or fixed)." + fix + tail;
+    }
+    if (R > C) {
+      return chain + "Node " + std::to_string(R) + " has a larger tag than node " +
+             std::to_string(C) + ": OpenSees processes nodes in ascending tag order and reads "
+             "node " + std::to_string(R) + "'s equation numbers before they are set, so in "
+             "OpenSees node " + std::to_string(C) + " is silently fixed." + fix + tail;
+    }
+  }
+  const std::string what_os =
+      opensees_value == kFixed ? std::string("fixed") : "equal to " + describe(opensees_value, n);
+  return "node " + std::to_string(n.node_tag[fail_node]) + " DOF " + std::to_string(fail_dof + 1) +
+         ": OpenSees' Transformation handler would make this DOF " + what_os +
+         ", which is not what the fix and equalDOF constraints say. Tie every node directly to "
+         "its final retained node, and fix retained nodes rather than tied DOFs." + tail;
+}
+
 // Compare with the numbering: same fixed set, and OpenSees values and FemoraX equations in
 // one-to-one correspondence. Throws on the first DOF where they differ.
 void check_against_transformation_handler(const io::Model& model, const DofNumbering& n) {
@@ -164,18 +247,7 @@ void check_against_transformation_handler(const io::Model& model, const DofNumbe
         const auto [b, fb] = value_of_eq.emplace(e, v);
         same = a->second == e && b->second == v;
       }
-      if (!same) {
-        std::string as_written = e < 0 ? std::string("fixed") : "equation " + std::to_string(e);
-        throw io::ModelError(
-            "node " + std::to_string(n.node_tag[i]) + " DOF " + std::to_string(d + 1) +
-            ": OpenSees' Transformation handler would make it " +
-            (v == kFixed ? std::string("fixed") : "equal to " + describe(v, n)) +
-            ", which is not what the fix and equalDOF constraints say (" + as_written +
-            " here). OpenSees mishandles this pattern silently (a chain through a "
-            "constrained node, a partial chain, or a fix on a constrained DOF); FemoraX "
-            "refuses it rather than give different answers. Tie every node directly to its "
-            "final retained node and fix retained nodes, not constrained DOFs");
-      }
+      if (!same) throw io::ModelError(refusal(model, n, i, d, v));
     }
   }
 }
@@ -224,14 +296,41 @@ DofNumbering number_dofs(const io::Model& model, const std::vector<std::int32_t>
 
   // --- Constraint rules (OpenSees TransformationConstraintHandler) -------------------
   const auto& eqd = model.equal_dof;
-  std::unordered_map<std::int32_t, std::int32_t> retained_of;  // constrained -> retained
-  for (std::size_t r = 0; r < eqd.retained.size(); ++r) {
-    const auto [it, fresh] = retained_of.emplace(eqd.constrained[r], eqd.retained[r]);
-    if (!fresh && it->second != eqd.retained[r]) {
-      invalid("node " + std::to_string(eqd.constrained[r]) + " is constrained by equalDOF to node " +
-              std::to_string(it->second) + " and to node " + std::to_string(eqd.retained[r]) +
-              ". OpenSees' Transformation handler would apply only the first of these and "
-              "silently ignore the other; tie the node to one retained node");
+  // One equalDOF command (one OpenSees MP constraint) per constrained node: the handler
+  // applies only the first command that names a node. A command is a `command` value
+  // (schema 0.2) or, without it, a (retained, constrained) pair.
+  {
+    struct Cmd {
+      std::int64_t id;
+      std::int32_t retained;
+      std::vector<std::int32_t> dofs;
+    };
+    std::unordered_map<std::int32_t, std::vector<Cmd>> cmds;  // constrained tag -> commands
+    for (std::size_t r = 0; r < eqd.retained.size(); ++r) {
+      const std::int64_t id = eqd.command.empty() ? -1 - static_cast<std::int64_t>(eqd.retained[r])
+                                                  : static_cast<std::int64_t>(eqd.command[r]);
+      auto& list = cmds[eqd.constrained[r]];
+      auto it = std::find_if(list.begin(), list.end(), [&](const Cmd& c) { return c.id == id; });
+      if (it == list.end()) {
+        list.push_back({id, eqd.retained[r], {}});
+        it = list.end() - 1;
+      }
+      it->dofs.push_back(eqd.dof[r] - 1);
+    }
+    for (const auto& [c, list] : cmds) {
+      if (list.size() < 2) continue;
+      std::string ties;
+      for (std::size_t k = 0; k < list.size(); ++k)
+        ties += (k ? (k + 1 == list.size() ? " and " : ", ") : "") + std::string("node ") +
+                std::to_string(list[k].retained) + " (DOFs " + dof_list(list[k].dofs) + ")";
+      invalid("node " + std::to_string(c) + " is constrained by " + std::to_string(list.size()) +
+              " equalDOF commands: to " + ties + ". OpenSees' Transformation handler applies "
+              "only the first MP constraint on a node and silently ignores the others, so the "
+              "later ties would have no effect in OpenSees. Fix the model: tie node " +
+              std::to_string(c) + " with one equalDOF command, to one retained node, listing all "
+              "its DOFs (equalDOF " + std::to_string(list[0].retained) + " " + std::to_string(c) +
+              " 1 2 3). FemoraX refuses the model rather than give a different answer "
+              "(docs/deviations.md, \"Constraint handling\").");
     }
   }
   // --- Groups and equations ------------------------------------------------------------

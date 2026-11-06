@@ -4,8 +4,11 @@
 
 - FemoraX reads a model exported by Femora and runs the whole analysis on the GPU,
   or on the CPU through the same Kokkos code.
-- OpenSees is the reference implementation. For the same model, FemoraX must reproduce
-  OpenSees results.
+- Correct physics first, verified against analytical solutions, manufactured solutions
+  and published benchmarks. OpenSees is where the first formulations come from and the
+  main cross-check: FemoraX matches it where OpenSees is correct, and deviates deliberately,
+  with the reason and the evidence in `docs/deviations.md`, where we know better (bug
+  fixes, better algorithms, new elements and materials). FemoraX is its own solver.
 - Scope is what Femora can emit, not all of OpenSees. The list is at the end of this file.
 - Arbitrary Tcl (Femora's `model.actions.tcl`) is not supported. The reader rejects it.
 
@@ -453,12 +456,20 @@ GPU gains most, because almost all the work is element state determination.
 
 ## Verification
 
-1. **Materials:** a small driver built against the OpenSees source calls `setTrialStrain`,
-   `getStress`, `getTangent` and `commitState` along strain paths (monotonic, cyclic, with
-   reversals). Its output is stored in `tests/reference/`; FemoraX must match it.
-2. **Elements:** patch tests, plus single-element comparisons with OpenSees.
-3. **Systems:** Femora examples run through both OpenSees and FemoraX; compare time
-   histories with documented tolerances.
+Correctness is checked against physics first and OpenSees second.
+
+1. **Analytical and manufactured solutions:** closed-form material responses, patch tests
+   (linear fields reproduced exactly), rigid-body modes, energy conservation, wave speeds
+   and natural frequencies of soil columns, manufactured solutions for the time
+   integrators.
+2. **Published benchmarks:** standard site-response and soil-structure problems with
+   published results, as the elements and materials that need them arrive.
+3. **OpenSees comparisons** (the main bug-finding tool): small drivers built against the
+   OpenSees source call each ported class directly (materials along strain paths with
+   commit and revert; elements in a real Domain; the constraint handler), and Femora
+   examples run through both programs. FemoraX matches OpenSees where OpenSees is
+   correct; every deliberate difference is in `docs/deviations.md`. Reference data lives
+   in `tests/reference/`.
 
 ## Supported-component target (from Femora's API)
 

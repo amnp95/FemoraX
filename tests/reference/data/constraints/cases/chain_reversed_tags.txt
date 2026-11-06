@@ -36,4 +36,4 @@ equal 13 14 1 2 3
 equal 13 15 1 2 3
 equal 13 16 1 2 3
 equal 14 9 1 2 3
-expect invalid OpenSees' Transformation handler
+expect invalid has a larger tag

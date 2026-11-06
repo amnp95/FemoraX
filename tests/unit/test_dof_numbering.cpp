@@ -25,12 +25,13 @@ using namespace femorax::test;
 
 struct Case {
   Model model;
-  std::string expect;  // valid | invalid | schema_gap
+  std::string expect;  // valid | invalid
   std::string text;    // for invalid: part of the message
 };
 
 Case read_case(const std::filesystem::path& p) {
   Case c;
+  int command = 0;
   std::ifstream in(p);
   for (std::string line; std::getline(in, line);) {
     std::istringstream w(line);
@@ -55,7 +56,9 @@ Case read_case(const std::filesystem::path& p) {
         c.model.equal_dof.retained.push_back(r);
         c.model.equal_dof.constrained.push_back(k);
         c.model.equal_dof.dof.push_back(d);
+        c.model.equal_dof.command.push_back(command);  // one per "equal" line (schema 0.2)
       }
+      ++command;
     } else if (kind == "expect") {
       w >> c.expect;
       std::getline(w, c.text);
@@ -164,22 +167,20 @@ TEST(DofNumberingReference, MatchesOpenSeesTransformationHandler) {
         EXPECT_NE(std::string(e.what()).find(c.text), std::string::npos) << e.what();
       }
     } else {
-      ASSERT_EQ(c.expect, "schema_gap");
-      // Separate one-DOF equalDOF commands: OpenSees ties DOF 1 only (first MP per node);
-      // schema v0 rows cannot show the command boundaries, so FemoraX ties all three.
-      const DofNumbering n = number_dofs(c.model, femorax::compile::file_order(c.model));
-      int tied_by_opensees = 0;
+      FAIL() << "unknown expectation " << c.expect;
+    }
+    if (name == "split_equal_dof_commands.txt") {
+      // What OpenSees does there: only the first one-DOF command per node applies.
+      int tied = 0;
       for (std::size_t r = 0; r < c.model.equal_dof.retained.size(); ++r) {
-        const int rt = c.model.equal_dof.retained[r], ct = c.model.equal_dof.constrained[r];
         const int d = c.model.equal_dof.dof[r] - 1;
-        tied_by_opensees += os.at({rt, d}) == os.at({ct, d});
+        tied += os.at({c.model.equal_dof.retained[r], d}) == os.at({c.model.equal_dof.constrained[r], d});
       }
-      EXPECT_EQ(tied_by_opensees * 3, static_cast<int>(c.model.equal_dof.retained.size()));
-      EXPECT_GT(disagreements(n, os), 0) << "the known schema gap no longer shows";
+      EXPECT_EQ(tied * 3, static_cast<int>(c.model.equal_dof.retained.size()));
     }
   }
   EXPECT_EQ(valid, 6);
-  EXPECT_EQ(invalid, 4);
+  EXPECT_EQ(invalid, 5);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +207,7 @@ TEST(DofNumbering, AnyNumberOfDofsPerNode) {
 
 TEST(DofNumbering, TiedGroupsShareAnEquationAndFixedGroupsAreFixed) {
   Model m = nodes_model({1, 2, 3}, {6, 6, 3});
-  m.equal_dof = {{1, 1, 1}, {2, 2, 3}, {4, 5, 1}};  // 2.4 = 1.4, 2.5 = 1.5, 3.1 = 1.1
+  m.equal_dof = {{1, 1, 1}, {2, 2, 3}, {4, 5, 1}, {}};  // 2.4 = 1.4, 2.5 = 1.5, 3.1 = 1.1
   m.fix.node = {1};
   m.fix.dof = {5};
   const DofNumbering n = number_dofs(m, femorax::compile::file_order(m));
@@ -219,12 +220,13 @@ TEST(DofNumbering, TiedGroupsShareAnEquationAndFixedGroupsAreFixed) {
 
 TEST(DofNumbering, RejectsTwoRetainedNodes) {
   Model m = nodes_model({1, 2, 3}, {3, 3, 3});
-  m.equal_dof = {{1, 2}, {3, 3}, {1, 2}};
+  m.equal_dof = {{1, 2}, {3, 3}, {1, 2}, {}};
   try {
     number_dofs(m, femorax::compile::file_order(m));
     FAIL();
   } catch (const ModelError& e) {
-    EXPECT_NE(std::string(e.what()).find("would apply only the first"), std::string::npos);
+    EXPECT_NE(std::string(e.what()).find("is constrained by 2 equalDOF commands"), std::string::npos)
+        << e.what();
   }
 }
 

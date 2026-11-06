@@ -136,7 +136,7 @@ TEST(Renumber, HandlesComponentsAndTies) {
   const auto n = femorax::compile::number_dofs(m, apart.node_order);
   EXPECT_EQ(n.num_equations, 3 * static_cast<int>(m.nodes.size()));
 
-  m.equal_dof = {{1}, {1 + offset}, {1}};
+  m.equal_dof = {{1}, {1 + offset}, {1}, {}};
   const auto tied = compute_ordering(m, Renumbering::RCM);
   EXPECT_TRUE(is_permutation(tied.node_order));
 }

@@ -7,7 +7,7 @@ Each case is a text file:
     node <tag> <ndf> <x> <y> <z>
     fix <tag> <dof>                      (1-based DOF)
     equal <retained> <constrained> <dof> [<dof> ...]
-    expect valid | expect invalid <text the FemoraX error must contain> | expect schema_gap
+    expect valid | expect invalid <text the FemoraX error must contain>
 
 The soil columns build the laminar boundary exactly as Femora's
 `MP_ConstraintManager.laminar_boundary` does: at each elevation inside the bounds, the
@@ -57,8 +57,8 @@ def cases():
 
     # One equalDOF command per DOF instead of one command with three DOFs. OpenSees makes
     # one MP_Constraint per command and its handler keeps only the first per constrained
-    # node, so only DOF 1 is tied. Schema v0 stores one row per DOF and cannot tell the two
-    # forms apart: a known schema gap, recorded here so the test shows what OpenSees does.
+    # node, so only DOF 1 is tied. Schema 0.2's `command` field records the command
+    # boundaries, and FemoraX refuses the model.
     lines, nodes = column(1, 1, 3)
     split = []
     for ln in lines:
@@ -67,13 +67,13 @@ def cases():
             split += [f"equal {r} {c} {d}" for d in dofs]
         else:
             split.append(ln)
-    out["split_equal_dof_commands"] = split + ["expect schema_gap"]
+    out["split_equal_dof_commands"] = split + ["expect invalid equalDOF commands"]
 
     # A node tied to two different retained nodes (laminar plus an extra tie).
     lines, nodes = column(1, 1, 3)
     top = [t for (t, *_r, k) in nodes if k == 3]
     out["two_retained_nodes"] = lines + [f"equal {top[0] - 4} {top[1]} 1"] + [
-        "expect invalid OpenSees' Transformation handler would apply only the first"]
+        "expect invalid is constrained by 2 equalDOF commands"]
 
     lvl = {k: [t for (t, *_r, kk) in nodes if kk == k] for k in range(4)}
 
@@ -87,13 +87,13 @@ def cases():
     # IDs before node 14's are set.
     lines, nodes = column(1, 1, 3)
     out["chain_reversed_tags"] = lines + [f"equal {lvl[3][1]} {lvl[2][0]} 1 2 3",
-                                          "expect invalid OpenSees' Transformation handler"]
+                                          "expect invalid has a larger tag"]
 
     # A partial chain: the inner tie covers DOF 1 only, so the retained node's transformed
     # ID layout no longer lines up with its nodal DOFs.
     lines, nodes = column(1, 1, 3)
     out["partial_chain"] = lines + [f"equal {lvl[2][0]} {lvl[3][0]} 2",
-                                    "expect invalid OpenSees' Transformation handler"]
+                                    "expect invalid partial chain"]
 
     # Laminar bounds that include the fixed base: the retained base node is fixed as well,
     # and OpenSees fixes the tied DOFs, the physically right answer.
@@ -104,7 +104,7 @@ def cases():
     # puts the -1 at a position the retained DOFs overwrite, so the fix is lost.
     lines, nodes = column(1, 1, 3)
     out["fix_on_constrained_dof"] = lines + [f"fix {lvl[2][1]} 1",
-                                             "expect invalid OpenSees' Transformation handler"]
+                                             "expect invalid the fix is silently lost"]
 
     # Fixed retained node: the tied nodes become fixed with it (valid in both programs).
     lines, nodes = column(1, 1, 3)

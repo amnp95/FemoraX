@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 0.1
+# FemoraX model file, schema version 0.2
 
-Status: **0.0 approved 2026-11-05; 0.1 approved 2026-11-05**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0, 0.1 and 0.2 approved 2026-11-05**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -40,6 +40,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 |---|---|
 | 0.0 | first version |
 | 0.1 | VTKHDF recorder: optional `elements` dataset (the element tags to record); `region` stays rejected |
+| 0.2 | equalDOF: optional `command` dataset (which `equalDOF` command each row comes from) |
 
 ## 2. Conventions
 
@@ -171,20 +172,25 @@ Both use one row per DOF, so any number of DOFs per node needs no padding.
 `/constraints/mp/equal_dof` *(optional)*: `equalDOF <retained> <constrained> <dofs...>`
 becomes one row per DOF.
 
-| Dataset | Shape, type |
-|---|---|
-| `retained` | `[K]` int32 |
-| `constrained` | `[K]` int32 |
-| `dof` | `[K]` int32 (1-based; same DOF on both nodes, as in OpenSees) |
+| Dataset | Shape, type | Meaning |
+|---|---|---|
+| `retained` | `[K]` int32 | retained node |
+| `constrained` | `[K]` int32 | constrained node |
+| `dof` | `[K]` int32 | 1-based; the same DOF on both nodes, as in OpenSees |
+| `command` | `[K]` int32 *(optional, since 0.2)* | index of the `equalDOF` command the row comes from: rows with the same value are one command (one OpenSees MP constraint), and commands are numbered in the order they appear in the Tcl file, from 0. All rows of one command have the same retained and constrained node. Absent: each (retained, constrained) pair is one command, which is how Femora writes them |
 
 The laminar boundary is not a separate item: `laminar_boundary()` emits plain equalDOF
 pairs (first node at each elevation retained, the others constrained), so it arrives here.
 
 Rules checked by the reader: every node exists; `dof <= ndf` of each node involved;
-no duplicate rows. Chains and stars are allowed (FemoraX joins them with a union-find); a
-joined group with a fixed DOF is fixed as a whole. A constrained DOF that is also fixed is
-reported, since OpenSees' Transformation handler treats that case specially; how FemoraX
-handles it will be recorded in `docs/deviations.md` once compared with OpenSees.
+no duplicate rows; the rows of one `command` share their retained and constrained node.
+
+Rules checked when the model is compiled (`docs/deviations.md`, "Constraint handling"):
+a joined group with a fixed DOF is fixed as a whole, and four patterns that OpenSees'
+Transformation handler silently mishandles are refused with a message saying what is wrong
+and how to fix the model: a node named by more than one `equalDOF` command, a chain through
+a constrained node with a larger tag, a partial chain, and a fix on a constrained DOF whose
+retained DOF is free. Chains in ascending tag order over all DOFs are accepted.
 
 ### 3.7 `/damping/rayleigh/<index>` *(optional)*
 

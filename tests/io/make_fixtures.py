@@ -293,6 +293,23 @@ def m_vtkhdf_elements_in_0_0(f):
     f.attrs["schema_version"] = np.array([0, 0], dtype=np.int32)
 
 
+def m_commands(kind):
+    def m(f):
+        g = f["constraints"]["mp"]["equal_dof"]
+        r, c = g["retained"][...], g["constrained"][...]
+        # One command per (retained, constrained) pair, numbered in row order.
+        ids, cmd = {}, []
+        for a, b in zip(r, c):
+            cmd.append(ids.setdefault((int(a), int(b)), len(ids)))
+        cmd = np.array(cmd, dtype=np.int32)
+        if kind == "mixed_pairs":
+            cmd[3] = cmd[0]  # row 3 belongs to another node pair
+        g.create_dataset("command", data=cmd)
+        if kind == "old_file":
+            f.attrs["schema_version"] = np.array([0, 1], dtype=np.int32)
+    return m
+
+
 def m_rigid_link(f):
     f["constraints"]["mp"].create_group("rigid_link")
 
@@ -325,11 +342,15 @@ CASES = [
     ("overlapping_regions", "explicit", "warning", "share 3 element(s)", m_overlap),
     ("schema_0_0", "explicit", "valid", "", m_version(0, 0)),
     ("vtkhdf_elements", "explicit", "valid", "", m_vtkhdf_elements([1, 2, 25])),
+    ("equal_dof_commands", "explicit", "valid", "", m_commands("valid")),
     # --- invalid ---------------------------------------------------------------------
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 0.x files", m_version(1, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 2)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 3)),
+    ("command_in_0_1_file", "explicit", "invalid", "was added in schema 0.2", m_commands("old_file")),
+    ("command_mixed_pairs", "explicit", "invalid", "one equalDOF command ties one node pair",
+     m_commands("mixed_pairs")),
     ("vtkhdf_elements_in_0_0", "explicit", "invalid", "was added in schema 0.1, but the file "
      "declares 0.0", m_vtkhdf_elements_in_0_0),
     ("vtkhdf_missing_element", "explicit", "invalid", "element 99 does not exist",

@@ -1,8 +1,9 @@
 # Deviations from OpenSees
 
-Every deliberate difference between FemoraX and the OpenSees class it ports, and every
-tolerance that is looser than the default. A port is not finished until its deviations are
-listed here.
+FemoraX matches OpenSees where OpenSees is correct and deviates deliberately where we know
+better (CLAUDE.md rule 1). Every difference from the OpenSees class a component comes
+from, with the reason and the evidence, and every tolerance looser than the default, is
+listed here. A component is not finished until its deviations are.
 
 Default tolerances (until a component states otherwise):
 
@@ -51,32 +52,35 @@ Default tolerances (until a component states otherwise):
 - Effect on results: none for supported models.
 - Test: none specific (strict reading, `tests/io`, covers unknown items in general).
 
-### Constraint handling — refuse what OpenSees' Transformation handler silently mishandles
+### Constraint handling — refuse what OpenSees' Transformation handler silently gets wrong
 - OpenSees: `SRC/analysis/handler/TransformationConstraintHandler.cpp`,
   `SRC/analysis/dof_grp/TransformationDOF_Group.cpp`, commit 955ceb0
 - Difference: FemoraX numbers DOFs from the constraints as written (union-find; a group
   with a fixed DOF is fixed). It also emulates the handler (first MP per constrained node,
-  `addSP_Constraint` position arithmetic, `doneID` in ascending tag order) and, where the
-  two disagree, refuses the model with a message saying what OpenSees would do. Cases
-  where they agree run unchanged, including chains in ascending tag order over all DOFs
-  and fixed DOFs inside a fixed group (laminar bounds that include a fixed base).
-- Refused (OpenSees gives a different, physically wrong answer without a warning):
-  - a node tied to two retained nodes (OpenSees applies only the first MP);
-  - a chain whose intermediate node has a larger tag than the node tied to it (OpenSees
-    reads its IDs before they are set and fixes the DOFs);
-  - a partial chain (the retained node's transformed ID layout no longer matches its
-    nodal DOFs; OpenSees crosses DOFs);
-  - a fix on a constrained DOF whose retained DOF is free (OpenSees loses the fix).
-- Why: accepting them would give answers different from OpenSees (rule 1); copying
-  OpenSees would give answers different from the model. Neither occurs in Femora's
-  laminar boundary (a star at each elevation, base excluded).
+  `addSP_Constraint` position arithmetic, `doneID` in ascending tag order). Where the two
+  agree, the model runs, including chains in ascending tag order over all DOFs and fixed
+  DOFs inside a fixed group (laminar bounds that include a fixed base). Where they
+  disagree, OpenSees is wrong, and FemoraX refuses the model with a message that says what
+  is wrong and how to fix it:
+  1. a node constrained by more than one `equalDOF` command (OpenSees applies only the
+     first; command boundaries come from schema 0.2's `command` field, or from distinct
+     node pairs without it);
+  2. a chain whose intermediate node has a larger tag (OpenSees fixes the tied node);
+  3. a partial chain (OpenSees connects DOFs crosswise);
+  4. a fix on a tied DOF whose retained DOF is free (OpenSees loses the fix).
+- Why: the four patterns are OpenSees bugs: its results contradict the constraints, without
+  a warning. FemoraX does not copy a wrong answer (rule 1) and does not silently give a
+  different one either; it asks for a model both programs read the same way. Femora's
+  laminar boundary (a star at each elevation, base excluded) never produces them.
+- Evidence: `tests/reference/opensees_issues/` holds a standalone OpenSees script per
+  pattern with hand-computed correct displacements; all four reproduce at commit 955ceb0
+  (for example, issue 2 leaves a loaded, free node at zero displacement), and the control
+  script shows the related correct patterns. Prepared for reporting to the OpenSees
+  developers.
 - Effect on results: none for accepted models: FemoraX's DOF classes equal OpenSees' on all
   accepted cases, also after renumbering.
 - Test: `tests/unit/test_dof_numbering.cpp` against the `dof_numbering` driver on 11 cases
-  (1x1, 2x2, 3x2 soil columns with corner, edge and face nodes; chains; fixed base in
-  the laminar bounds; the refused patterns). The emulation itself reproduces OpenSees in
-  all 9 cases it applies to, including the 3 where OpenSees is wrong.
-- Known schema gap: separate one-DOF `equalDOF` commands on the same node pair are one MP
-  per command in OpenSees (only the first applies), but schema v0 rows cannot show command
-  boundaries, so FemoraX ties all the DOFs. The `split_equal_dof_commands` case records it.
-  Femora writes one command per pair with all DOFs, so its models are not affected.
+  (1x1, 2x2, 3x2 soil columns with corner, edge and face nodes; chains; a fixed base in the
+  laminar bounds; the refused patterns, each checked for its specific message). The
+  emulation reproduces OpenSees in all 9 cases it applies to, including the 3 where
+  OpenSees is wrong.
