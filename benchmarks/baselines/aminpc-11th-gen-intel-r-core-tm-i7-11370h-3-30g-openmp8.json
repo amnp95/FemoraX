@@ -1,0 +1,45 @@
+{
+  "format": 1,
+  "machine": {
+    "host": "Aminpc",
+    "cpu": "11th Gen Intel(R) Core(TM) i7-11370H @ 3.30GHz",
+    "execution_space": "OpenMP",
+    "concurrency": 8,
+    "kokkos": "5.1.0",
+    "femorax": "0.0.1",
+    "build_type": "Release"
+  },
+  "options": {
+    "warmup": 3,
+    "reps": 20,
+    "quick": false
+  },
+  "results": [
+    {
+      "name": "stream/copy",
+      "unit": "call",
+      "bytes": 536870912,
+      "flops": 0,
+      "items": 33554432,
+      "reps": 20,
+      "min_s": 0.01380043,
+      "median_s": 0.01534984,
+      "max_s": 0.022736729,
+      "gbytes_per_s": 38.9024771,
+      "gflops": 0
+    },
+    {
+      "name": "stream/triad",
+      "unit": "call",
+      "bytes": 805306368,
+      "flops": 67108864,
+      "items": 33554432,
+      "reps": 20,
+      "min_s": 0.017655071,
+      "median_s": 0.022311162,
+      "max_s": 0.035124148,
+      "gbytes_per_s": 45.613318,
+      "gflops": 3.80110983
+    }
+  ]
+}

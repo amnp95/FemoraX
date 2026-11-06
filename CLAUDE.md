@@ -77,7 +77,7 @@ FemoraX/
     unit/      per-material and per-element tests against reference data
     reference/ OpenSees driver programs and generated reference data
     system/    Femora example comparisons (OpenSees vs FemoraX)
-  benchmarks/
+  benchmarks/  harness, per-kernel benchmarks, check.py, per-machine baselines
 ```
 
 ## Build and test
@@ -97,7 +97,36 @@ ctest --preset cpu-debug
 - `physics_purity.*` tests enforce rule 2: a source scan (`cmake/CheckPhysicsPurity.cmake`)
   and a standalone compile of every physics header with `-fno-exceptions -fno-rtti` and no
   Kokkos on the include path.
+- Benchmarks: `python3 benchmarks/check.py` (see "Performance" and `benchmarks/README.md`).
 - CUDA and HIP builds: not set up yet (separate build trees, `-DKokkos_ENABLE_CUDA=ON`).
+
+## Performance
+
+Performance is the top priority after correctness. These rules apply to every kernel:
+
+1. **Compile-time sizes in every element template.** `NNODE`, `NODE_NDF`, `NDOF`, `NGP`,
+   `NSTATE` and the material's `NSTRAIN` are `static constexpr`; every local array in a
+   kernel has a compile-time size. No runtime-sized loops over nodes, DOFs or points.
+2. **One fused gather-compute-scatter kernel per batch.** Each element is gathered,
+   computed and scattered in the same kernel; no separate gather or scatter passes, and no
+   global per-element temporaries for `fe` or `Ke`.
+3. **Thread layout chosen per element type.** The launch traits of each element in
+   `src/exec/` choose the layout (one thread per element for bricks; a team per element for
+   heavy elements such as fiber beams). Physics code never knows about threads.
+4. **32-bit indices** for nodes, elements, DOFs, equations and assembly maps. 64-bit only
+   for counts that can pass 2^31 (such as nonzero offsets of a large matrix), checked in the
+   compile step.
+5. **Node and element renumbering** (RCM or a space-filling curve) in the compile step,
+   before batches and maps are built, so neighbouring threads touch neighbouring memory.
+6. **Optimize only what the benchmarks show is slow.** Tests must pass before and after an
+   optimization, and the commit message gives the before and after numbers.
+7. **Every new kernel comes with a benchmark** that states its compulsory memory traffic
+   (`benchmarks/README.md`).
+
+Run `python3 benchmarks/check.py` (cpu-release) on every change before committing. A
+regression over the tolerance blocks the commit unless the slowdown is intended; then the
+commit message explains it and the baseline is updated. Never update a baseline to hide a
+regression.
 
 ## Development hardware
 
@@ -116,7 +145,8 @@ first. Every kernel must pass its tests on CPU before it is run on GPU.
 ## Workflow
 
 - For a new module or any architectural change: propose a plan first and wait for approval.
-- One element or material per change, together with its tests.
+- One element or material per change, together with its tests and benchmarks.
+- One commit per finished step; tests and the benchmark check pass before each commit.
 - Never mark a port finished with skipped or loosened tests. If a tolerance must change,
   explain why in `docs/deviations.md`.
 - When a component becomes supported, update `docs/support-table.md`.

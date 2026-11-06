@@ -1,6 +1,8 @@
 # Launch layer: the only place Kokkos is used (CLAUDE.md rule 3).
 add_library(femorax_exec
-  runtime.cpp)
+  runtime.cpp
+  stream.cpp
+  timing.cpp)
 add_library(femorax::exec ALIAS femorax_exec)
 target_include_directories(femorax_exec PUBLIC
   "${PROJECT_SOURCE_DIR}/src"

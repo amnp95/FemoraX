@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Run the FemoraX benchmarks and compare them with this machine's baseline.
+
+    python3 benchmarks/check.py                    # build cpu-release, run, compare
+    python3 benchmarks/check.py --update-baseline  # accept the current numbers
+    python3 benchmarks/check.py --filter stream    # run a subset
+
+Exit status: 0 when nothing is slower than the baseline by more than the tolerance,
+1 on a regression, 2 on a usage or build error. Standard library only.
+See benchmarks/README.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+BASELINE_DIR = ROOT / "benchmarks" / "baselines"
+
+
+def slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def show(path: Path) -> str:
+    """Path relative to the repository when it is inside it, absolute otherwise."""
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def machine_key(machine: dict) -> str:
+    return "-".join(
+        [
+            slug(machine["host"]),
+            slug(machine["cpu"])[:40],
+            f'{slug(machine["execution_space"])}{machine["concurrency"]}',
+        ]
+    )
+
+
+def run_bench(exe: Path, out: Path, args: argparse.Namespace, filt: str | None) -> dict:
+    env = dict(os.environ)
+    # Pinned threads give repeatable host timings (and silence Kokkos' warning).
+    env.setdefault("OMP_PROC_BIND", "spread")
+    env.setdefault("OMP_PLACES", "threads")
+    cmd = [str(exe), "--json", str(out), "--reps", str(args.reps), "--warmup", str(args.warmup)]
+    if filt:
+        cmd += ["--filter", filt]
+    proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout + proc.stderr)
+        sys.exit(2)
+    return json.loads(out.read_text())
+
+
+def by_name(run: dict) -> dict[str, dict]:
+    return {r["name"]: r for r in run["results"]}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    ap.add_argument("--preset", default="cpu-release", help="CMake preset (build/<preset>)")
+    ap.add_argument("--tolerance", type=float, default=0.10,
+                    help="allowed slowdown of the minimum time, as a fraction (default 0.10)")
+    ap.add_argument("--reps", type=int, default=20)
+    ap.add_argument("--warmup", type=int, default=3)
+    ap.add_argument("--filter", default=None)
+    ap.add_argument("--baseline", type=Path, default=None, help="override the baseline file")
+    ap.add_argument("--update-baseline", action="store_true",
+                    help="write the current results as the baseline")
+    ap.add_argument("--no-build", action="store_true", help="do not rebuild femorax_bench")
+    args = ap.parse_args()
+
+    build_dir = ROOT / "build" / args.preset
+    if not args.no_build:
+        b = subprocess.run(["cmake", "--build", "--preset", args.preset, "--target", "femorax_bench"],
+                           cwd=ROOT, capture_output=True, text=True)
+        if b.returncode != 0:
+            sys.stderr.write(b.stdout + b.stderr)
+            return 2
+    exe = build_dir / "benchmarks" / "femorax_bench"
+    if not exe.exists():
+        sys.stderr.write(f"{exe} not found; configure with: cmake --preset {args.preset}\n")
+        return 2
+
+    out_dir = build_dir / "bench"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    current = run_bench(exe, out_dir / "last.json", args, args.filter)
+
+    build_type = current["machine"]["build_type"]
+    if build_type not in ("Release", "RelWithDebInfo"):
+        sys.stderr.write(f"refusing to compare a {build_type} build; use a Release preset\n")
+        return 2
+
+    key = machine_key(current["machine"])
+    baseline_path = args.baseline or BASELINE_DIR / f"{key}.json"
+
+    if args.update_baseline or not baseline_path.exists():
+        if baseline_path.exists() and args.filter:
+            # Merge a partial run into the existing baseline.
+            base = json.loads(baseline_path.read_text())
+            merged = by_name(base)
+            merged.update(by_name(current))
+            current["results"] = sorted(merged.values(), key=lambda r: r["name"])
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_text(json.dumps(current, indent=2) + "\n")
+        what = "updated" if args.update_baseline else "created (no baseline existed)"
+        print(f"baseline {what}: {show(baseline_path)}")
+        print_report(current, None, args.tolerance)
+        return 0
+
+    base = json.loads(baseline_path.read_text())
+    regressed = compare(current, base, args.tolerance)
+    if regressed:
+        # Re-run only the regressed cases once, keeping the faster result, so one noisy run
+        # does not fail the check.
+        rerun = run_bench(exe, out_dir / "rerun.json", args, None)
+        fresh = by_name(rerun)
+        cur = by_name(current)
+        for name in regressed:
+            if name in fresh and fresh[name]["min_s"] < cur[name]["min_s"]:
+                cur[name] = fresh[name]
+        current["results"] = list(cur.values())
+        (out_dir / "last.json").write_text(json.dumps(current, indent=2) + "\n")
+        regressed = compare(current, base, args.tolerance)
+
+    print(f"baseline: {show(baseline_path)}")
+    print_report(current, base, args.tolerance)
+    if regressed:
+        print(f"\nREGRESSION: {', '.join(regressed)} slower than baseline by more than "
+              f"{args.tolerance:.0%}")
+        return 1
+    print("\nno regressions")
+    return 0
+
+
+def compare(current: dict, base: dict, tol: float) -> list[str]:
+    b = by_name(base)
+    return [r["name"] for r in current["results"]
+            if r["name"] in b and r["min_s"] > b[r["name"]]["min_s"] * (1.0 + tol)]
+
+
+def print_report(current: dict, base: dict | None, tol: float) -> None:
+    cur = by_name(current)
+    triad = cur.get("stream/triad", {}).get("gbytes_per_s", 0.0)
+    b = by_name(base) if base else {}
+    print(f"{'benchmark':36s} {'per':>5s} {'min [us]':>11s} {'GB/s':>8s} {'%triad':>7s}"
+          f" {'base [us]':>11s} {'change':>8s}")
+    for name in sorted(cur):
+        r = cur[name]
+        frac = f"{100 * r['gbytes_per_s'] / triad:6.1f}%" if triad > 0 and r["bytes"] else "     - "
+        if name in b:
+            ratio = r["min_s"] / b[name]["min_s"] - 1.0
+            flag = "  <-- slower" if ratio > tol else ""
+            tail = f" {b[name]['min_s'] * 1e6:11.2f} {ratio:+7.1%}{flag}"
+        else:
+            tail = f" {'new':>11s}"
+        print(f"{name:36s} {r['unit']:>5s} {r['min_s'] * 1e6:11.2f} {r['gbytes_per_s']:8.2f} {frac}{tail}")
+    for name in sorted(set(b) - set(cur)):
+        print(f"{name:36s} (in baseline, not run)")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

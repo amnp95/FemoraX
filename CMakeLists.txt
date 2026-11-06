@@ -12,6 +12,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(FEMORAX_BUILD_TESTS "Build the FemoraX test suite" ON)
 option(FEMORAX_WERROR "Treat compiler warnings as errors in FemoraX targets" OFF)
+option(FEMORAX_BUILD_BENCHMARKS "Build the benchmark suite" ON)
 option(FEMORAX_USE_SYSTEM_KOKKOS "Use an installed Kokkos (must be the pinned version)" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -21,11 +22,17 @@ include(FemoraXDeps)
 configure_file(src/femorax_version.hpp.in
                "${CMAKE_CURRENT_BINARY_DIR}/generated/femorax_version.hpp" @ONLY)
 
+if(FEMORAX_BUILD_TESTS)
+  enable_testing()
+endif()
+
 add_subdirectory(src/physics)
 add_subdirectory(src/exec)
 add_subdirectory(src/app)
+if(FEMORAX_BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
 
 if(FEMORAX_BUILD_TESTS)
-  enable_testing()
   add_subdirectory(tests)
 endif()
