@@ -55,7 +55,10 @@ Sessions start with: `claude --add-dir ../Femora --add-dir ../OpenSees`
 8. **When porting from OpenSees:** name the source file and OpenSees version or commit in a
    comment at the top, keep variable names close to the original so the two can be reviewed
    side by side, and record any deliberate difference in `docs/deviations.md`.
-9. **Ask before changing the model file schema** (`schema/`). Bump `schema_version` on every change.
+9. **Ask before changing the model file schema** (`schema/`). Bump `schema_version` on every
+   change: the minor version for a backward-compatible addition (a new optional field), the
+   major version for a breaking change. The reader accepts every older minor version of its
+   own major version.
 
 ## Layout
 
@@ -140,6 +143,9 @@ first. Every kernel must pass its tests on CPU before it is run on GPU.
   read neighbouring memory.
 - FemoraX is unit-agnostic, like OpenSees.
 - Tests: GoogleTest. Python bindings: nanobind, added after the CLI runs models.
+- Python tools and tests use the virtual environment in `.venv/` (numpy, h5py; later
+  `../Femora` installed editable for the system tests). Create it with
+  `python3 -m venv .venv && .venv/bin/pip install numpy h5py`.
 - CPU direct solver (milestone 1b): Eigen `SimplicialLDLT`. No GPL solver libraries.
 
 ## Workflow
