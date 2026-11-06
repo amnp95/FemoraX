@@ -55,12 +55,34 @@ Default tolerances (until a component states otherwise):
 - Effect on results: FemoraX does not match OpenSees for CentralDifference with lumped
   stdBrick elements; it matches ExplicitDifference and the physics. Consistent-mass models
   are refused in explicit stages anyway.
-- Also for milestone 1b: OpenSees Newmark has the same mix (consistent `M*a` in the
-  residual, lumped mass in the tangent), so its converged answer uses the consistent mass
-  for `-lumped` stdBrick. Decide there whether to match or to deviate.
+- Also in Newmark: see the next entry.
 - Test: `tests/system/soil_column/make_models.py <dir> 2 2 10 1.0 2.5e-4 --integrator
   CentralDifference` (and the same with `ExplicitDifference --mass-damping-only`), compared
   with `compare.py`.
+
+### Newmark with lumped stdBrick — a true lumped mass (decided 2026-11-06, milestone 1b)
+- OpenSees: `SRC/analysis/integrator/Newmark.cpp` (`formEleTangent`: `addMtoTang`, which
+  uses `getMass()`), `TransientIntegrator::formEleResidual` (`getResistingForceIncInertia`),
+  `SRC/element/brick/Brick.cpp` (`formInertiaTerms`), commit 955ceb0
+- Difference: OpenSees honours `-lumped` only in the tangent; the residual's inertia force
+  uses the consistent mass. With Newton the analysis silently converges to the
+  consistent-mass answer; with Linear each step solves `(c1*K + c3*M_L) dU = R(M_C)`,
+  which is neither model. FemoraX uses a true lumped mass (in residual and tangent alike)
+  when the model asks for lumped mass, as its explicit integrators do; consistent mass
+  is the consistent mass in both places, as in OpenSees.
+- Why: the requested model is the lumped one, and OpenSees' Linear result is wrong and
+  depends on the step size.
+- Evidence: 2x2x10 column, gravity plus the x sweep, Newmark 0.5/0.25, no damping; largest
+  top x displacement: consistent with Newton or Linear 1.835e-3 (dt 2.5e-4); `-lumped`
+  with Newton the same to 1e-9; `-lumped` with Linear 2.69e-4, 7.13e-4, 1.42e-3 at dt =
+  2.5e-4, 1e-3, 5e-3 (97%, 77%, 28% off); a true lumped mass (massless bricks + nodal
+  masses) 1.856e-3, 2% from consistent, a genuine modelling difference. Standalone
+  reproduction: `tests/reference/opensees_issues/5_newmark_lumped_brick.tcl`.
+- Effect on results: models with lumped stdBrick in implicit stages differ from OpenSees
+  (about 2% here against `-lumped` with Newton). Femora's default is consistent mass
+  (`lumped=False`), and the system tests against OpenSees use consistent mass.
+- Test: to come with the Newmark step (lumped against OpenSees with nodal masses and
+  massless elements, which is the same model).
 
 ### Stage end time — the Tcl loop's rounding of getTime
 - OpenSees: `SRC/tcl/commands.cpp` (`getTime` prints the domain time with `"%f"`);

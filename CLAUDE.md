@@ -52,7 +52,8 @@ Sessions start with: `claude --add-dir ../Femora --add-dir ../OpenSees`
 2. **The physics layer is framework-free.** Code in `src/physics/` is plain C++20 functions
    marked `FEMORAX_HD` (host + device). No Kokkos types, no heap allocation, no virtual
    functions, no static or global mutable state, no exceptions, fixed-size arrays only.
-3. **Kokkos lives only in the launch layer** (`src/exec/`). Native CUDA or HIP code is allowed
+3. **Kokkos lives only in the launch layer** (`src/exec/`) **and the solvers** (`src/solvers/`);
+   `src/physics/` never sees it. Native CUDA or HIP code is allowed
    only in `src/native/`: kernels only when a profile shows a portable kernel is too slow,
    always with the portable version kept as a fallback; and small vendor-runtime device
    queries that Kokkos does not expose (free device memory), with no kernels.
@@ -199,7 +200,9 @@ regression.
 - Python tools and tests use the virtual environment in `.venv/` (numpy, h5py; later
   `../Femora` installed editable for the system tests). Create it with
   `python3 -m venv .venv && .venv/bin/pip install numpy h5py`.
-- CPU direct solver (milestone 1b): Eigen `SimplicialLDLT`. No GPL solver libraries.
+- Solvers (milestone 1b, docs/design.md "Linear solvers"): our own CG in Kokkos with Jacobi;
+  hypre BoomerAMG later; Eigen `SimplicialLDLT` in tests only. No Trilinos, no GPL solver
+  libraries.
 
 ## Workflow
 
