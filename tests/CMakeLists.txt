@@ -6,6 +6,7 @@ include(GoogleTest)
 # ---------------------------------------------------------------------------
 add_executable(femorax_unit_tests
   unit/main.cpp
+  unit/test_contracts.cpp
   unit/test_runtime.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec GTest::gtest)
 femorax_set_warnings(femorax_unit_tests)

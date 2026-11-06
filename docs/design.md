@@ -15,7 +15,8 @@ Host side, once per analysis stage:
 
 1. Read the model file.
 2. Number DOFs, folding `fix`, `equalDOF` and the laminar boundary into the numbering
-   (slave DOFs map to their master's equation; fixed DOFs map to -1).
+   (slave DOFs map to their master's equation; fixed DOFs map to -1). Any number of DOFs
+   per node, and element-owned DOFs (see "DOF numbering").
 3. Group elements into batches by (element type, material type).
 4. Renumber nodes and elements for memory locality (RCM or a space-filling curve).
 5. Build the sparsity pattern and the per-element assembly maps.
@@ -47,42 +48,165 @@ Device side, every Newton iteration:
 - State size is fixed per batch (for example, the maximum number of yield surfaces in a
   PressureDependMultiYield batch).
 
-## Element and material interface (sketch)
+## Element and material contract
+
+Adding an element is one header in `src/physics/elements/` plus one line in
+`src/exec/element_registry.hpp`. Adding a material is the same with
+`src/physics/materials/` and `src/exec/material_registry.hpp`. The concepts in
+`src/physics/contracts.hpp` check every entry at compile time, so a missing or inconsistent
+trait is a compile error, not a runtime surprise.
+
+### Element traits
+
+Every size is a compile-time constant, so the launch layer and the compiler see fixed-size
+local arrays.
+
+| Trait | Meaning |
+|---|---|
+| `NDM` | spatial dimension of the node coordinates the element reads |
+| `NNODE` | number of nodes |
+| `NODE_NDF` | `std::array<int, NNODE>`: DOFs per node, node by node (3 for a brick, 6 for a 3D beam, 4 at the corner nodes of a u-p element, 9 or more for PML) |
+| `NEXTRA` | DOFs the element owns that belong to no node (0 for most elements) |
+| `NDOF` | `sum(NODE_NDF) + NEXTRA`; checked by the concept |
+| `NGP` | integration points |
+| `NSTATE` | doubles of history state per element (material state at every point plus element state) |
+| `MASS` | `Consistent`, `Lumped` or `Selectable` (chosen per element group, as stdBrick's `-lumped`) |
+| `EXPLICIT` | whether the element may appear in an explicit stage (needs a lumped mass and `critical_dt`) |
+| `MATERIAL_KIND` | which material contract it calls (`NDMaterial3D`, `NDMaterialPlaneStrain`, `Uniaxial`, `Section...`) |
+| `Params` | plain struct: material `Params` plus element data (body force, mass type, ...) |
+
+Element DOF order is the OpenSees order: node 0's DOFs, node 1's DOFs, ..., then the extra
+DOFs.
 
 ```cpp
-// Material: pure function, same math as the OpenSees class.
-struct ElasticIsotropic {
-  struct Params { double E, nu, rho; };
-  static constexpr int NSTATE = 0;
-  FEMORAX_HD static void update(const Params& p,
-                                const double* committed, double* trial,
-                                const double eps[6],      // total trial strain, as in setTrialStrain
-                                double sig[6], double D[6][6]);
-};
-
-// Element: computes internal force, and the tangent only when asked,
-// calling the material at each integration point.
 template <class Mat>
 struct StdBrick {
-  static constexpr int NNODE = 8, NDOF = 24, NGP = 8;
+  static constexpr int NDM = 3, NNODE = 8, NEXTRA = 0, NGP = 8;
+  static constexpr std::array<int, NNODE> NODE_NDF = {3, 3, 3, 3, 3, 3, 3, 3};
+  static constexpr int NDOF = 24;
+  static constexpr int NSTATE = NGP * Mat::NSTATE;
+  static constexpr MassType MASS = MassType::Selectable;
+  static constexpr bool EXPLICIT = true;
+  static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  struct Params { typename Mat::Params mat; double b[3]; MassType mass; };
 
+  // Internal force plus all four Rayleigh damping forces of this element
+  //   fe = f_int(ue) + alphaM*Me*ve + (betaK*Kt + betaKinit*K0 + betaKcomm*Kc)*ve,
+  // the same as OpenSees getResistingForce + getRayleighDampingForces.
   // WantK = false is the explicit path: Ke is never formed (pass nullptr).
   template <bool WantK>
-  FEMORAX_HD static void compute(const typename Mat::Params& mp,
-                                 const double xe[NNODE][3], const double ue[NDOF],
-                                 const double ve[NDOF], double betaK,   // stiffness-proportional damping
+  FEMORAX_HD static void compute(const Params& p, const Rayleigh& damp,
+                                 const double xe[NNODE][NDM], const double ue[NDOF],
+                                 const double ve[NDOF],
                                  const double* committed, double* trial,
                                  double fe[NDOF], double (*Ke)[NDOF]);
 
-  // Largest stable explicit time step for this element.
-  FEMORAX_HD static double critical_dt(const typename Mat::Params& mp,
-                                       const double xe[NNODE][3], const double* state);
+  // Me as a diagonal (lumped) or a full matrix (consistent), per p.mass.
+  FEMORAX_HD static void mass(const Params& p, const double xe[NNODE][NDM], double* Me);
+
+  // Upper bound of the element's largest eigenvalue omega^2 of K*phi = omega^2*M*phi with the
+  // lumped mass. The element eigenvalue theorem makes the largest element value an upper
+  // bound for the assembled model.
+  FEMORAX_HD static double max_omega_sq(const Params& p, const double xe[NNODE][NDM],
+                                        const double* committed);
+
+  // Stable step for this element under the given scheme and damping (see "Stable time step").
+  FEMORAX_HD static double critical_dt(const Params& p, const Rayleigh& damp,
+                                       ExplicitScheme scheme,
+                                       const double xe[NNODE][NDM], const double* committed);
 };
 ```
 
-The launch layer gathers nodal data, calls `compute`, and scatters `fe` (and `Ke` when
-formed) through the assembly maps. Large elements may later compute and scatter `Ke` in
-pieces instead of holding the full matrix.
+Most elements implement `critical_dt` as one call to the shared
+`physics/explicit_stability.hpp` helper with their `max_omega_sq`.
+
+### Material traits
+
+```cpp
+struct ElasticIsotropic {
+  static constexpr MaterialKind KIND = MaterialKind::NDMaterial3D;
+  static constexpr int NSTRAIN = 6;   // OpenSees order: 11 22 33 12 23 31, engineering shear
+  static constexpr int NSTATE = 0;    // doubles of history per integration point
+  struct Params { double E, nu, rho; };
+  // Same math as setTrialStrain + getStress + getTangent.
+  FEMORAX_HD static void update(const Params& p, const double* committed, double* trial,
+                                const double eps[NSTRAIN],
+                                double sig[NSTRAIN], double D[NSTRAIN][NSTRAIN]);
+  // getInitialTangent, for betaKinit damping.
+  FEMORAX_HD static void initial_tangent(const Params& p, double D[NSTRAIN][NSTRAIN]);
+  FEMORAX_HD static double density(const Params& p);
+};
+```
+
+The committed tangent that `betaKcomm` damping needs comes from `update` at the committed
+state, or from a stored copy when the material is expensive; the material decides.
+
+### Registration
+
+```cpp
+// src/exec/element_registry.hpp
+using ElementRegistry = TypeList<
+  ElementEntry<"stdBrick", StdBrick>,
+  ElementEntry<"SSPbrick", SSPbrick>>;
+```
+
+Batches are instantiated for every registered (element, material) pair whose
+`MATERIAL_KIND`s match, and the model reader maps Femora's type names through the same
+tables. A pair that is not registered is an unsupported component, reported as such.
+
+## DOF numbering
+
+Nothing assumes a fixed number of DOFs per node.
+
+1. **DOF space.** Each node has `ndf[node]` DOFs, read from `/nodes`. Each element's
+   `NODE_NDF[i]` must equal the `ndf` of its node `i` (as in OpenSees), checked when the
+   model is read. Node DOFs are numbered by a prefix sum, `dof_offset[node]`, so node `n`'s
+   DOF `d` is `dof_offset[n] + d`. Elements with `NEXTRA > 0` get their DOFs after all node
+   DOFs, through `extra_offset[element]`.
+2. **Constraints.** `equalDOF` (and the laminar boundary, which Femora writes as equalDOF
+   pairs) joins DOFs in a union-find over DOF ids. Each DOF named in a constraint must exist
+   on both nodes. `fix` marks DOFs; if any DOF of a joined group is fixed, the whole group is
+   fixed. Circular or conflicting constraints are errors that name the nodes.
+3. **Equations.** Each surviving group gets one equation, numbered deterministically (in
+   order of the group's lowest DOF id after renumbering). The result is `eq[dof]`, with -1
+   for fixed DOFs.
+4. **Element maps.** Every batch stores, per element, its `NDOF` equation numbers
+   (`int32`, structure of arrays `[k * nelem + e]`), built from `NODE_NDF` and the
+   offsets. The launch layer never computes DOF positions on the fly.
+5. **Lumped mass and loads** sum through the same maps, so a slave's mass lands on its
+   master's equation and fixed DOFs drop out.
+
+Indices are 32-bit (nodes, elements, DOFs, equations, map entries). A count that can pass
+2^31 (the nonzeros of a large stiffness matrix) uses 64-bit row offsets; the compile step
+checks this.
+
+## Stable time step
+
+Each explicit scheme has its own stability limit for a mode with frequency `omega` and
+Rayleigh damping. With `alpha = alphaM` and
+`beta = betaK + betaKinit + betaKcomm` (conservative: all stiffness terms at the largest
+`omega`):
+
+- **ExplicitDifference** (OpenSees; damping uses the half-step velocity, so it is lagged).
+  For one mode the update has trace `2 - W^2 - 2*xi*W` and determinant `1 - 2*xi*W`, with
+  `W = omega*dt`. Stability requires `W^2 + 4*xi*W <= 4`. With
+  `xi = alpha/(2*omega) + beta*omega/2` this is
+  `omega^2*dt^2 + 2*(alpha + beta*omega^2)*dt - 4 <= 0`, so
+
+  `dt_crit = (sqrt(c^2 + 4*omega^2) - c) / omega^2`, with `c = alpha + beta*omega^2`.
+
+  Without damping this is `2/omega`. Stiffness-proportional damping lowers it, which
+  matters for soil columns with `betaK` damping on fine meshes.
+- **CentralDifference** (OpenSees; damping is centred and implicit). The limit is
+  `omega*dt <= 2`, unaffected by damping. In milestone 1a only the diagonal case
+  (lumped mass, `alphaM` only) is accepted; the general case needs the solver (1b).
+
+`omega^2` is the largest `max_omega_sq` over all elements, a min-reduction of
+`critical_dt` gives the stage's stable step, and both are checked at the start of each
+explicit stage. A step above `dt_crit` stops the run with the two values and the element
+that sets the limit; `allow_unstable_dt` turns the stop into a warning. Nonlinear runs
+re-check every N steps. Tests run a single mode and a column just below and just above
+`dt_crit` for both schemes, with and without each damping term.
 
 ## Assembly
 
