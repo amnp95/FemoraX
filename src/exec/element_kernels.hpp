@@ -234,4 +234,28 @@ void launch_team(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
       });
 }
 
+// Smallest stable explicit step over the batch's elements (Elem::critical_dt; committed
+// state empty: elements without history state so far).
+template <class Elem>
+double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, ExplicitScheme scheme) {
+  const auto node = b.node, param = b.param;
+  const auto params = b.params;
+  const Index P = b.padded;
+  double result = 0.0;
+  Kokkos::parallel_reduce(
+      "element_critical_dt", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count),
+      KOKKOS_LAMBDA(const Index e, double& m) {
+        double xe[Elem::NNODE][Elem::NDM];
+        for (int a = 0; a < Elem::NNODE; ++a) {
+          const Index n = node(a * P + e);
+          for (int d = 0; d < Elem::NDM; ++d) xe[a][d] = coords(d * N + n);
+        }
+        const DevParams<Elem>& pr = params(param(e));
+        const double dt = Elem::critical_dt(pr.p, pr.damp, scheme, xe, {});
+        if (dt < m) m = dt;
+      },
+      Kokkos::Min<double>(result));
+  return result;
+}
+
 }  // namespace femorax::exec::kernels

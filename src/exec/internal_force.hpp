@@ -80,6 +80,9 @@ class InternalForce {
   // Device bytes held by this object.
   std::int64_t device_bytes() const;
 
+  // Smallest stable explicit step over all elements (docs/design.md, "Stable time step").
+  double min_critical_dt(ExplicitScheme scheme) const;
+
   static int default_elements_per_team();
   int max_elements_per_team() const;  // smallest over the batches' scratch needs
 

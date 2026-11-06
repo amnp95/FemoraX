@@ -3,7 +3,7 @@
 //   femorax --version        print the FemoraX version
 //   femorax info             print the build configuration (Kokkos version and backends)
 //   femorax check <model.h5> read and validate a model, and check this build can run it
-//   femorax run <model.h5>   run a model (not implemented yet)
+//   femorax run <model.h5>   run a model [--renumbering off|on] [--quiet]
 //
 // Kokkos options (for example --kokkos-num-threads=8) are accepted by every command.
 //
@@ -13,6 +13,7 @@
 
 #include "exec/runtime.hpp"
 #include "femorax_version.hpp"
+#include "exec/explicit_analysis.hpp"
 #include "io/model_reader.hpp"
 #include "io/support.hpp"
 
@@ -29,7 +30,7 @@ void print_usage() {
       "  --version          print the FemoraX version\n"
       "  info               print the build configuration\n"
       "  check <model.h5>   validate a model and check this build can run it\n"
-      "  run <model.h5>     run a model (not implemented yet)\n");
+      "  run <model.h5>     run a model [--renumbering off|on] [--quiet]\n");
 }
 
 int cmd_info() {
@@ -91,8 +92,40 @@ int main(int argc, char* argv[]) {
   const std::string_view cmd = argv[1];
   if (cmd == "info") return cmd_info();
   if (cmd == "run") {
-    std::fprintf(stderr, "femorax run: not implemented yet (milestone 1a in progress)\n");
-    return 2;
+    if (argc < 3) {
+      std::fprintf(stderr, "usage: femorax run <model.h5> [--renumbering off|on] [--quiet]\n");
+      return 1;
+    }
+    femorax::exec::RunOptions opt;
+    for (int i = 3; i < argc; ++i) {
+      const std::string_view a = argv[i];
+      if (a == "--renumbering" && i + 1 < argc) {
+        const std::string_view v = argv[++i];
+        opt.renumbering = v == "off" ? femorax::compile::Renumbering::Off : femorax::compile::Renumbering::RCM;
+      } else if (a == "--quiet") {
+        opt.verbose = false;
+      } else {
+        std::fprintf(stderr, "femorax run: unknown option '%.*s'\n", static_cast<int>(a.size()), a.data());
+        return 1;
+      }
+    }
+    try {
+      const femorax::io::Model m = femorax::io::read_model(argv[2]);
+      for (const auto& w : m.warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
+      femorax::io::check_supported(m, femorax::io::Capabilities{});
+      const auto r = femorax::exec::run_model(m, opt);
+      if (opt.verbose) {
+        std::printf("femorax: done in %.3f s (compile %.3f s, setup %.3f s), %lld records written\n",
+                    r.total_seconds, r.compile_seconds, r.setup_seconds, static_cast<long long>(r.records));
+      }
+      return 0;
+    } catch (const femorax::io::UnsupportedComponent& e) {
+      std::fprintf(stderr, "%s: %s\n", argv[2], e.what());
+      return kExitUnsupported;
+    } catch (const femorax::io::ModelError& e) {
+      std::fprintf(stderr, "%s: %s\n", argv[2], e.what());
+      return kExitInvalid;
+    }
   }
   std::fprintf(stderr, "femorax: unknown command '%.*s'\n\n", static_cast<int>(cmd.size()),
                cmd.data());

@@ -76,6 +76,7 @@ struct InternalForce::Batch {
   virtual std::int64_t count() const = 0;
   virtual std::int64_t device_bytes() const = 0;
   virtual int max_elements_per_team() const = 0;
+  virtual double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const = 0;
 };
 
 namespace {
@@ -134,6 +135,9 @@ struct TypedBatch final : InternalForce::Batch {
                                      b.color_elements.extent(0)) * 4 +
            static_cast<std::int64_t>(b.params.extent(0) * sizeof(kernels::DevParams<Elem>)) +
            static_cast<std::int64_t>(b.geometry.extent(0)) * 8;
+  }
+  double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const override {
+    return kernels::min_critical_dt<Elem>(b, coords, N, s);
   }
   int max_elements_per_team() const override {
     const auto max_bytes = Kokkos::TeamPolicy<Space>::scratch_size_max(0);
@@ -212,6 +216,12 @@ std::int64_t InternalForce::device_bytes() const {
   std::int64_t n = static_cast<std::int64_t>(3 * neq_ + coords_.extent(0)) * 8 + gather_.bytes();
   for (const auto& b : batches_) n += b->device_bytes();
   return n;
+}
+
+double InternalForce::min_critical_dt(ExplicitScheme scheme) const {
+  double m = 1e300;
+  for (const auto& b : batches_) m = std::min(m, b->min_critical_dt(coords_, nnodes_, scheme));
+  return m;
 }
 
 int InternalForce::default_elements_per_team() { return std::max(1, simd_width() / 8); }

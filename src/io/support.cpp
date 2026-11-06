@@ -18,6 +18,19 @@ constexpr const char* kOpenSeesHint = " Run this model with the OpenSees backend
 }  // namespace
 
 void check_supported(const Model& m, const Capabilities& caps) {
+  for (const auto& s : m.time_series) {
+    if (!s.dt && (s.use_last || s.prepend_zero)) {
+      unsupported("Path time series " + std::to_string(s.tag) + " with a time array and " +
+                  (s.use_last ? "use_last" : "prepend_zero") + ": OpenSees (PathTimeSeries) silently " +
+                  "ignores that flag for -time/-fileTime series, so the two programs would differ. Remove " +
+                  "the flag, or give the series a uniform dt");
+    }
+  }
+  for (const auto& r : m.recorders) {
+    if (const auto* n = std::get_if<NodeRecorder>(&r.data); n && !n->time_series.empty()) {
+      unsupported("Node recorder " + r.name + " with -timeSeries (absolute response) is not available yet");
+    }
+  }
   for (const auto& g : m.elements) {
     if (std::find(caps.elements.begin(), caps.elements.end(), g.type) == caps.elements.end()) {
       unsupported(std::string("element type \"") + to_string(g.type) + "\" (/elements/" + g.id +

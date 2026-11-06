@@ -9,7 +9,15 @@ Default tolerances (until a component states otherwise):
 
 - Material strain-path tests: relative 1e-14 on stress and tangent.
 - Element tests: relative 1e-12 on force, stiffness and mass.
-- System tests: to be set with the first system test, with the reason.
+- System tests (Femora-style models run through both programs, every recorded value):
+  relative 1e-12 of the largest magnitude of each response (displacement, velocity,
+  acceleration), for every renumbering, layout and backend. Bit-identity is not expected
+  even without renumbering: FemoraX sums element contributions in its own order (the
+  gather scatter) and sums damping forces point by point (stdBrick entry below), and the
+  differences then grow through the time steps. The first system test
+  (`tests/system/soil_column`, 10x10x40 column, 4000 steps) shows 4.8e-13 at most
+  (acceleration; 1.8e-15 on displacement), with renumbering off or on, on the CPU and the
+  GPU.
 
 ## Entry format
 
@@ -23,6 +31,45 @@ Default tolerances (until a component states otherwise):
 ```
 
 ## Entries
+
+### CentralDifference with lumped stdBrick — lumped mass in the residual too
+- OpenSees: `SRC/analysis/integrator/CentralDifference.cpp`,
+  `SRC/analysis/integrator/TransientIntegrator.cpp` (`formEleResidual`),
+  `SRC/element/brick/Brick.cpp` (`formInertiaTerms`), commit 955ceb0
+- Difference: OpenSees forms the CentralDifference residual with
+  `getResistingForceIncInertia`, and `Brick::formInertiaTerms` computes the inertia force
+  `M*a` with the consistent mass whatever `massType` says; the system matrix
+  `c3*M + c2*C` uses the lumped mass (`getMass`). The step solved is
+  `M_L*U/dt^2 = P - K*u + M_C*(2u - u_prev)/dt^2 - ...`, which carries the spurious term
+  `(M_L - M_C)*(2u - u_prev)/dt^2`: an artificial stiffness that grows as `1/dt^2`.
+  FemoraX uses the lumped mass in both places (textbook central difference with a lumped
+  mass, the same mass ExplicitDifference uses).
+- Why: OpenSees' result is wrong and depends on the step size. On a 2x2x10 column under
+  gravity and a base motion, alphaM damping only, the peak settlement of the top is
+  1.620e-3 for ExplicitDifference (FemoraX and OpenSees agree to 7e-15) and for FemoraX
+  CentralDifference (1.620e-3 at dt = 2.5e-4, 1.620e-3 at 1.25e-4), but 2.73e-4 for
+  OpenSees CentralDifference at dt = 2.5e-4 and 8.19e-5 at 1.25e-4. The closed form of
+  the first steps confirms the cause: after step 1 (identical in both), the step-2
+  displacement next to the fixed base differs by exactly `u1/3`, the consistent-mass
+  coupling to the base nodes.
+- Effect on results: FemoraX does not match OpenSees for CentralDifference with lumped
+  stdBrick elements; it matches ExplicitDifference and the physics. Consistent-mass models
+  are refused in explicit stages anyway.
+- Also for milestone 1b: OpenSees Newmark has the same mix (consistent `M*a` in the
+  residual, lumped mass in the tangent), so its converged answer uses the consistent mass
+  for `-lumped` stdBrick. Decide there whether to match or to deviate.
+- Test: `tests/system/soil_column/make_models.py <dir> 2 2 10 1.0 2.5e-4 --integrator
+  CentralDifference` (and the same with `ExplicitDifference --mass-damping-only`), compared
+  with `compare.py`.
+
+### Stage end time — the Tcl loop's rounding of getTime
+- OpenSees: `SRC/tcl/commands.cpp` (`getTime` prints the domain time with `"%f"`);
+  Femora: `src/femora/components/analysis/analysis.py` (`while {[getTime] < %f}`)
+- Difference: none intended; recorded because it is easy to get wrong. A stage with
+  `final_time` runs while `time < final_time` with both rounded to six decimals, as the
+  Tcl loop compares them. With the accumulated time `0.9999999999999176` after 4000 steps
+  of 2.5e-4, the loop prints `1.000000` and stops, so a 1 s stage has 4000 steps, not 4001.
+- Test: `tests/system/soil_column` (both programs record the same 4000 steps).
 
 ### stdBrick — Rayleigh damping forces summed point by point
 - OpenSees: `SRC/element/Element.cpp` (`getRayleighDampingForces`) with

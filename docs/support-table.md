@@ -10,7 +10,7 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
-| stdBrick | in progress (1a): physics verified | consistent and lumped mass; force, tangent and masses bit-identical to OpenSees `955ceb0`, damping forces within 2.3e-15 (matrix-free, docs/deviations.md). Explicit force kernels (flat and team layouts, atomic and colored scatter) verified against the physics; runnable once the explicit time loop lands |
+| stdBrick | in progress (1a): physics verified | consistent and lumped mass; force, tangent and masses bit-identical to OpenSees `955ceb0`, damping forces within 2.3e-15 (matrix-free, docs/deviations.md). Explicit force kernels (flat and team layouts; gather, atomic and colored scatter) verified against the physics. Lumped mass runs end to end in explicit stages; system test against OpenSees within 4.8e-13 (`tests/system/soil_column`) |
 | SSPbrick | in progress (1a, after stdBrick) | |
 | PML3D, SSPquad, ElasticBeamColumn, DispBeamColumn, ForceBeamColumn, Truss, ASDEmbeddedNodeElement3D, embedded node contact, ZeroLengthContactASDimplex | planned | |
 
@@ -47,22 +47,22 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
-| UniformExcitation | in progress (1a) | |
-| Path time series | in progress (1a) | |
+| UniformExcitation | in progress (1a) | runs on the device; `-accel`, `-fact`, `-vel0`; matches OpenSees in the system test |
+| Path time series | in progress (1a) | uniform `-dt` and `-time` forms, evaluated on the device exactly as PathSeries / PathTimeSeries (`test_ground_motion`); `-time` with `use_last` or `prepend_zero` refused (OpenSees ignores them) |
 | Plain, MultipleSupport, H5DRM | planned | |
 
 ## Integrators
 
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
-| CentralDifference | in progress (1a) | see the plan's open question on damping |
-| ExplicitDifference | in progress (1a) | see the plan's open question on damping |
+| CentralDifference | in progress (1a) | lumped mass, alphaM damping only (others need the 1b solver); deliberately differs from OpenSees for lumped stdBrick (docs/deviations.md) |
+| ExplicitDifference | in progress (1a) | all four Rayleigh terms; stable-step check per stage; matches OpenSees within 4.8e-13 on every recorded value (`tests/system/soil_column`) |
 | Newmark | in progress (1b) | with Newton and the Eigen direct solver |
 
 ## Recorders
 
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
-| Node | in progress (1a) | |
-| VTKHDF | in progress (1a) | |
+| Node | in progress (1a) | disp, vel, accel; OpenSees recording rule and text format; device gather, asynchronous copies, writer thread; `-timeSeries` refused for now |
+| VTKHDF | in progress (1a) | next step: output that `femora.results` reads unchanged |
 | MPCO | planned | |
