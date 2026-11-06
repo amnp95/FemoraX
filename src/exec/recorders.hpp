@@ -1,16 +1,23 @@
 #pragma once
 
-// Node recorders (OpenSees `recorder Node -file ... -time -dT ... -node ... -dof ... disp|vel|
-// accel`), with OpenSees' recording rule and text layout (NodeRecorder.cpp, DataFileStream.cpp,
-// commit 955ceb0):
+// Recorders: Node (text) and VTKHDF, with OpenSees' recording rules and file layouts.
+//
+// Node (`recorder Node -file ... -time -dT ... -node ... -dof ... disp|vel|accel`;
+// NodeRecorder.cpp, DataFileStream.cpp, commit 955ceb0):
 //   record when dT == 0 or time - next >= -dT * 1e-5, then next = time + dT;
 //   one line per record: [time] then every node's DOFs, `setprecision(precision)` values
 //   separated by one space.
+// VTKHDF (`recorder vtkhdf file -dT ... -rTolDt ... disp vel accel`; VTKHDF_Recorder.cpp):
+//   the file is created when the recorder starts; the mesh (all nodes in tag order, all
+//   elements in tag order, or the listed elements and their nodes) is written on the first
+//   committed step; a step is recorded when dT == 0 or time - next >= -dT * rTolDt, then
+//   next = time + dT. Layout: io/vtkhdf_writer.hpp.
 //
-// All data stays on the device. At a recording time one small kernel gathers just the
-// recorded values into a staging array, which is copied asynchronously into pinned host
-// memory (double-buffered); a separate host thread formats and writes the files, so the
-// device never waits for the disk. The host waits for the device only at recording times.
+// All data stays on the device. At a recording time one small kernel per due recorder
+// gathers just the recorded values into a staging array, and only those ranges are copied
+// asynchronously into pinned host memory (double-buffered). A separate host thread formats
+// and writes every file (it also owns all HDF5 calls), so the device never waits for the
+// disk. The host waits for the device only at recording times.
 
 #include <Kokkos_Core.hpp>
 
@@ -27,43 +34,48 @@
 
 #include "compile/batches.hpp"
 #include "io/model.hpp"
+#include "io/vtkhdf_writer.hpp"
 
 namespace femorax::exec {
 
-class NodeRecorders {
+class Recorders {
  public:
   using Space = Kokkos::DefaultExecutionSpace;
   using Vec = Kokkos::View<double*, Space>;
 
-  NodeRecorders(const io::Model& model, const compile::Compiled& c);
-  ~NodeRecorders();
-  NodeRecorders(const NodeRecorders&) = delete;
-  NodeRecorders& operator=(const NodeRecorders&) = delete;
+  Recorders(const io::Model& model, const compile::Compiled& c);
+  ~Recorders();
+  Recorders(const Recorders&) = delete;
+  Recorders& operator=(const Recorders&) = delete;
 
-  // Start recording `name` (a process step). Returns false if it is not a Node recorder.
+  // Start recording `name` (a process step). Returns false if there is no such recorder.
   bool activate(const std::string& name);
   // After a committed step at `time`: record every active recorder that is due.
   void record(double time, const Vec& disp, const Vec& vel, const Vec& accel);
-  // Write everything still pending and close the files.
+  // Write everything still pending and close the files. Rethrows a writer error.
   void finish();
 
   std::int64_t records_written() const { return records_; }
 
  private:
+  enum class Kind { Node, Vtkhdf };
   struct Recorder {
+    Kind kind = Kind::Node;
     std::string name, file;
-    io::NodeResponse response;
+    std::vector<io::NodeResponse> responses;  // Node: one; VTKHDF: in file order
     bool echo_time = false;
-    double dT = 0.0, next = 0.0;
+    double dT = 0.0, rtol = 1e-5, next = 0.0;
     int precision = 6;
-    bool active = false;
-    std::vector<std::int32_t> eq_host;      // per column (node-major), -1 = fixed
-    Kokkos::View<std::int32_t*, Space> eq;  // the same, on the device
-    std::int64_t stage_offset = 0;
+    bool active = false, mesh_sent = false;
+    std::int64_t columns = 0;               // values per response
+    Kokkos::View<std::int32_t*, Space> eq;  // per column, -1 = fixed (value 0)
+    std::int64_t stage_offset = 0;          // responses.size() * columns values
+    std::shared_ptr<io::VtkhdfMesh> mesh;   // VTKHDF only
   };
   struct Job {
-    int recorder;
-    double time;
+    enum class Type { Open, Mesh, Frame } type = Type::Frame;
+    int recorder = 0;
+    double time = 0.0;
     std::vector<double> values;
   };
   struct Pending {
@@ -71,8 +83,13 @@ class NodeRecorders {
     std::vector<std::pair<int, double>> due;  // (recorder, time)
   };
 
+  std::int64_t size_of(const Recorder& r) const {
+    return static_cast<std::int64_t>(r.responses.size()) * r.columns;
+  }
+  void enqueue(std::vector<Job> jobs);
   void flush_pending();
   void writer_loop();
+  void write(Job& job);
 
   std::vector<Recorder> recorders_;
   Vec stage_;
@@ -81,11 +98,15 @@ class NodeRecorders {
   std::vector<Pending> pending_;
   std::atomic<std::int64_t> records_{0};
 
+  // Owned by the writer thread once it runs.
   std::vector<std::unique_ptr<std::ofstream>> files_;
+  std::vector<std::unique_ptr<io::VtkhdfWriter>> vtkhdf_;
+
   std::mutex mutex_;
   std::condition_variable cv_;
   std::deque<Job> jobs_;
   bool stop_ = false;
+  std::string error_;  // first writer error, reported by finish()
   std::thread writer_;
 };
 

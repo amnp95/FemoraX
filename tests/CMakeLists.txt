@@ -117,3 +117,17 @@ foreach(case IN ITEMS "explicit;0" "implicit_newmark;3" "duplicate_node;4")
                    -P ${PROJECT_SOURCE_DIR}/cmake/RunExpectExit.cmake)
   set_tests_properties(app.check.${name} PROPERTIES FIXTURES_REQUIRED io_fixtures)
 endforeach()
+
+# System test: VTKHDF output read by femora.results, against OpenSees. Needs the reference
+# build with HDF5 >= 1.12 (tests/reference/README.md) and Femora in .venv
+# (docs/dependencies.md); skipped otherwise.
+set(FEMORAX_OPENSEES "${PROJECT_SOURCE_DIR}/build/reference/opensees/OpenSees" CACHE FILEPATH
+    "OpenSees executable of the reference build")
+set(FEMORAX_VENV_PYTHON "${PROJECT_SOURCE_DIR}/.venv/bin/python")
+if(EXISTS "${FEMORAX_OPENSEES}" AND EXISTS "${FEMORAX_VENV_PYTHON}")
+  add_test(NAME system.vtkhdf_vs_opensees
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/vtkhdf_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_OPENSEES} ${FEMORAX_VENV_PYTHON}
+                   ${CMAKE_CURRENT_BINARY_DIR}/system_vtkhdf)
+  set_tests_properties(system.vtkhdf_vs_opensees PROPERTIES TIMEOUT 300)
+endif()

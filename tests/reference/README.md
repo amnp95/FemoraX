@@ -21,9 +21,14 @@ System packages: `tcl-dev`, `libeigen3-dev`, plus what FemoraX already needs
 (`gfortran`, `libhdf5-dev`, `liblapack-dev`, `zlib1g-dev`).
 
 ```
-cmake -S tests/reference -B build/reference -G Ninja -DCMAKE_BUILD_TYPE=Release
+tests/reference/build_hdf5.sh              # HDF5 1.14.6, for OpenSees' VTKHDF recorder
+cmake -S tests/reference -B build/reference -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DHDF5_ROOT=$PWD/build/_hdf5/install
 cmake --build build/reference -j8          # OpenSees executable and all drivers
 ```
+
+OpenSees compiles its HDF5 recorders (VTKHDF, MPCO) only with HDF5 1.12 or newer; with the
+system HDF5 1.10 `recorder vtkhdf` is "not found".
 
 ## Regenerate reference data
 

@@ -174,7 +174,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   Vec um("previous_displacement", static_cast<std::size_t>(neq));
   Kokkos::deep_copy(u, 0.0);
   GroundMotions motions(model);
-  NodeRecorders recorders(model, c);
+  Recorders recorders(model, c);
   rep.setup_seconds = now() - t_setup;
   if (opt.verbose) {
     std::printf("femorax: %lld elements, %lld equations, force kernel %s (%s), device %s\n",
@@ -194,8 +194,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         Kokkos::deep_copy(v_rec, h);
       }
     } else if (const auto* r = std::get_if<io::RecorderStep>(&step.step)) {
-      if (!recorders.activate(r->name) && opt.verbose)
-        std::printf("femorax: recorder %s is not written yet (VTKHDF output is the next step)\n", r->name.c_str());
+      if (!recorders.activate(r->name)) throw io::ModelError("process step names an unknown recorder " + r->name);
     } else if (const auto* s = std::get_if<io::SetTimeStep>(&step.step)) {
       time = s->time;
     } else if (const auto* an = std::get_if<io::AnalysisStep>(&step.step)) {

@@ -1,6 +1,7 @@
 # Model reader and (later) recorders. Host code; no Kokkos (CLAUDE.md rule 3).
 add_library(femorax_io
   h5.cpp
+  vtkhdf_writer.cpp
   model_reader.cpp
   support.cpp)
 add_library(femorax::io ALIAS femorax_io)

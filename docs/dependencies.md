@@ -9,7 +9,8 @@ this file.
 |---|---|---|---|---|
 | Kokkos | 5.1.0 | `github.com/kokkos/kokkos/releases/download/5.1.0/kokkos-5.1.0.tar.gz` (FetchContent) | `7bdbdfc88033ed7d940c7940ed8919e1f2b78a9656c69276beb76ad45c41ec4e` | launch layer (`src/exec/`) |
 | GoogleTest | 1.17.0 | `github.com/google/googletest/releases/download/v1.17.0/googletest-1.17.0.tar.gz` (FetchContent) | `65fab701d9829d38cb77c14acdc431d2108bfdbf8979e40eb8ae567edf10b27c` | tests only |
-| HDF5 | system (`libhdf5-dev`) | apt | n/a | model reader, recorders (from step 2) |
+| HDF5 | system (`libhdf5-dev`, 1.10.10 here) | apt | n/a | model reader, VTKHDF recorder |
+| HDF5 (reference build only) | 1.14.6 | `github.com/HDFGroup/hdf5/releases/download/hdf5_1.14.6/hdf5-1.14.6.tar.gz` (`tests/reference/build_hdf5.sh`) | `e4defbac30f50d64e1556374aa49e574417c9e72c6b1de7a4ff88c4b1bea6e9b` | OpenSees' VTKHDF recorder, which OpenSees compiles only with HDF5 >= 1.12 |
 | Eigen | to be pinned in milestone 1b | | | CPU direct solver (`SimplicialLDLT`) |
 
 ### Kokkos 5.1.0 and CUDA 13
@@ -34,7 +35,11 @@ FemoraX or Kokkos code. Running on a GPU waits for the hardware.
 | Repository | Commit | Date | Used for |
 |---|---|---|---|
 | OpenSees (`../OpenSees`) | `955ceb0a55f7b5764856ea82fc9a9cc7f07a1eea` | 2026-10-31 | source of every port; reference drivers in `tests/reference/` |
-| Femora (`../Femora`) | `79bd4f67f59b5c27560bc0a2e4b483627aa07df8` | 2026-10-30 | model description and Tcl export behaviour; test-only cross-validation |
+| Femora (`../Femora`) | `79bd4f67f59b5c27560bc0a2e4b483627aa07df8` | 2026-10-30 | model description and Tcl export behaviour; test-only cross-validation (`femora.results` reads FemoraX's VTKHDF output) |
+
+`.venv` sees `../Femora/src` through a `.pth` file (`femora_readonly.pth`, which also
+sends bytecode caches to `.venv/pycache`), so nothing is written into the clone. Femora's
+runtime dependencies are installed in `.venv` (pyvista 0.49.2, vtk 9.7.2, ...).
 
 Each ported file names its OpenSees source file and this commit in its header comment. A
 port made against a different commit records that commit there and in this table.

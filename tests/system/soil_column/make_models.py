@@ -3,9 +3,12 @@
 
     .venv/bin/python tests/system/soil_column/make_models.py <out_dir> [nx ny nz] [duration] [dt]
         [--integrator ExplicitDifference|CentralDifference] [--mass-damping-only]
+        [--vtkhdf DT] [--no-node-recorders]
 
 CentralDifference keeps only the mass-proportional damping (alphaM), the case FemoraX
 solves without a linear solver; --mass-damping-only does the same for ExplicitDifference.
+--vtkhdf DT adds a whole-model VTKHDF recorder (disp vel accel every DT; DT = 0: every
+step) writing opensees.vtkhdf and femorax.vtkhdf; --no-node-recorders drops the text ones.
 
 The column follows Femora's layered soil column (examples/site_response): stdBrick +
 ElasticIsotropic with lumped mass and body force, two materials (lower and upper half),
@@ -98,8 +101,11 @@ def write_tcl(m, path: Path, dt: float, integrator: str):
                " ".join(repr(float(x)) for x in m["acc"]) + f"}} -factor {GRAVITY!r}")
     out.append("pattern UniformExcitation 2 1 -accel 1")
     nodes = " ".join(map(str, m["rec_nodes"]))
-    for resp in ("disp", "vel", "accel"):
-        out.append(f"recorder Node -file opensees_{resp}.txt -precision 17 -time -node {nodes} -dof 1 2 3 {resp}")
+    if m["node_recorders"]:
+        for resp in ("disp", "vel", "accel"):
+            out.append(f"recorder Node -file opensees_{resp}.txt -precision 17 -time -node {nodes} -dof 1 2 3 {resp}")
+    if m["vtkhdf"] is not None:
+        out.append(f"recorder vtkhdf opensees.vtkhdf -dT {m['vtkhdf']!r} disp vel accel")
     out += ["constraints Transformation", "numberer Plain", "system Diagonal", "algorithm Linear",
             f"integrator {integrator}", "analysis Transient",
             f"while {{[getTime] < {m['duration']:f}}} {{ analyze 1 {dt!r} }}", "wipe"]
@@ -121,11 +127,14 @@ def write_femorax(m, path: Path, dt: float, prefix: str, integrator: str):
                                          "betaKcomm": w.f64(r[3])}, data={"elements": w.i32(els)})
                for i, (els, r) in enumerate(zip(m["regions"], m["rayleigh"]))}
     recorders = {}
-    for resp in ("disp", "vel", "accel"):
+    for resp in (("disp", "vel", "accel") if m["node_recorders"] else ()):
         recorders[resp] = w.node(attrs={"type": "Node", "file": f"{prefix}_{resp}.txt", "response": resp,
                                         "time": w.u8(True), "precision": w.i32(17)},
                                  data={"nodes": w.i32(m["rec_nodes"]), "dofs": w.i32([1, 2, 3])})
-    steps = [("pattern", {"tag": w.i32(2)})] + [("recorder", {"name": r}) for r in ("disp", "vel", "accel")] + [
+    if m["vtkhdf"] is not None:
+        recorders["vtkhdf"] = w.node(attrs={"type": "VTKHDF", "file": f"{prefix}.vtkhdf", "dT": w.f64(m["vtkhdf"]),
+                                            "responses": "disp vel accel"})
+    steps = [("pattern", {"tag": w.i32(2)})] + [("recorder", {"name": r}) for r in recorders] + [
         ("analysis", {"name": "shaking", "analysis_type": "Transient", "dt": w.f64(dt),
                       "final_time": w.f64(m["duration"]), "integrator": integrator,
                       "algorithm": "Linear", "constraint_handler": "Transformation", "numberer": "Plain",
@@ -160,6 +169,14 @@ def main() -> int:
         k = argv.index("--integrator")
         integrator = argv[k + 1]
         del argv[k:k + 2]
+    vtkhdf = None
+    if "--vtkhdf" in argv:
+        k = argv.index("--vtkhdf")
+        vtkhdf = float(argv[k + 1])
+        del argv[k:k + 2]
+    node_recorders = "--no-node-recorders" not in argv
+    if not node_recorders:
+        argv.remove("--no-node-recorders")
     alpha_only = "--mass-damping-only" in argv
     if alpha_only:
         argv.remove("--mass-damping-only")
@@ -176,6 +193,7 @@ def main() -> int:
     duration = float(sys.argv[5]) if len(sys.argv) >= 6 else 1.0
     dt = float(sys.argv[6]) if len(sys.argv) >= 7 else 2.5e-4
     m = build(nx, ny, nz, duration)
+    m["vtkhdf"], m["node_recorders"] = vtkhdf, node_recorders
     m["rayleigh"] = RAYLEIGH if integrator == "ExplicitDifference" and not alpha_only else [(r[0], 0.0, 0.0, 0.0) for r in RAYLEIGH]
     write_tcl(m, out / "model.tcl", dt, integrator)
     write_femorax(m, out / "model.femorax.h5", dt, "femorax", integrator)

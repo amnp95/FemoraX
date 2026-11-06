@@ -64,5 +64,5 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
 | Node | in progress (1a) | disp, vel, accel; OpenSees recording rule and text format; device gather, asynchronous copies, writer thread; `-timeSeries` refused for now |
-| VTKHDF | in progress (1a) | next step: output that `femora.results` reads unchanged |
+| VTKHDF | in progress (1a) | `disp vel accel`, whole model or an element list; OpenSees' layout dataset for dataset (types, chunks, offsets, tags), `femora.results` returns the same arrays as for OpenSees' file (`system.vtkhdf_vs_opensees`, `compare_vtkhdf.py`); FemoraX writes with the system HDF5 (1.10 file format objects), OpenSees with its own |
 | MPCO | planned | |
