@@ -1,0 +1,127 @@
+# FemoraX
+
+GPU-native finite element solver for dynamic geotechnical and soil-structure analysis.
+FemoraX is the solver backend for Femora (separate repo: GeotechUW/Femora). Femora builds
+the model; FemoraX runs it on GPU or CPU through Kokkos.
+
+Goal: the same element and material formulations as OpenSees, the same results, at GPU speed.
+
+The full architecture is in the design document, imported here:
+@docs/design.md
+
+## What Femora is
+
+Femora (github.com/GeotechUW/Femora) is a Python library from the same team that builds
+OpenSees models. A Femora model goes: materials, sections and element templates → mesh parts
+(volume, line, surface) → an assembler that merges the parts into one mesh (optionally
+partitioned with METIS) → constraints, damping, loads and interfaces → recorders → an ordered
+`process` timeline of analysis stages and actions (for example gravity, switch material stage
+to plastic, then transient). Today Femora exports a Tcl file and runs OpenSees, and reads
+results back from VTKHDF with `femora.results`.
+
+FemoraX becomes Femora's second backend: Femora writes a FemoraX model file instead of Tcl,
+and FemoraX writes VTKHDF that `femora.results` reads unchanged.
+
+## Reference code (read-only)
+
+Two clones sit next to this repository. Read them freely; never edit them, never import from
+them, and never copy them into this repository.
+
+- `../Femora/`: how each component is described, and how it maps to OpenSees commands.
+  Start with its Tcl export code and the generated API knowledge files
+  (built by `agent/build_knowledge.py`).
+- `../OpenSees/`: the source of every element and material to port. Record the commit hash
+  used for each port.
+
+Sessions start with: `claude --add-dir ../Femora --add-dir ../OpenSees`
+
+## Non-negotiable rules
+
+1. **Same answers as OpenSees.** Every element and material port is verified against the
+   original OpenSees class (material strain-path tests, element patch tests, system tests
+   on Femora examples). A port is not done until its verification test passes.
+2. **The physics layer is framework-free.** Code in `src/physics/` is plain C++20 functions
+   marked `FEMORAX_HD` (host + device). No Kokkos types, no heap allocation, no virtual
+   functions, no static or global mutable state, no exceptions, fixed-size arrays only.
+3. **Kokkos lives only in the launch layer** (`src/exec/`). Native CUDA or HIP code is allowed
+   only in `src/native/`, only when a profile shows a portable kernel is too slow, and always
+   with the portable version kept as a fallback.
+4. **FP64 everywhere** in physics, state and assembly. Mixed precision only inside solver
+   preconditioners, behind an explicit option.
+5. **FemoraX never imports Femora.** Femora is a test-only dependency used for cross-validation.
+6. **Solvers sit behind `femorax::LinearSolver`.** No solver-library types outside `src/solvers/`.
+7. **Every assembly path has a deterministic mode** (graph coloring). Validation tests use it.
+   The atomic path is allowed for speed.
+8. **When porting from OpenSees:** name the source file and OpenSees version or commit in a
+   comment at the top, keep variable names close to the original so the two can be reviewed
+   side by side, and record any deliberate difference in `docs/deviations.md`.
+9. **Ask before changing the model file schema** (`schema/`). Bump `schema_version` on every change.
+
+## Layout
+
+```
+FemoraX/
+  CLAUDE.md
+  cmake/       dependency pins, warnings, physics purity check
+  docs/        design.md, deviations.md, support-table.md, dependencies.md
+  schema/      versioned model-file specification (HDF5)
+  src/
+    physics/   elements/, materials/, sections/   (framework-free)
+    exec/      Kokkos launch layer: batches, assembly, time loop
+    solvers/   LinearSolver interface and backends
+    io/        model reader, recorders (VTKHDF writer)
+    native/    optional CUDA/HIP specializations
+    app/       the `femorax` command-line program
+  python/      bindings -> the `femorax` Python package
+  tests/
+    unit/      per-material and per-element tests against reference data
+    reference/ OpenSees driver programs and generated reference data
+    system/    Femora example comparisons (OpenSees vs FemoraX)
+  benchmarks/
+```
+
+## Build and test
+
+CPU build (Kokkos Serial + OpenMP). Kokkos 5.1.0 and GoogleTest 1.17.0 are fetched and
+pinned by `cmake/FemoraXDeps.cmake`; versions and hashes are in `docs/dependencies.md`.
+
+```
+cmake --preset cpu-debug            # or cpu-release, cpu-asan (ASan + UBSan)
+cmake --build --preset cpu-debug -j8
+ctest --preset cpu-debug
+```
+
+- Build trees go to `build/<preset>/`. Presets build with `-Werror`.
+- The unit-test binary also runs as a whole with 1 and 8 OpenMP threads
+  (`unit_all.threads1`, `unit_all.threads8`).
+- `physics_purity.*` tests enforce rule 2: a source scan (`cmake/CheckPhysicsPurity.cmake`)
+  and a standalone compile of every physics header with `-fno-exceptions -fno-rtti` and no
+  Kokkos on the include path.
+- CUDA and HIP builds: not set up yet (separate build trees, `-DKokkos_ENABLE_CUDA=ON`).
+
+## Development hardware
+
+The GPU laptops have not arrived. Develop and test on the Kokkos Serial and OpenMP backends
+first. Every kernel must pass its tests on CPU before it is run on GPU.
+
+## Conventions
+
+- C++20, CMake, namespace `femorax`, clang-format.
+- Structure-of-arrays storage: arrays indexed `[component * n + i]` so neighbouring threads
+  read neighbouring memory.
+- FemoraX is unit-agnostic, like OpenSees.
+- Tests: GoogleTest. Python bindings: nanobind, added after the CLI runs models.
+- CPU direct solver (milestone 1b): Eigen `SimplicialLDLT`. No GPL solver libraries.
+
+## Workflow
+
+- For a new module or any architectural change: propose a plan first and wait for approval.
+- One element or material per change, together with its tests.
+- Never mark a port finished with skipped or loosened tests. If a tolerance must change,
+  explain why in `docs/deviations.md`.
+- When a component becomes supported, update `docs/support-table.md`.
+
+## Current milestone
+
+Milestone 1a: layered elastic soil column with explicit central difference, end to end on the
+CPU backend (see design.md, Roadmap). Update this line when the milestone changes.

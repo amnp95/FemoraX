@@ -1,0 +1,66 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "cpu-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "Kokkos_ENABLE_SERIAL": "ON",
+        "Kokkos_ENABLE_OPENMP": "ON",
+        "FEMORAX_BUILD_TESTS": "ON",
+        "FEMORAX_WERROR": "ON"
+      }
+    },
+    {
+      "name": "cpu-debug",
+      "displayName": "CPU (Serial + OpenMP), debug",
+      "inherits": "cpu-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "Kokkos_ENABLE_DEBUG": "ON",
+        "Kokkos_ENABLE_DEBUG_BOUNDS_CHECK": "ON"
+      }
+    },
+    {
+      "name": "cpu-release",
+      "displayName": "CPU (Serial + OpenMP), release",
+      "inherits": "cpu-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "cpu-asan",
+      "displayName": "CPU (Serial + OpenMP), AddressSanitizer + UBSan",
+      "inherits": "cpu-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "cpu-debug", "configurePreset": "cpu-debug" },
+    { "name": "cpu-release", "configurePreset": "cpu-release" },
+    { "name": "cpu-asan", "configurePreset": "cpu-asan" }
+  ],
+  "testPresets": [
+    {
+      "name": "cpu-debug",
+      "configurePreset": "cpu-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "cpu-release",
+      "configurePreset": "cpu-release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "cpu-asan",
+      "configurePreset": "cpu-asan",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}
