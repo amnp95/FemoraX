@@ -10,8 +10,12 @@ cmake --preset cpu-release                # once
 python3 benchmarks/check.py               # builds femorax_bench, runs it, compares
 ```
 
-`check.py` exits 0 when no benchmark is slower than the baseline by more than the tolerance
-(default 10% on the minimum time over 20 runs), and 1 on a regression. A regressed case is
+`check.py` exits 0 when no gated benchmark is slower than the baseline by more than the
+tolerance (default 10% on the minimum time over 20 runs), and 1 on a regression. Gated cases
+are the paths that run: each backend's default layout, the deterministic (colored) form of
+it, and the STREAM reference. Other layout variants are measured and reported, marked
+"not gated", because they decide `src/exec/layout_defaults.hpp` but do not run in
+production (on CPU the team-layout times vary by 40-60% between runs). A regressed case is
 re-run once and the faster result kept, so a single noisy run does not fail the check. It
 refuses Debug builds. Results of the last run are in `build/<preset>/bench/last.json`.
 
@@ -65,7 +69,14 @@ Every new kernel comes with its benchmark in the same change.
    `bench.smoke` test.
 4. Run `check.py --filter <group> --update-baseline` to add the new cases to the baseline.
 
-Planned for milestone 1a: per-batch fused gather-compute-scatter for each element and
-material pair (stdBrick and SSPbrick with ElasticIsotropic), the explicit step on soil
-columns of increasing size (time per step and DOFs per second), the lumped mass assembly,
+Current:
+
+- `stream/*`: copy and triad, the bandwidth reference.
+- `explicit_force/<n>^3/<layout>_<scatter>[_ept<k>]`: stdBrick + ElasticIsotropic internal
+  and Rayleigh damping force on an n x n x n Femora-style soil column (renumbering on), in
+  every layout and scatter mode; team variants for each elements-per-team that fits the
+  backend's scratch. The fastest variant per backend goes into
+  `src/exec/layout_defaults.hpp`.
+
+Planned for milestone 1a: SSPbrick, the explicit step (time per step and DOFs per second),
 and the recorders' per-step cost.

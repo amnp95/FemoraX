@@ -35,9 +35,9 @@ Default tolerances (until a component states otherwise):
 - Why: the explicit path must not form matrices (docs/design.md, "Explicit analysis";
   CLAUDE.md, Performance), and the matrix-free form is what the GPU kernels run.
 - Effect on results: rounding only. Against OpenSees on 4 geometries x 2 materials x 4
-  velocity fields, the largest difference is 2.3e-15 of the largest entry; 246 of 1,536
+  velocity fields, the largest difference is 2.0e-15 of the largest entry; 271 of 1,536
   values are bit-identical. Internal force, tangent, initial tangent and both mass
-  matrices are bit-identical (47,094 of 48,384 values in total).
+  matrices are bit-identical (47,119 of 48,384 values in total).
 - Test: `tests/unit/test_std_brick_reference.cpp` (gate: relative 1e-12, the element
   default).
 

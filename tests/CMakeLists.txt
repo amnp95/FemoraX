@@ -14,6 +14,7 @@ add_executable(femorax_unit_tests
   unit/test_memory_contract.cpp
   unit/test_dof_numbering.cpp
   unit/test_renumber.cpp
+  unit/test_explicit_force.cpp
   unit/test_runtime.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::compile GTest::gtest)
 target_compile_definitions(femorax_unit_tests PRIVATE

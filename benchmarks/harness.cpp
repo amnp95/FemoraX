@@ -109,7 +109,8 @@ std::string to_json(const std::vector<Result>& results, const Options& options) 
     const auto& r = results[i];
     o << "    {\"name\": \"" << json_escape(r.bench.name) << "\", \"unit\": \"" << r.bench.unit
       << "\", \"bytes\": " << r.bench.bytes << ", \"flops\": " << r.bench.flops
-      << ", \"items\": " << r.bench.items << ", \"reps\": " << r.reps
+      << ", \"items\": " << r.bench.items << ", \"gated\": " << (r.bench.gated ? "true" : "false")
+      << ", \"reps\": " << r.reps
       << ", \"min_s\": " << r.min_s << ", \"median_s\": " << r.median_s
       << ", \"max_s\": " << r.max_s << ", \"gbytes_per_s\": " << r.gbytes_per_s()
       << ", \"gflops\": " << r.gflops() << "}" << (i + 1 < results.size() ? "," : "") << "\n";

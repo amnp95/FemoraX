@@ -272,7 +272,8 @@ must pass the same verification tests against OpenSees.
 ### Choosing the layout
 
 The benchmark harness runs every layout of every registered (element, material) pair and
-reports the fastest per backend. The defaults live in a committed table per backend
+reports the fastest per backend (first numbers, OpenMP: flat 19.5 ms vs team 221 ms or more
+for 64k stdBrick elements; `src/exec/layout_defaults.hpp`). The defaults live in a committed table per backend
 (`src/exec/layout_defaults.hpp`), updated from benchmark results with the before/after
 numbers in the commit message. A run option overrides the default for experiments.
 

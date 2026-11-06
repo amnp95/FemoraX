@@ -21,6 +21,10 @@ struct Benchmark {
   double flops = 0.0;        // floating-point operations of one run(), 0 if not counted
   std::int64_t items = 0;    // work items of one run() (elements, entries, DOFs)
   std::function<void()> run; // one call or step; may launch asynchronously
+  // Whether check.py fails on a slowdown of this case. Gate the paths that run (the
+  // backend's default layout, the deterministic validation path, the bandwidth
+  // reference); variants that only inform the layout choice are reported, not gated.
+  bool gated = true;
 };
 
 struct Result {
@@ -58,5 +62,6 @@ std::string to_json(const std::vector<Result>& results, const Options& options);
 
 // Each benchmark source file defines one of these; bench_main.cpp calls them all.
 void register_stream(Registry& registry, const Options& options);
+void register_explicit(Registry& registry, const Options& options);
 
 }  // namespace femorax::bench

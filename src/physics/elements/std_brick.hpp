@@ -286,6 +286,76 @@ struct StdBrick {
       }
   }
 
+  // Everything one Gauss point contributes, before it is spread to the nodes.
+  struct PointResult {
+    PointShape s;
+    double stress[NSTRESS];      // material stress
+    double dampStress[NSTRESS];  // (betaK Dt + betaKinit D0 + betaKcomm Dc) * strain rate
+    double v_gp[3];              // velocity at the point (consistent-mass alphaM damping)
+    double rho;
+    bool stiffDamping;
+  };
+
+  // Point i: geometry, strain, material update (writes trial state), damping stress.
+  // dd receives the material tangent. D0 must hold the initial tangent when
+  // damp.betaKinit != 0 (computed once per element by the caller).
+  FEMORAX_HD static void point_update(const Params& p, const Rayleigh& damp,
+                                      const double xl[3][8], const double* ue, const double* ve,
+                                      int i, Strided<const double> committed_i,
+                                      Strided<double> trial_i, const double (*D0)[NSTRESS],
+                                      PointResult& r, double (*dd)[NSTRESS]) {
+    point_geometry(xl, i, r.s);
+    double strain[NSTRESS];
+    point_strain(r.s, ue, strain);
+    Mat::update(p.mat, committed_i, trial_i, strain, r.stress, dd);
+
+    r.stiffDamping = damp.betaK != 0.0 || damp.betaKinit != 0.0 || damp.betaKcomm != 0.0;
+    for (int a = 0; a < NSTRESS; ++a) r.dampStress[a] = 0.0;
+    if (r.stiffDamping) {
+      double Dc[NSTRESS][NSTRESS];
+      if (damp.betaKcomm != 0.0) Mat::committed_tangent(p.mat, committed_i, Dc);
+      double rate[NSTRESS];
+      point_strain(r.s, ve, rate);
+      for (int a = 0; a < NSTRESS; ++a) {
+        double sum = 0.0;
+        for (int c = 0; c < NSTRESS; ++c) {
+          double Dac = damp.betaK * dd[a][c];
+          if (damp.betaKinit != 0.0) Dac += damp.betaKinit * D0[a][c];
+          if (damp.betaKcomm != 0.0) Dac += damp.betaKcomm * Dc[a][c];
+          sum += Dac * rate[c];
+        }
+        r.dampStress[a] = sum;
+      }
+    }
+    r.rho = Mat::density(p.mat);
+    r.v_gp[0] = r.v_gp[1] = r.v_gp[2] = 0.0;
+    if (damp.alphaM != 0.0 && p.massType == 0) {
+      for (int j = 0; j < NNODE; j++)
+        for (int q = 0; q < 3; q++) r.v_gp[q] += r.s.shp[3][j] * ve[3 * j + q];
+    }
+  }
+
+  // What point r contributes to node j: residJ (B_j^T stress dvol), body (dvol b N_j) and
+  // dampJ (damping force). Accumulate as resid += residJ; resid -= body; fdamp += dampJ, in
+  // Gauss point order, then fe = resid + fdamp: the OpenSees order (bit-identical force).
+  FEMORAX_HD static void point_node_contribution(const Params& p, const Rayleigh& damp,
+                                                 const PointResult& r, const double* ve, int j,
+                                                 double residJ[3], double body[3],
+                                                 double dampJ[3]) {
+    point_node_force(r.s, r.stress, j, residJ);
+    for (int q = 0; q < 3; q++) body[q] = point_body_force(p, r.s, j, q);
+    dampJ[0] = dampJ[1] = dampJ[2] = 0.0;
+    if (r.stiffDamping) point_node_force(r.s, r.dampStress, j, dampJ);
+    if (damp.alphaM != 0.0) {
+      // alphaM * M * v with this point's mass: temp = N_j * dvol * rho.
+      const double temp = r.s.shp[3][j] * r.s.dvol * r.rho;
+      for (int q = 0; q < 3; q++) {
+        const double vq = p.massType == 0 ? r.v_gp[q] : ve[3 * j + q];
+        dampJ[q] += damp.alphaM * temp * vq;
+      }
+    }
+  }
+
   // Buffers written by the inner loops of compute. In lane-parallel layouts the launch
   // layer places them in team scratch (inner.hpp: locals are private per lane).
   struct Work {
@@ -319,63 +389,21 @@ struct StdBrick {
       });
     }
 
-    const bool stiffDamping = damp.betaK != 0.0 || damp.betaKinit != 0.0 || damp.betaKcomm != 0.0;
-    double D0[NSTRESS][NSTRESS], Dc[NSTRESS][NSTRESS];
+    double D0[NSTRESS][NSTRESS];
     if (damp.betaKinit != 0.0) Mat::initial_tangent(p.mat, D0);
 
-    const double rho = Mat::density(p.mat);
-
     for (int i = 0; i < NGP; i++) {
-      PointShape s;
-      point_geometry(xl, i, s);
-
-      double strain[NSTRESS], stress[NSTRESS], dd[NSTRESS][NSTRESS];
-      point_strain(s, ue, strain);
-      Mat::update(p.mat, committed.point(i), trial.point(i), strain, stress, dd);
-
-      // Damping stress (betaK Dt + betaKinit D0 + betaKcomm Dc) * strain rate.
-      double dampStress[NSTRESS] = {0, 0, 0, 0, 0, 0};
-      if (stiffDamping) {
-        if (damp.betaKcomm != 0.0) Mat::committed_tangent(p.mat, committed.point(i), Dc);
-        double rate[NSTRESS];
-        point_strain(s, ve, rate);
-        for (int a = 0; a < NSTRESS; ++a) {
-          double sum = 0.0;
-          for (int c = 0; c < NSTRESS; ++c) {
-            double Dac = damp.betaK * dd[a][c];
-            if (damp.betaKinit != 0.0) Dac += damp.betaKinit * D0[a][c];
-            if (damp.betaKcomm != 0.0) Dac += damp.betaKcomm * Dc[a][c];
-            sum += Dac * rate[c];
-          }
-          dampStress[a] = sum;
-        }
-      }
-
-      double v_gp[3] = {0, 0, 0};  // velocity at the point, for consistent alphaM damping
-      if (damp.alphaM != 0.0 && p.massType == 0) {
-        for (int j = 0; j < NNODE; j++)
-          for (int q = 0; q < 3; q++) v_gp[q] += s.shp[3][j] * ve[3 * j + q];
-      }
+      PointResult r;
+      double dd[NSTRESS][NSTRESS];
+      point_update(p, damp, xl, ue, ve, i, committed.point(i), trial.point(i), D0, r, dd);
 
       inner_for(ctx, NNODE, [&](int j) {
-        double residJ[3];
-        point_node_force(s, stress, j, residJ);
+        double residJ[3], body[3], dampJ[3];
+        point_node_contribution(p, damp, r, ve, j, residJ, body, dampJ);
         for (int q = 0; q < 3; q++) {
           work.resid[3 * j + q] += residJ[q];
-          work.resid[3 * j + q] -= point_body_force(p, s, j, q);
-        }
-        if (stiffDamping) {
-          double dampJ[3];
-          point_node_force(s, dampStress, j, dampJ);
-          for (int q = 0; q < 3; q++) work.fdamp[3 * j + q] += dampJ[q];
-        }
-        if (damp.alphaM != 0.0) {
-          // alphaM * M * v with this point's mass: temp = N_j * dvol * rho.
-          const double temp = s.shp[3][j] * s.dvol * rho;
-          for (int q = 0; q < 3; q++) {
-            const double vq = p.massType == 0 ? v_gp[q] : ve[3 * j + q];
-            work.fdamp[3 * j + q] += damp.alphaM * temp * vq;
-          }
+          work.resid[3 * j + q] -= body[q];
+          work.fdamp[3 * j + q] += dampJ[q];
         }
       });
 
@@ -383,7 +411,7 @@ struct StdBrick {
         inner_for(ctx, NNODE * NNODE, [&](int blk) {
           const int J = blk / NNODE, K = blk % NNODE;
           double stiffJK[3][3];
-          point_block_tangent(s, dd, J, K, stiffJK);
+          point_block_tangent(r.s, dd, J, K, stiffJK);
           for (int a = 0; a < 3; a++)
             for (int c = 0; c < 3; c++) Ke[3 * J + a][3 * K + c] += stiffJK[a][c];
         });

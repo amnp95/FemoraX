@@ -1,0 +1,192 @@
+#include "compile/batches.hpp"
+
+#include <algorithm>
+#include <map>
+#include <unordered_map>
+
+#include "io/h5.hpp"
+#include "physics/elements/std_brick.hpp"
+#include "physics/materials/elastic_isotropic.hpp"
+
+namespace femorax::compile {
+
+namespace {
+
+using Brick = StdBrick<ElasticIsotropic>;
+
+std::int32_t round_up(std::int32_t n, int w) {
+  w = std::max(w, 1);
+  return (n + w - 1) / w * w;
+}
+
+// Greedy coloring in batch order: an element takes the smallest color not used by any
+// earlier element that shares one of its equations. Deterministic.
+void color(Batch& b, std::int32_t num_equations) {
+  std::vector<std::int32_t> element_color(static_cast<std::size_t>(b.count), -1);
+  // For each equation, the colors already touching it (small sets).
+  std::vector<std::vector<std::int32_t>> used(static_cast<std::size_t>(num_equations));
+  std::int32_t ncolors = 0;
+  std::vector<char> taken;
+  for (std::int32_t e = 0; e < b.count; ++e) {
+    taken.assign(static_cast<std::size_t>(ncolors) + 1, 0);
+    for (int k = 0; k < b.ndof; ++k) {
+      const std::int32_t q = b.eq[static_cast<std::size_t>(k) * b.padded + e];
+      if (q < 0) continue;
+      for (const auto c : used[q]) taken[c] = 1;
+    }
+    std::int32_t c = 0;
+    while (taken[c]) ++c;
+    element_color[e] = c;
+    ncolors = std::max(ncolors, c + 1);
+    for (int k = 0; k < b.ndof; ++k) {
+      const std::int32_t q = b.eq[static_cast<std::size_t>(k) * b.padded + e];
+      if (q >= 0 && std::find(used[q].begin(), used[q].end(), c) == used[q].end()) used[q].push_back(c);
+    }
+  }
+  b.color_start.assign(static_cast<std::size_t>(ncolors) + 1, 0);
+  for (const auto c : element_color) ++b.color_start[c + 1];
+  for (std::int32_t c = 0; c < ncolors; ++c) b.color_start[c + 1] += b.color_start[c];
+  b.color_elements.resize(static_cast<std::size_t>(b.count));
+  std::vector<std::int32_t> fill(b.color_start.begin(), b.color_start.end() - 1);
+  for (std::int32_t e = 0; e < b.count; ++e) b.color_elements[fill[element_color[e]]++] = e;
+}
+
+}  // namespace
+
+Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
+  Compiled c;
+  c.ordering = compute_ordering(m, opt.renumbering);
+  c.dofs = number_dofs(m, c.ordering.node_order);
+  const auto& n = c.dofs;
+  const std::int32_t N = n.num_nodes();
+
+  std::unordered_map<std::int32_t, std::int32_t> internal_of_tag;
+  for (std::int32_t i = 0; i < N; ++i) internal_of_tag[n.node_tag[i]] = i;
+  c.coords.resize(static_cast<std::size_t>(3) * N);
+  for (std::int32_t i = 0; i < N; ++i)
+    for (int k = 0; k < 3; ++k)
+      c.coords[static_cast<std::size_t>(k) * N + i] = m.nodes.coords[static_cast<std::size_t>(n.node_model_index[i]) * 3 + k];
+
+  std::unordered_map<std::int32_t, std::size_t> material_index;
+  for (std::size_t i = 0; i < m.materials.size(); ++i) material_index[m.materials[i].tag] = i;
+
+  // Damping region of every element tag: the last region in file order wins (OpenSees).
+  std::unordered_map<std::int32_t, std::int32_t> region_of;
+  for (std::size_t r = 0; r < m.rayleigh.size(); ++r)
+    for (const auto e : m.rayleigh[r].elements) region_of[e] = static_cast<std::int32_t>(r);
+
+  // Global element index (file order across groups) -> (group, index in group).
+  std::vector<std::pair<std::int32_t, std::int32_t>> where;
+  for (std::size_t g = 0; g < m.elements.size(); ++g)
+    for (std::size_t e = 0; e < m.elements[g].size(); ++e)
+      where.emplace_back(static_cast<std::int32_t>(g), static_cast<std::int32_t>(e));
+
+  // One batch per (element type, material type); elements in renumbered order.
+  std::map<std::pair<int, int>, std::vector<std::int32_t>> members;  // -> global element indices
+  for (const auto ge : c.ordering.element_order) {
+    const auto& g = m.elements[where[ge].first];
+    const auto& mat = m.materials[material_index.at(g.material)];
+    if (!std::holds_alternative<io::ElasticIsotropicData>(mat.data)) {
+      throw io::ModelError("no kernel for element type " + std::string(io::to_string(g.type)) +
+                           " with material " + std::to_string(mat.tag));
+    }
+    if (g.type != io::ElementType::StdBrick) {
+      throw io::UnsupportedComponent(std::string("unsupported component: element type \"") +
+                                     io::to_string(g.type) +
+                                     "\" has no kernel in this build yet. Run this model with "
+                                     "the OpenSees backend.");
+    }
+    members[{static_cast<int>(g.type), static_cast<int>(MaterialType::ElasticIsotropic)}].push_back(ge);
+  }
+
+  c.lumped_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
+  for (const auto& [key, list] : members) {
+    Batch b;
+    b.element = static_cast<io::ElementType>(key.first);
+    b.material = static_cast<MaterialType>(key.second);
+    b.nnode = Brick::NNODE;
+    b.ndof = Brick::NDOF;
+    b.count = static_cast<std::int32_t>(list.size());
+    b.padded = round_up(b.count, opt.simd_width);
+    const auto P = static_cast<std::size_t>(b.padded);
+    b.tag.assign(P, -1);
+    b.node.assign(static_cast<std::size_t>(b.nnode) * P, -1);
+    b.eq.assign(static_cast<std::size_t>(b.ndof) * P, -1);
+    b.param.assign(P, 0);
+
+    std::map<std::pair<std::int32_t, std::int32_t>, std::int32_t> param_of;  // (group, region)
+    for (std::int32_t e = 0; e < b.count; ++e) {
+      const auto [gi, ei] = where[list[e]];
+      const auto& g = m.elements[gi];
+      b.tag[e] = g.tags[ei];
+      const auto rit = region_of.find(g.tags[ei]);
+      const std::int32_t region = rit == region_of.end() ? -1 : rit->second;
+      const auto [pit, fresh] = param_of.emplace(std::make_pair(gi, region),
+                                                 static_cast<std::int32_t>(b.params.size()));
+      if (fresh) {
+        ParamSet ps;
+        ps.group = gi;
+        ps.material = static_cast<std::int32_t>(material_index.at(g.material));
+        const auto& d = std::get<io::ElasticIsotropicData>(m.materials[ps.material].data);
+        ps.E = d.E;
+        ps.nu = d.nu;
+        ps.rho = d.rho;
+        for (int k = 0; k < 3; ++k) ps.b[k] = g.body_force[k];
+        ps.massType = g.lumped ? 1 : 0;
+        if (region >= 0) {
+          const auto& r = m.rayleigh[region];
+          ps.damping = Rayleigh{r.alphaM, r.betaK, r.betaKinit, r.betaKcomm};
+        }
+        b.params.push_back(ps);
+      }
+      b.param[e] = pit->second;
+
+      double xe[8][3];
+      for (int a = 0; a < b.nnode; ++a) {
+        const std::int32_t node = internal_of_tag.at(g.connectivity[static_cast<std::size_t>(ei) * b.nnode + a]);
+        b.node[static_cast<std::size_t>(a) * P + e] = node;
+        for (int d = 0; d < 3; ++d) {
+          b.eq[static_cast<std::size_t>(3 * a + d) * P + e] = n.equation(node, d);
+          xe[a][d] = c.coords[static_cast<std::size_t>(d) * N + node];
+        }
+      }
+      // Lumped mass of this element into its equations (fixed DOFs drop out, tied DOFs
+      // add to their shared equation).
+      const ParamSet& ps = b.params[b.param[e]];
+      const Brick::Params bp{{ps.E, ps.nu, ps.rho}, {ps.b[0], ps.b[1], ps.b[2]}, ps.massType};
+      double mj[8];
+      Brick::lumped_mass(bp, xe, mj);
+      for (int a = 0; a < b.nnode; ++a)
+        for (int d = 0; d < 3; ++d) {
+          const std::int32_t q = b.eq[static_cast<std::size_t>(3 * a + d) * P + e];
+          if (q >= 0) c.lumped_mass[q] += mj[a];
+        }
+    }
+    color(b, n.num_equations);
+    c.batches.push_back(std::move(b));
+  }
+
+  // Nodal masses.
+  for (std::size_t r = 0; r < m.mass.node.size(); ++r) {
+    const std::int32_t q = n.equation(internal_of_tag.at(m.mass.node[r]), m.mass.dof[r] - 1);
+    if (q >= 0) c.lumped_mass[q] += m.mass.value[r];
+  }
+  return c;
+}
+
+std::int64_t memory_estimate_bytes(const Compiled& c) {
+  const std::int64_t neq = c.dofs.num_equations, N = c.dofs.num_nodes();
+  std::int64_t bytes = 0;
+  bytes += 3 * N * 8;                  // coordinates
+  bytes += 7 * neq * 8;                // u, v, a, f_int, f_ext, mass, scratch vector
+  for (const auto& b : c.batches) {
+    const std::int64_t P = b.padded;
+    bytes += P * 4 * (1 + b.nnode + b.ndof + 1);  // tag, nodes, equations, param index
+    bytes += static_cast<std::int64_t>(b.params.size()) * static_cast<std::int64_t>(sizeof(ParamSet));
+    bytes += static_cast<std::int64_t>(b.color_elements.size() + b.color_start.size()) * 4;
+    // Material state (committed and trial): ElasticIsotropic has none.
+  }
+  return bytes;
+}
+
+}  // namespace femorax::compile

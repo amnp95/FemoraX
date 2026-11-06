@@ -143,9 +143,11 @@ def main() -> int:
 
 
 def compare(current: dict, base: dict, tol: float) -> list[str]:
+    """Gated cases slower than the baseline by more than tol."""
     b = by_name(base)
     return [r["name"] for r in current["results"]
-            if r["name"] in b and r["min_s"] > b[r["name"]]["min_s"] * (1.0 + tol)]
+            if r.get("gated", True) and r["name"] in b
+            and r["min_s"] > b[r["name"]]["min_s"] * (1.0 + tol)]
 
 
 def print_report(current: dict, base: dict | None, tol: float) -> None:
@@ -159,7 +161,10 @@ def print_report(current: dict, base: dict | None, tol: float) -> None:
         frac = f"{100 * r['gbytes_per_s'] / triad:6.1f}%" if triad > 0 and r["bytes"] else "     - "
         if name in b:
             ratio = r["min_s"] / b[name]["min_s"] - 1.0
-            flag = "  <-- slower" if ratio > tol else ""
+            gated = r.get("gated", True)
+            flag = ("  <-- slower" if gated else "  (slower, not gated)") if ratio > tol else ""
+            if not gated and not flag:
+                flag = "  (not gated)"
             tail = f" {b[name]['min_s'] * 1e6:11.2f} {ratio:+7.1%}{flag}"
         else:
             tail = f" {'new':>11s}"
