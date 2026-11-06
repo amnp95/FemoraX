@@ -14,7 +14,7 @@ python3 benchmarks/check.py               # builds femorax_bench, runs it, compa
 tolerance (default 10% on the minimum time over 20 runs), and 1 on a regression. Gated cases
 are the paths that run: each backend's default layout, the deterministic (colored) form of
 it, and the STREAM reference. Other layout variants are measured and reported, marked
-"not gated", because they decide `src/exec/layout_defaults.hpp` but do not run in
+"not gated", because they decide `src/exec/force_settings.cpp` but do not run in
 production (on CPU the team-layout times vary by 40-60% between runs). A regressed case is
 re-run once and the faster result kept, so a single noisy run does not fail the check. It
 refuses Debug builds. Results of the last run are in `build/<preset>/bench/last.json`.
@@ -76,7 +76,7 @@ Current:
   and Rayleigh damping force on an n x n x n Femora-style soil column (renumbering on), in
   every layout and scatter mode; team variants for each elements-per-team that fits the
   backend's scratch. The fastest variant per backend goes into
-  `src/exec/layout_defaults.hpp`.
+  `src/exec/force_settings.cpp`.
 
 Planned for milestone 1a: SSPbrick, the explicit step (time per step and DOFs per second),
 and the recorders' per-step cost.

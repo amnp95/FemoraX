@@ -75,6 +75,7 @@ local arrays.
 | `NSTATE` | doubles of history state per element (material state at every point plus element state) |
 | `MASS` | `Consistent`, `Lumped` or `Selectable` (chosen per element group, as stdBrick's `-lumped`) |
 | `EXPLICIT` | whether the element may appear in an explicit stage (needs a lumped mass and `critical_dt`) |
+| `GEOMETRY_CACHEABLE` | whether its geometry (shape-function derivatives, det J) may be computed once and reused: true only for small-strain elements. Large-deformation or corotational elements must recompute or update it |
 | `MATERIAL_KIND` | which material contract it calls (`NDMaterial3D`, `NDMaterialPlaneStrain`, `Uniaxial`, `Section...`) |
 | `Params` | plain struct: material `Params` plus element data (body force, mass type, ...) |
 
@@ -274,13 +275,36 @@ CUDA). Across backends results agree to rounding only: nvcc fuses multiply-adds
 (`--fmad=true`), the host compiler does not (GCC with `-std=c++20` does not contract), so GPU
 results are verified against host references and OpenSees at a documented tolerance.
 
-### Choosing the layout
+### Settings, defaults and auto-tune
 
-The benchmark harness runs every layout of every registered (element, material) pair and
-reports the fastest per backend (first numbers, OpenMP: flat 19.5 ms vs team 221 ms or more
-for 64k stdBrick elements; `src/exec/layout_defaults.hpp`). The defaults live in a committed table per backend
-(`src/exec/layout_defaults.hpp`), updated from benchmark results with the before/after
-numbers in the commit message. A run option overrides the default for experiments.
+Everything above the kernels (the time loop, future elements and materials) asks for forces
+through one interface, `ExplicitForce::compute(ForceSettings)`, with layout, scatter,
+elements per team and geometry mode as settings. No code assumes a variant; every variant
+stays in the code, the tests and the benchmarks.
+
+- **Defaults** are per device, chosen by benchmark (`src/exec/force_settings.cpp`), for two
+  purposes: production (fastest) and deterministic (validation, bit-identical run to run).
+  An entry changes only with benchmark numbers in the commit message.
+- **Auto-tune** (`exec::autotune`) times every valid variant on the actual model and
+  hardware at startup and returns the fastest, for when the table has no entry for the
+  device or a run wants to check it.
+- **Scatter modes:** atomic (production); colored (one launch per color); gather (each
+  element writes its 24 values to its own slots in locality order, then each equation adds
+  its slots in a fixed precomputed order). Colored and gather are deterministic. Elements
+  are never sorted globally by color: production needs the locality order. If coloring
+  stays needed, the compile step uses color order only for deterministic runs.
+
+### Geometry cache
+
+- The recompute path is permanent. Cached geometry (25 doubles per Gauss point, 1.6 KB per
+  brick) is used only for elements with `GEOMETRY_CACHEABLE`, and only if it fits: with
+  `GeometryCache::Auto` the cache is built when the model, the cache and the work vectors
+  fit in 80% of the device's free memory (`exec::device_free_memory_bytes`). Otherwise
+  `Geometry::Cached` falls back to recomputing, with the same bits.
+- Later: share the geometry between elements of identical shape (regular grids, the common
+  case in soil columns and boxes): store each distinct shape once and give elements a shape
+  index, so the cache costs almost no memory. Elements are identical when their nodal
+  coordinates differ by a translation only.
 
 ### Later
 

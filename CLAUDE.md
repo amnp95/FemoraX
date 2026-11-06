@@ -53,8 +53,9 @@ Sessions start with: `claude --add-dir ../Femora --add-dir ../OpenSees`
    marked `FEMORAX_HD` (host + device). No Kokkos types, no heap allocation, no virtual
    functions, no static or global mutable state, no exceptions, fixed-size arrays only.
 3. **Kokkos lives only in the launch layer** (`src/exec/`). Native CUDA or HIP code is allowed
-   only in `src/native/`, only when a profile shows a portable kernel is too slow, and always
-   with the portable version kept as a fallback.
+   only in `src/native/`: kernels only when a profile shows a portable kernel is too slow,
+   always with the portable version kept as a fallback; and small vendor-runtime device
+   queries that Kokkos does not expose (free device memory), with no kernels.
 4. **FP64 everywhere** in physics, state and assembly. Mixed precision only inside solver
    preconditioners, behind an explicit option, and inside machine-learned materials, which
    convert their inputs and outputs to and from FP64 (docs/design.md).

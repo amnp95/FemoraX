@@ -4,6 +4,7 @@
 
 #include "compile/batches.hpp"
 #include "exec/explicit_force.hpp"
+#include "exec/force_settings.hpp"
 #include "../common/synthetic_models.hpp"
 #include "../reference/drivers/driver_common.hpp"
 
@@ -64,6 +65,41 @@ std::vector<double> reference_force(const Compiled& c, const std::vector<double>
   return f;
 }
 
+// Host reference for the gather scatter: each equation adds its contributions in
+// (batch, element, DOF) order, the order ExplicitForce builds its gather lists in.
+std::vector<double> reference_force_gather(const Compiled& c, const std::vector<double>& u,
+                                           const std::vector<double>& v) {
+  std::vector<std::vector<double>> parts(static_cast<std::size_t>(c.dofs.num_equations));
+  const std::int32_t N = c.dofs.num_nodes();
+  for (const auto& b : c.batches) {
+    const auto P = static_cast<std::size_t>(b.padded);
+    for (std::int32_t e = 0; e < b.count; ++e) {
+      double xe[8][3], ue[24], ve[24], fe[24];
+      for (int a = 0; a < 8; ++a)
+        for (int d = 0; d < 3; ++d) xe[a][d] = c.coords[d * N + b.node[a * P + e]];
+      for (int k = 0; k < 24; ++k) {
+        const auto q = b.eq[k * P + e];
+        ue[k] = q >= 0 ? u[q] : 0.0;
+        ve[k] = q >= 0 ? v[q] : 0.0;
+      }
+      const auto& ps = b.params[b.param[e]];
+      const Brick::Params p{{ps.E, ps.nu, ps.rho}, {ps.b[0], ps.b[1], ps.b[2]}, ps.massType};
+      Brick::compute<false>(p, ps.damping, xe, ue, ve, {}, {}, fe, nullptr);
+      for (int k = 0; k < 24; ++k) {
+        const auto q = b.eq[k * P + e];
+        if (q >= 0) parts[q].push_back(fe[k]);
+      }
+    }
+  }
+  std::vector<double> f(parts.size(), 0.0);
+  for (std::size_t q = 0; q < parts.size(); ++q) {
+    double sum = 0.0;
+    for (double x : parts[q]) sum += x;
+    f[q] = sum;
+  }
+  return f;
+}
+
 // Host backends compute like the host reference, bit for bit. A GPU compiler fuses
 // multiply-adds (nvcc --fmad=true), so there the reference holds to rounding only.
 constexpr bool kHostBackend =
@@ -80,7 +116,7 @@ std::vector<double> run(ExplicitForce& k, const std::vector<double>& u, const st
   }
   Kokkos::deep_copy(k.u, hu);
   Kokkos::deep_copy(k.v, hv);
-  k.compute(l, s, ept, g);
+  k.compute(femorax::exec::ForceSettings{l, s, ept, g});
   auto hf = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), k.f);
   return std::vector<double>(hf.data(), hf.data() + hf.extent(0));
 }
@@ -151,7 +187,7 @@ TEST(ExplicitForce, EveryLayoutAndScatterMatchesTheHostReference) {
   for (Renumbering r : {Renumbering::Off, Renumbering::RCM}) {
     SCOPED_TRACE(r == Renumbering::Off ? "renumbering off" : "renumbering on");
     const Compiled c = compile_model(m, CompileOptions{r, 1});
-    ExplicitForce k(c);
+    ExplicitForce k(c, femorax::exec::GeometryCache::On);
     const auto u = random_vector(static_cast<std::size_t>(k.num_equations()), 1e-3, 1);
     const auto v = random_vector(static_cast<std::size_t>(k.num_equations()), 1e-2, 2);
     const auto ref = reference_force(c, u, v);
@@ -159,13 +195,21 @@ TEST(ExplicitForce, EveryLayoutAndScatterMatchesTheHostReference) {
     for (double x : ref) scale = std::max(scale, std::abs(x));
     ASSERT_GT(scale, 0.0);
 
-    // The deterministic result on this backend: flat, colored, recomputed geometry.
+    // The deterministic results on this backend: flat, recomputed geometry, colored and
+    // gather scatter. Each against its host reference: bitwise on host backends, to
+    // rounding where the device compiler fuses multiply-adds.
     const auto base = run(k, u, v, Layout::Flat, Scatter::Colored);
+    const auto gbase = run(k, u, v, Layout::Flat, Scatter::Gather);
+    const auto gref = reference_force_gather(c, u, v);
     if (kHostBackend) {
       EXPECT_EQ(std::memcmp(base.data(), ref.data(), ref.size() * sizeof(double)), 0);
+      EXPECT_EQ(std::memcmp(gbase.data(), gref.data(), gref.size() * sizeof(double)), 0);
     } else {
       for (std::size_t q = 0; q < ref.size(); ++q) EXPECT_NEAR(base[q], ref[q], 1e-13 * scale);
+      for (std::size_t q = 0; q < ref.size(); ++q) EXPECT_NEAR(gbase[q], gref[q], 1e-13 * scale);
     }
+    // Gather and colored are the same sums in different (fixed) orders.
+    for (std::size_t q = 0; q < ref.size(); ++q) EXPECT_NEAR(gbase[q], base[q], 1e-13 * scale);
     for (auto g : {femorax::exec::Geometry::Recompute, femorax::exec::Geometry::Cached}) {
       for (Layout l : {Layout::Flat, Layout::Team}) {
         for (int ept : {1, 3, 4}) {
@@ -177,6 +221,11 @@ TEST(ExplicitForce, EveryLayoutAndScatterMatchesTheHostReference) {
           EXPECT_EQ(std::memcmp(fc.data(), base.data(), base.size() * sizeof(double)), 0);
           const auto again = run(k, u, v, l, Scatter::Colored, ept, g);
           EXPECT_EQ(std::memcmp(again.data(), fc.data(), fc.size() * sizeof(double)), 0);
+          // Gather: bit-identical to its base, run after run and in every layout.
+          const auto fg = run(k, u, v, l, Scatter::Gather, ept, g);
+          EXPECT_EQ(std::memcmp(fg.data(), gbase.data(), gbase.size() * sizeof(double)), 0);
+          const auto gagain = run(k, u, v, l, Scatter::Gather, ept, g);
+          EXPECT_EQ(std::memcmp(gagain.data(), fg.data(), fg.size() * sizeof(double)), 0);
           // Atomic: the same sums in another order.
           const auto fa = run(k, u, v, l, Scatter::Atomic, ept, g);
           for (std::size_t q = 0; q < ref.size(); ++q) EXPECT_NEAR(fa[q], base[q], 1e-13 * scale);
@@ -192,12 +241,14 @@ TEST(ExplicitForce, PaddingIsInert) {
   const Compiled c32 = compile_model(m, CompileOptions{Renumbering::RCM, 32});
   EXPECT_EQ(c32.batches[0].padded % 32, 0);
   EXPECT_GT(c32.batches[0].padded, c32.batches[0].count);
-  ExplicitForce k1(c1), k32(c32);
+  ExplicitForce k1(c1, femorax::exec::GeometryCache::On), k32(c32, femorax::exec::GeometryCache::On);
   const auto u = random_vector(static_cast<std::size_t>(k1.num_equations()), 1e-3, 3);
   const auto v = random_vector(static_cast<std::size_t>(k1.num_equations()), 1e-2, 4);
   for (Layout l : {Layout::Flat, Layout::Team}) {
-    const auto a = run(k1, u, v, l, Scatter::Colored, 2), b = run(k32, u, v, l, Scatter::Colored, 2);
-    EXPECT_EQ(std::memcmp(a.data(), b.data(), a.size() * sizeof(double)), 0);
+    for (Scatter sc : {Scatter::Colored, Scatter::Gather}) {
+      const auto a = run(k1, u, v, l, sc, 2), b = run(k32, u, v, l, sc, 2);
+      EXPECT_EQ(std::memcmp(a.data(), b.data(), a.size() * sizeof(double)), 0);
+    }
   }
 }
 
@@ -243,6 +294,49 @@ TEST(ExplicitForce, RenumberingChangesOnlyTheRounding) {
       ASSERT_EQ(a < 0, b < 0);
       if (a >= 0) {
         EXPECT_NEAR(foff[a], fon[b], 1e-13 * scale);
+      }
+    }
+  }
+}
+
+TEST(ForceSettings, DefaultsAreValidAndDeterministicWhereAsked) {
+  using femorax::exec::Purpose;
+  const auto prod = femorax::exec::default_force_settings(Purpose::Production);
+  const auto det = femorax::exec::default_force_settings(Purpose::Deterministic);
+  EXPECT_FALSE(prod.deterministic());
+  EXPECT_TRUE(det.deterministic());
+  const auto m = column();
+  const Compiled c = compile_model(m, CompileOptions{});
+  // Without a cache, cached geometry falls back to recomputing (same bits).
+  ExplicitForce none(c, femorax::exec::GeometryCache::Off), with(c, femorax::exec::GeometryCache::On);
+  EXPECT_FALSE(none.has_geometry_cache());
+  EXPECT_EQ(none.resolve(prod).geometry, femorax::exec::Geometry::Recompute);
+  const auto u = random_vector(static_cast<std::size_t>(none.num_equations()), 1e-3, 5);
+  const auto v = random_vector(static_cast<std::size_t>(none.num_equations()), 1e-2, 6);
+  const auto a = run(none, u, v, det.layout, det.scatter, det.elements_per_team, det.geometry);
+  const auto b = run(with, u, v, det.layout, det.scatter, det.elements_per_team, det.geometry);
+  EXPECT_EQ(std::memcmp(a.data(), b.data(), a.size() * sizeof(double)), 0);
+}
+
+TEST(ForceSettings, AutotuneTimesEveryVariantAndPicksTheFastest) {
+  using femorax::exec::Purpose;
+  const Compiled c = compile_model(column(), CompileOptions{});
+  ExplicitForce k(c, femorax::exec::GeometryCache::On);
+  k.fill(1e-4, 1e-3);
+  for (Purpose p : {Purpose::Production, Purpose::Deterministic}) {
+    const auto r = femorax::exec::autotune(k, p, 1);
+    ASSERT_EQ(r.seconds.size(), femorax::exec::force_variants(p, k).size());
+    double best = 1e300;
+    for (const auto& [s, t] : r.seconds) {
+      EXPECT_GT(t, 0.0);
+      if (p == Purpose::Deterministic) {
+        EXPECT_TRUE(s.deterministic());
+      }
+      best = std::min(best, t);
+    }
+    for (const auto& [s, t] : r.seconds) {
+      if (t == best) {
+        EXPECT_EQ(femorax::exec::to_string(s), femorax::exec::to_string(r.best));
       }
     }
   }

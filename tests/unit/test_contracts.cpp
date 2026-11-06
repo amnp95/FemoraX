@@ -71,6 +71,7 @@ struct Brick : MockFunctions<3, 8, 24> {
   static constexpr std::array<int, NNODE> NODE_NDF = {3, 3, 3, 3, 3, 3, 3, 3};
   static constexpr MassType MASS = MassType::Selectable;
   static constexpr bool EXPLICIT = true;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
 };
 
@@ -81,6 +82,7 @@ struct BrickUP20 : MockFunctions<3, 20, 8 * 4 + 12 * 3> {
                                                       3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
   static constexpr MassType MASS = MassType::Consistent;
   static constexpr bool EXPLICIT = false;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
 };
 
@@ -90,6 +92,7 @@ struct Beam3D : MockFunctions<3, 2, 12> {
   static constexpr std::array<int, NNODE> NODE_NDF = {6, 6};
   static constexpr MassType MASS = MassType::Lumped;
   static constexpr bool EXPLICIT = true;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::Uniaxial;
 };
 
@@ -99,6 +102,7 @@ struct WithExtra : MockFunctions<3, 8, 8 * 3 + 3> {
   static constexpr std::array<int, NNODE> NODE_NDF = {3, 3, 3, 3, 3, 3, 3, 3};
   static constexpr MassType MASS = MassType::Lumped;
   static constexpr bool EXPLICIT = true;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
 };
 
@@ -108,6 +112,7 @@ struct WrongNDOF : MockFunctions<3, 8, 25> {  // 8*3 != 25
   static constexpr std::array<int, NNODE> NODE_NDF = {3, 3, 3, 3, 3, 3, 3, 3};
   static constexpr MassType MASS = MassType::Lumped;
   static constexpr bool EXPLICIT = true;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
 };
 
@@ -116,6 +121,7 @@ struct WrongNodeNdfLength : MockFunctions<3, 8, 21> {  // NODE_NDF has 7 entries
   static constexpr std::array<int, 7> NODE_NDF = {3, 3, 3, 3, 3, 3, 3};
   static constexpr MassType MASS = MassType::Lumped;
   static constexpr bool EXPLICIT = true;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
 };
 
@@ -124,6 +130,7 @@ struct ZeroNdfNode : MockFunctions<3, 2, 3> {  // a node with 0 DOFs
   static constexpr std::array<int, NNODE> NODE_NDF = {3, 0};
   static constexpr MassType MASS = MassType::Lumped;
   static constexpr bool EXPLICIT = true;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
 };
 
@@ -132,6 +139,7 @@ struct NoCriticalDt {  // missing critical_dt and max_omega_sq
   static constexpr std::array<int, NNODE> NODE_NDF = {3};
   static constexpr MassType MASS = MassType::Lumped;
   static constexpr bool EXPLICIT = true;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
   struct Params { double dummy; };
   template <bool WantK>
@@ -143,6 +151,30 @@ struct NoCriticalDt {  // missing critical_dt and max_omega_sq
 
 struct RuntimeNdof : Brick {  // NDOF is not a compile-time constant
   static inline int NDOF = 24;
+};
+
+struct NoCacheableTrait {  // every trait but GEOMETRY_CACHEABLE
+  static constexpr int NDM = 3, NNODE = 1, NEXTRA = 0, NDOF = 3, NGP = 1, NSTATE = 0;
+  static constexpr std::array<int, NNODE> NODE_NDF = {3};
+  static constexpr MassType MASS = MassType::Lumped;
+  static constexpr bool EXPLICIT = true;
+  static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  using F = MockFunctions<3, 1, 3>;
+  using Params = F::Params;
+  template <bool WantK>
+  static void compute(const Params& p, const Rayleigh& d, const double (*x)[3], const double* u,
+                      const double* v, femorax::PointArray<const double> c,
+                      femorax::PointArray<double> t, double* f, double (*K)[3]) {
+    F::compute<WantK>(p, d, x, u, v, c, t, f, K);
+  }
+  static void mass(const Params& p, const double (*x)[3], double* m) { F::mass(p, x, m); }
+  static double max_omega_sq(const Params& p, const double (*x)[3], femorax::PointArray<const double> c) {
+    return F::max_omega_sq(p, x, c);
+  }
+  static double critical_dt(const Params& p, const Rayleigh& d, ExplicitScheme s, const double (*x)[3],
+                            femorax::PointArray<const double> c) {
+    return F::critical_dt(p, d, s, x, c);
+  }
 };
 
 struct RuntimeExplicitFlag : Brick {  // EXPLICIT is not a compile-time constant
@@ -170,6 +202,7 @@ static_assert(!femorax::Element<ZeroNdfNode>);
 static_assert(!femorax::Element<NoCriticalDt>);
 static_assert(!femorax::Element<RuntimeNdof>);
 static_assert(!femorax::Element<RuntimeExplicitFlag>);
+static_assert(!femorax::Element<NoCacheableTrait>);
 static_assert(!femorax::ExplicitElement<RuntimeExplicitFlag>);
 
 static_assert(!femorax::ExplicitElement<Brick>);   // mock has no lumped_mass

@@ -94,6 +94,10 @@ concept Element = requires {
                           const std::array<int, static_cast<std::size_t>(E::NNODE)>>;
   requires std::is_same_v<decltype(E::MASS), const MassType>;
   requires std::is_same_v<decltype(E::EXPLICIT), const bool>;
+  // Whether geometry (shape-function derivatives, det J) may be computed once and reused:
+  // true only for small-strain elements. Large-deformation or corotational elements must
+  // recompute or update it (docs/design.md, "Element kernels").
+  requires std::is_same_v<decltype(E::GEOMETRY_CACHEABLE), const bool>;
   requires std::is_same_v<decltype(E::MATERIAL_KIND), const MaterialKind>;
   // Consistency of the sizes.
   requires E::NDM >= 1 && E::NDM <= 3;

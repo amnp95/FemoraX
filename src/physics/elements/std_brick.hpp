@@ -168,6 +168,8 @@ struct StdBrick {
   static constexpr int NSTATE = NGP * Mat::NSTATE;
   static constexpr MassType MASS = MassType::Selectable;
   static constexpr bool EXPLICIT = true;
+  // Small strain: the reference geometry never changes, so it may be cached.
+  static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
 
   struct Params {
