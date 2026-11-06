@@ -7,7 +7,9 @@
 
 namespace femorax::native {
 
-// cudaMemGetInfo's free bytes on the current device; -1 on error.
+// Free bytes on the current device from the vendor runtime (cudaMemGetInfo,
+// hipMemGetInfo); -1 on error. Each is built only with its backend.
 std::int64_t cuda_free_memory_bytes();
+std::int64_t hip_free_memory_bytes();
 
 }  // namespace femorax::native

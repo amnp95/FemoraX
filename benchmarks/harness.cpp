@@ -1,7 +1,7 @@
 #include "harness.hpp"
 
 #include "exec/runtime.hpp"
-#include "exec/timing.hpp"
+#include "kernels/timing.hpp"
 #include "femorax_version.hpp"
 
 #include <unistd.h>

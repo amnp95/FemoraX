@@ -6,7 +6,7 @@
 // The mesh, materials, body forces, lumped mass and Rayleigh regions are those of
 // tests/common/synthetic_models.hpp (soil_column with nx = ny = nz = n): the model the
 // FemoraX benchmark explicit_force/<n>^3 uses. Every node gets trial displacement 1e-4 and
-// trial velocity 1e-3 in all DOFs (as ExplicitForce::fill in the FemoraX benchmark).
+// trial velocity 1e-3 in all DOFs (as InternalForce::fill in the FemoraX benchmark).
 //
 // Timed (minimum over reps), each over all elements:
 //   internal   ele->update(); ele->getResistingForce();            (elements without damping)

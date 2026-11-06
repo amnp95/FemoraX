@@ -1,8 +1,8 @@
-#include "exec/peak.hpp"
+#include "kernels/peak.hpp"
 
 #include <Kokkos_Core.hpp>
 
-namespace femorax::exec {
+namespace femorax::bench {
 
 namespace {
 using Space = Kokkos::DefaultExecutionSpace;
@@ -51,4 +51,4 @@ double PeakFp64::checksum() const {
   return s;
 }
 
-}  // namespace femorax::exec
+}  // namespace femorax::bench

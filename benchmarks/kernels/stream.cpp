@@ -1,4 +1,4 @@
-#include "exec/stream.hpp"
+#include "kernels/stream.hpp"
 
 #include <Kokkos_Core.hpp>
 

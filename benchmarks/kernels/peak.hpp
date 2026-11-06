@@ -2,7 +2,7 @@
 
 #include <memory>
 
-namespace femorax::exec {
+namespace femorax::bench {
 
 // FP64 arithmetic peak of the default execution space, as reached by code built with this
 // build's flags: every work item runs 8 independent multiply-add chains, so throughput is
@@ -24,4 +24,4 @@ class PeakFp64 {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace femorax::exec
+}  // namespace femorax::bench

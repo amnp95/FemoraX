@@ -61,8 +61,9 @@ Every new kernel comes with its benchmark in the same change.
 1. Write `bench_<area>.cpp` with a `register_<area>(Registry&, const Options&)` function
    that adds one `Benchmark` per case: a unique `group/case` name, `unit` (`call` or
    `step`), the compulsory `bytes` (and `flops`, `items` when known), and a `run`
-   callable that launches the kernel once. The kernel itself lives in `src/exec/`;
-   benchmark code never uses Kokkos directly.
+   callable that launches the kernel once. Solver kernels live in `src/exec/`; reference
+   kernels used only by benchmarks (STREAM, FP64 peak, timing) live in
+   `benchmarks/kernels/`, the only benchmark code that uses Kokkos directly.
 2. Declare the function in `harness.hpp`, call it in `bench_main.cpp`, and add the file to
    `CMakeLists.txt`.
 3. Size the problem so its arrays do not fit in cache; give `--quick` a small size for the

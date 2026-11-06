@@ -1,7 +1,7 @@
 // STREAM copy and triad: the bandwidth the hardware delivers, the reference for every
 // bandwidth-bound kernel.
 
-#include "exec/stream.hpp"
+#include "kernels/stream.hpp"
 #include "harness.hpp"
 
 #include <memory>
@@ -29,7 +29,7 @@ void register_stream(Registry& registry, const Options& options) {
 
 }  // namespace femorax::bench
 
-#include "exec/peak.hpp"
+#include "kernels/peak.hpp"
 
 namespace femorax::bench {
 
@@ -37,7 +37,7 @@ namespace femorax::bench {
 void register_peak(Registry& registry, const Options& options) {
   const int n = options.quick ? (1 << 14) : (1 << 20);
   const int iters = options.quick ? 64 : 1024;
-  auto k = std::make_shared<exec::PeakFp64>(n);
+  auto k = std::make_shared<PeakFp64>(n);
   registry.add({.name = "peak/fp64_fma",
                 .unit = "call",
                 .bytes = std::int64_t{8} * n,

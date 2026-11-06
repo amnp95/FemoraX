@@ -1,12 +1,10 @@
-# Launch layer: the only place Kokkos is used (CLAUDE.md rule 3).
+# Launch layer: the only place Kokkos is used in the solver (CLAUDE.md rule 3).
 add_library(femorax_exec
+  assembly.cpp
   device_memory.cpp
-  explicit_force.cpp
   force_settings.cpp
-  peak.cpp
-  runtime.cpp
-  stream.cpp
-  timing.cpp)
+  internal_force.cpp
+  runtime.cpp)
 add_library(femorax::exec ALIAS femorax_exec)
 target_include_directories(femorax_exec PUBLIC
   "${PROJECT_SOURCE_DIR}/src"

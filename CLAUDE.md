@@ -82,7 +82,7 @@ FemoraX/
   src/
     physics/   elements/, materials/, sections/   (framework-free)
     compile/   host compile step: DOF numbering, renumbering, batches, maps (no Kokkos)
-    exec/      Kokkos launch layer: batches, assembly, time loop
+    exec/      Kokkos launch layer: element kernels, assembly, force settings, time loop
     solvers/   LinearSolver interface and backends
     io/        model reader, recorders (VTKHDF writer)
     native/    optional CUDA/HIP specializations
@@ -92,7 +92,8 @@ FemoraX/
     unit/      per-material and per-element tests against reference data
     reference/ OpenSees driver programs and generated reference data
     system/    Femora example comparisons (OpenSees vs FemoraX)
-  benchmarks/  harness, per-kernel benchmarks, check.py, per-machine baselines
+  benchmarks/  harness, per-kernel benchmarks, check.py, per-machine baselines;
+               kernels/ (STREAM, FP64 peak, timing): benchmark-only Kokkos code
 ```
 
 ## Build and test

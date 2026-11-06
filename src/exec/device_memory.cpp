@@ -5,7 +5,7 @@
 #include <fstream>
 #include <string>
 
-#if defined(KOKKOS_ENABLE_CUDA)
+#if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
 #include "native/device_memory.hpp"
 #endif
 
@@ -27,6 +27,9 @@ std::int64_t device_free_memory_bytes() {
 #if defined(KOKKOS_ENABLE_CUDA)
   if (!std::is_same_v<Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>)
     return native::cuda_free_memory_bytes();
+#elif defined(KOKKOS_ENABLE_HIP)
+  if (!std::is_same_v<Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>)
+    return native::hip_free_memory_bytes();
 #endif
   return host_mem_available();
 }

@@ -12,11 +12,13 @@
 // (flop_count.cpp).
 
 #include "compile/batches.hpp"
-#include "exec/explicit_force.hpp"
+#include "exec/internal_force.hpp"
 #include "exec/force_settings.hpp"
 #include "exec/runtime.hpp"
 #include "flop_count.hpp"
 #include "harness.hpp"
+#include "physics/elements/std_brick.hpp"
+#include "physics/materials/elastic_isotropic.hpp"
 #include "../tests/common/synthetic_models.hpp"
 
 #include <memory>
@@ -34,8 +36,9 @@ void register_model(Registry& registry, const Options& options, bool damped) {
   compile::CompileOptions co;
   co.renumbering = compile::Renumbering::RCM;
   co.simd_width = simd_width();
+  co.build_coloring = damped;  // colored variants are measured on the damped model
   const auto compiled = std::make_shared<compile::Compiled>(compile::compile_model(model, co));
-  auto k = std::make_shared<exec::ExplicitForce>(*compiled, exec::GeometryCache::On);
+  auto k = std::make_shared<exec::InternalForce>(*compiled, exec::GeometryCache::On);
   k->fill(1e-4, 1e-3);
 
   const std::int64_t neq = k->num_equations(), nel = k->num_elements();
@@ -51,7 +54,8 @@ void register_model(Registry& registry, const Options& options, bool damped) {
     for (const auto& b : compiled->batches)
       for (std::int32_t e = 0; e < b.count; ++e) {
         const auto& ps = b.params[b.param[e]];
-        total += brick_flops_per_element({ps.massType, ps.damping.alphaM, ps.damping.betaK,
+        const int massType = ps.params<StdBrick<ElasticIsotropic>>().massType;
+        total += brick_flops_per_element({massType, ps.damping.alphaM, ps.damping.betaK,
                                           ps.damping.betaKinit, ps.damping.betaKcomm},
                                          team, cached);
       }
@@ -62,13 +66,12 @@ void register_model(Registry& registry, const Options& options, bool damped) {
 
   std::vector<exec::ForceSettings> variants;
   if (damped) {
-    variants = exec::force_variants(exec::Purpose::Production, *k);
+    variants = exec::all_variants(*k);
   } else {
     variants = {{exec::Layout::Flat, exec::Scatter::Atomic, 0, exec::Geometry::Recompute},
                 {exec::Layout::Flat, exec::Scatter::Atomic, 0, exec::Geometry::Cached}};
   }
-  const std::string prod = exec::to_string(k->resolve(exec::default_force_settings(exec::Purpose::Production)));
-  const std::string det = exec::to_string(k->resolve(exec::default_force_settings(exec::Purpose::Deterministic)));
+  const std::string def = exec::to_string(k->resolve(exec::default_force_settings()));
   const std::string group = std::string(damped ? "explicit_force/" : "explicit_force_nodamp/") +
                             std::to_string(s.nx) + "^3/";
   for (const auto& v0 : variants) {
@@ -80,9 +83,9 @@ void register_model(Registry& registry, const Options& options, bool damped) {
                   .flops = flops[v.layout == exec::Layout::Team][v.geometry == exec::Geometry::Cached],
                   .items = nel,
                   .run = [k, v] { k->compute(v); },
-                  // Gate this device's production and deterministic defaults (and the
-                  // undamped comparison runs); other variants inform the defaults.
-                  .gated = !damped || name == prod || name == det});
+                  // Gate this device's default (and the undamped comparison runs); the other
+                  // variants inform the defaults and the auto-tune.
+                  .gated = !damped || name == def});
   }
 }
 

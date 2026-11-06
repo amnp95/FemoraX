@@ -147,16 +147,25 @@ state, or from a stored copy when the material is expensive; the material decide
 
 ### Registration
 
+`src/compile/registry.hpp` is the one place that maps model types onto physics types:
+
 ```cpp
-// src/exec/element_registry.hpp
-using ElementRegistry = TypeList<
-  ElementEntry<"stdBrick", StdBrick>,
-  ElementEntry<"SSPbrick", SSPbrick>>;
+struct StdBrickEntry {                     // the element's adapter
+  template <class Mat> using Element = StdBrick<Mat>;
+  static constexpr io::ElementType type = io::ElementType::StdBrick;
+  template <class Mat>
+  static typename Element<Mat>::Params params(const io::ElementGroup&, const typename Mat::Params&);
+};
+using Elements  = TypeList<StdBrickEntry>;          // one line per element
+using Materials = TypeList<ElasticIsotropicEntry>;  // one line per material
 ```
 
-Batches are instantiated for every registered (element, material) pair whose
-`MATERIAL_KIND`s match, and the model reader maps Femora's type names through the same
-tables. A pair that is not registered is an unsupported component, reported as such.
+Adding an element is its physics header, its adapter (model data to `Params`) and one line
+in the list. Batches are built for every registered pair whose material kinds match; the
+compile step (batches, lumped mass, parameter sets stored as the element's own `Params`)
+and the kernels (`src/exec/element_kernels.hpp`: every layout x scatter x geometry, generic
+over the element) are generic over the entries. A pair that is not registered is an
+unsupported component.
 
 ## DOF numbering
 
@@ -385,6 +394,31 @@ Rules every kernel follows, so the same physics code is fast on every backend. T
    - Before a run, a memory estimate (state, maps, vectors, recorder buffers, per backend)
      is compared with the device's free memory; the run stops with a clear message naming
      the estimate and the available memory if the model will not fit.
+
+## Multi-GPU (plan; one subdomain today)
+
+Femora already partitions models with METIS. FemoraX will run one subdomain per GPU:
+
+- **Compile step:** each subdomain gets its owned elements, its owned nodes and its ghost
+  nodes (nodes of owned elements that another subdomain owns). Today the model is one
+  subdomain: every node owned, no ghosts (`compile::Subdomain`). Everything after the
+  compile step works in the subdomain's local numbering (local nodes, local equations);
+  global tags live only in the compile step's maps, for input and output.
+- **Explicit step:** each GPU computes its element forces into its local vector, then
+  exchanges border-node forces with its neighbours (halo exchange: send the force
+  contributions of ghost nodes to their owners, receive the owners' summed values back),
+  overlapping the exchange with interior work. Lumped masses are exchanged the same way
+  once per stage.
+- **Constraints across subdomains:** a tie whose nodes sit in different subdomains is
+  resolved by the owner of the retained node; the constrained node becomes a ghost of
+  that subdomain, so the shared equation has one owner.
+- **Global reductions:** the stable step (minimum), the NaN/instability check (maximum) and
+  convergence norms in 1b are MPI reductions of per-subdomain values; one scalar each.
+- **Output:** each subdomain writes its owned nodes and elements (a VTKHDF part per
+  subdomain, as OpenSeesMP with Femora's `$pid` file names); `femora.results` already reads
+  partitioned output.
+- **Determinism:** the gather scatter stays deterministic within a subdomain; across
+  subdomains the halo sums are added in a fixed (rank) order.
 
 ## Assembly
 

@@ -1,4 +1,4 @@
-#include "exec/timing.hpp"
+#include "kernels/timing.hpp"
 
 #include <Kokkos_Core.hpp>
 
