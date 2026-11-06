@@ -282,6 +282,17 @@ def m_vtkhdf_region(f):
     f["recorders"]["site"].attrs["region"] = np.int32(1)
 
 
+def m_vtkhdf_elements(tags):
+    def m(f):
+        f["recorders"]["site"].create_dataset("elements", data=np.array(tags, dtype=np.int32))
+    return m
+
+
+def m_vtkhdf_elements_in_0_0(f):
+    m_vtkhdf_elements([1, 2])(f)
+    f.attrs["schema_version"] = np.array([0, 0], dtype=np.int32)
+
+
 def m_rigid_link(f):
     f["constraints"]["mp"].create_group("rigid_link")
 
@@ -312,11 +323,19 @@ CASES = [
     ("sspbrick_group", "explicit", "valid", "", m_sspbrick),
     ("minimal", "explicit", "valid", "", m_minimal),
     ("overlapping_regions", "explicit", "warning", "share 3 element(s)", m_overlap),
+    ("schema_0_0", "explicit", "valid", "", m_version(0, 0)),
+    ("vtkhdf_elements", "explicit", "valid", "", m_vtkhdf_elements([1, 2, 25])),
     # --- invalid ---------------------------------------------------------------------
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 0.x files", m_version(1, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 1)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 2)),
+    ("vtkhdf_elements_in_0_0", "explicit", "invalid", "was added in schema 0.1, but the file "
+     "declares 0.0", m_vtkhdf_elements_in_0_0),
+    ("vtkhdf_missing_element", "explicit", "invalid", "element 99 does not exist",
+     m_vtkhdf_elements([1, 99])),
+    ("vtkhdf_duplicate_element", "explicit", "invalid", "element 2 appears more than once",
+     m_vtkhdf_elements([2, 2])),
     ("int64_attribute", "explicit", "invalid", "attribute 'ndm' must be int32, found int64",
      m_int64_attr),
     ("float32_coords", "explicit", "invalid", "/nodes/coords must be float64, found float32",

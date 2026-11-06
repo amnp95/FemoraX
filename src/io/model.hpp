@@ -20,7 +20,7 @@ struct SchemaVersion {
 
 // The schema version this reader implements. It reads files of the same major version
 // with a minor version up to this one.
-inline constexpr SchemaVersion reader_schema_version{0, 0};
+inline constexpr SchemaVersion reader_schema_version{0, 1};
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
 struct Metadata {
@@ -126,7 +126,8 @@ struct VtkhdfRecorder {
   std::optional<double> dT;
   std::optional<double> rTolDt;
   std::vector<std::string> responses;  // subset of disp vel accel, in file order
-  std::optional<std::int32_t> region;
+  std::optional<std::int32_t> region;  // always rejected (schema 0.1)
+  std::vector<std::int32_t> elements;  // since 0.1; empty = whole model
 };
 
 struct Recorder {

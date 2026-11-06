@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 0.0
+# FemoraX model file, schema version 0.1
 
-Status: **approved 2026-11-05**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0 approved 2026-11-05; 0.1 approved 2026-11-05**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -39,6 +39,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | Version | Change |
 |---|---|
 | 0.0 | first version |
+| 0.1 | VTKHDF recorder: optional `elements` dataset (the element tags to record); `region` stays rejected |
 
 ## 2. Conventions
 
@@ -94,7 +95,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `schema_version` | `[2]` int32 | `[0, 0]` |
+| `schema_version` | `[2]` int32 | `[0, 1]` (a reader of 0.1 also reads `[0, 0]`) |
 | `ndm` | int32 | spatial dimension; must be `3` in v0 |
 | `generator` | string | e.g. `"femora 0.9.1"`; informational |
 | `model_name` | string | Femora `model_name`; informational |
@@ -270,7 +271,8 @@ it. `<name>` is any unique string chosen by the exporter.
 | attr `dT` | float64 *(optional)* | `-dT` |
 | attr `rTolDt` | float64 *(optional)* | `-rTolDt` |
 | attr `responses` | string | space-separated; v0: any of `disp vel accel` |
-| attr `region` | int32 *(optional)* | `-region` (only elements of one region) |
+| `elements` | `[M]` int32 *(optional, since 0.1)* | record only these elements (and their nodes); the exporter expands Femora's `-region` into its element tags. Absent: the whole model |
+| attr `region` | int32 *(optional)* | not supported: the file has no region tags to refer to (element groups and damping regions are exporter-named). The reader rejects it; use `elements` |
 
 The output layout follows OpenSees' `VTKHDF_Recorder.cpp`, so `femora.results` reads it
 unchanged.
@@ -352,7 +354,7 @@ The explicit variant of Femora's layered elastic column (5 mesh parts, 1 x 1 x 1
 `lumped=True`, ExplicitDifference, no gravity stage). Values abbreviated.
 
 ```
-/                       schema_version=[0,0] ndm=3 generator="femora ..."
+/                       schema_version=[0,1] ndm=3 generator="femora ..."
 /nodes/tags             [N]           int32
 /nodes/coords           [N,3]         float64
 /nodes/ndf              [N]           int32   all 3

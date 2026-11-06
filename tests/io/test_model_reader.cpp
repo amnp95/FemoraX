@@ -59,7 +59,7 @@ class ReaderFixtures : public ::testing::Test {
 TEST_F(ReaderFixtures, ReadsExplicitSoilColumn) {
   const Model m = read_model(path("explicit.femorax.h5"));
   EXPECT_EQ(m.version.major, 0);
-  EXPECT_EQ(m.version.minor, 0);
+  EXPECT_EQ(m.version.minor, 1);
   EXPECT_EQ(m.ndm, 3);
   EXPECT_EQ(m.model_name, "layered_elastic_soil_column_explicit");
   EXPECT_TRUE(m.warnings.empty());
@@ -143,6 +143,19 @@ TEST_F(ReaderFixtures, ImplicitModelNeedsMilestone1b) {
   Capabilities with_implicit;
   with_implicit.implicit = true;
   EXPECT_NO_THROW(check_supported(m, with_implicit));
+}
+
+TEST_F(ReaderFixtures, ReadsOlderMinorVersion) {
+  const Model m = read_model(path("schema_0_0.femorax.h5"));
+  EXPECT_EQ(m.version.minor, 0);
+  EXPECT_EQ(m.nodes.size(), 104u);
+}
+
+TEST_F(ReaderFixtures, VtkhdfElementList) {
+  const Model m = read_model(path("vtkhdf_elements.femorax.h5"));
+  const auto& v = std::get<VtkhdfRecorder>(m.recorders[0].data);  // "site" sorts first
+  EXPECT_EQ(v.elements, (std::vector<std::int32_t>{1, 2, 25}));
+  EXPECT_EQ(v.responses, (std::vector<std::string>{"accel", "disp", "vel"}));
 }
 
 TEST_F(ReaderFixtures, UnsupportedIsAlsoAModelError) {

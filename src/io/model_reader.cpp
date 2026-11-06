@@ -387,6 +387,14 @@ NodeResponse parse_node_response(const std::string& s, const std::string& where)
   unsupported("Node recorder response " + quoted(s) + " in " + where, "disp, vel, accel");
 }
 
+// An item a later minor version added: reading it from an older file is an error.
+void require_minor(const Model& m, int minor, const std::string& what) {
+  if (m.version.minor < minor) {
+    invalid(what + " was added in schema 0." + std::to_string(minor) + ", but the file declares " +
+            std::to_string(m.version.major) + "." + std::to_string(m.version.minor));
+  }
+}
+
 void read_recorders(Group& root, Model& m) {
   auto rs = root.optional_group("recorders");
   if (!rs) return;
@@ -434,11 +442,16 @@ void read_recorders(Group& root, Model& m) {
         r.responses.push_back(w);
       }
       r.region = g.opt_attr_int("region");
+      if (g.has_child("elements")) {
+        require_minor(m, 1, g.item("elements"));
+        r.elements = g.dataset_int("elements").data;
+        if (r.elements.empty()) invalid(g.item("elements") + " is empty; omit it to record the whole model");
+      }
       if (r.file.empty()) invalid(g.attr_item("file") + " is empty");
       if (r.responses.empty()) invalid(g.attr_item("responses") + " is empty");
       if (r.region) {
         unsupported("VTKHDF recorder -region (" + g.path() + ")",
-                    "VTKHDF recorders of the whole model");
+                    "VTKHDF recorders of the whole model or of an 'elements' list (schema 0.1)");
       }
       rec.data = std::move(r);
     } else {
@@ -697,6 +710,13 @@ void validate(Model& m) {
         for (const auto d : r->dofs) check_dof(n, d, where);
       for (const auto t : r->time_series) {
         if (!series.count(t)) invalid(where + ": time series " + std::to_string(t) + " does not exist");
+      }
+    } else if (const auto* v = std::get_if<VtkhdfRecorder>(&rec.data)) {
+      const std::string where = "/recorders/" + rec.name + "/elements";
+      std::unordered_set<std::int32_t> seen;
+      for (const auto e : v->elements) {
+        if (!element_tags.count(e)) invalid(where + ": element " + std::to_string(e) + " does not exist");
+        if (!seen.insert(e).second) invalid(dup_message(where + ": element", e));
       }
     }
   }
