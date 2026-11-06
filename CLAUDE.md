@@ -177,7 +177,9 @@ first. Every kernel must pass its tests on CPU before it is run on GPU.
 
 - For a new module or any architectural change: propose a plan first and wait for approval.
 - One element or material per change, together with its tests and benchmarks.
-- One commit per finished step; tests and the benchmark check pass before each commit.
+- One commit per finished step. Before each commit run `scripts/check.sh`: it builds every
+  CPU preset (stopping at the first failed build, so stale test binaries cannot hide it),
+  runs each suite, then the benchmark check.
 - Never mark a port finished with skipped or loosened tests. If a tolerance must change,
   explain why in `docs/deviations.md`.
 - When a component becomes supported, update `docs/support-table.md`.
