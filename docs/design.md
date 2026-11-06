@@ -166,7 +166,9 @@ Nothing assumes a fixed number of DOFs per node.
 2. **Constraints.** `equalDOF` (and the laminar boundary, which Femora writes as equalDOF
    pairs) joins DOFs in a union-find over DOF ids. Each DOF named in a constraint must exist
    on both nodes. `fix` marks DOFs; if any DOF of a joined group is fixed, the whole group is
-   fixed. Circular or conflicting constraints are errors that name the nodes.
+   fixed. The result is checked against an emulation of OpenSees' Transformation handler;
+   patterns that OpenSees silently mishandles are refused (docs/deviations.md,
+   "Constraint handling"). `src/compile/dof_numbering.cpp`.
 3. **Equations.** Each surviving group gets one equation, numbered deterministically (in
    order of the group's lowest DOF id after renumbering). The result is `eq[dof]`, with -1
    for fixed DOFs.

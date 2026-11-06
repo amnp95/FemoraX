@@ -71,6 +71,7 @@ FemoraX/
   schema/      versioned model-file specification (HDF5)
   src/
     physics/   elements/, materials/, sections/   (framework-free)
+    compile/   host compile step: DOF numbering, renumbering, batches, maps (no Kokkos)
     exec/      Kokkos launch layer: batches, assembly, time loop
     solvers/   LinearSolver interface and backends
     io/        model reader, recorders (VTKHDF writer)
