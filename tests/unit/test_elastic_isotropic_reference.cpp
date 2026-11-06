@@ -35,7 +35,7 @@ TEST(ElasticIsotropicReference, MatchesOpenSeesAlongStrainPaths) {
     for (const auto& row : ref.rows) {
       double eps[N], sig[N], D[N][N];
       for (int i = 0; i < N; ++i) eps[i] = row[c_eps + i];
-      ElasticIsotropic::update(p, nullptr, nullptr, eps, sig, D);
+      ElasticIsotropic::update(p, {}, {}, eps, sig, D);
 
       const double* want_sig = &row[c_sig];
       const double* want_D = &row[c_D];

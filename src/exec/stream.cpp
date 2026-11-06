@@ -8,6 +8,18 @@ namespace {
 using Space = Kokkos::DefaultExecutionSpace;
 using Policy = Kokkos::RangePolicy<Space, Kokkos::IndexType<int>>;
 using Array = Kokkos::View<double*, Space::memory_space>;
+
+// First touch in parallel, so pages land near the threads that use them. A free function:
+// nvcc does not allow device lambdas inside members of a private nested class.
+void first_touch(Array a, Array b, Array c, int n) {
+  Kokkos::parallel_for(
+      "stream_init", Policy(0, n), KOKKOS_LAMBDA(const int i) {
+        a(i) = 1.0;
+        b(i) = 2.0;
+        c(i) = 0.5;
+      });
+  Kokkos::fence();
+}
 }  // namespace
 
 struct StreamKernels::Impl {
@@ -18,15 +30,7 @@ struct StreamKernels::Impl {
         a(Kokkos::view_alloc(Kokkos::WithoutInitializing, "stream_a"), n_),
         b(Kokkos::view_alloc(Kokkos::WithoutInitializing, "stream_b"), n_),
         c(Kokkos::view_alloc(Kokkos::WithoutInitializing, "stream_c"), n_) {
-    // First touch in parallel, so pages land near the threads that use them.
-    auto a_ = a, b_ = b, c_ = c;
-    Kokkos::parallel_for(
-        "stream_init", Policy(0, n), KOKKOS_LAMBDA(const int i) {
-          a_(i) = 1.0;
-          b_(i) = 2.0;
-          c_(i) = 0.5;
-        });
-    Kokkos::fence();
+    first_touch(a, b, c, n);
   }
 };
 

@@ -24,7 +24,7 @@ struct Result {
 
 Result run(const Params& p, const double (&eps)[N]) {
   Result r{};
-  ElasticIsotropic::update(p, nullptr, nullptr, eps, r.sig, r.D);
+  ElasticIsotropic::update(p, {}, {}, eps, r.sig, r.D);
   return r;
 }
 
@@ -113,7 +113,7 @@ TEST_P(ElasticIsotropicClosedForm, CommittedTangentEqualsTangent) {
   const Params p = GetParam();
   double D0[N][N], Dc[N][N];
   ElasticIsotropic::initial_tangent(p, D0);
-  ElasticIsotropic::committed_tangent(p, nullptr, Dc);
+  ElasticIsotropic::committed_tangent(p, {}, Dc);
   for (int i = 0; i < N; ++i)
     for (int j = 0; j < N; ++j) EXPECT_EQ(Dc[i][j], D0[i][j]);
 }

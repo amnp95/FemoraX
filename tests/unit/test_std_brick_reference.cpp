@@ -110,7 +110,7 @@ TEST(StdBrickReference, MatchesOpenSeesBrick) {
 
       // Internal force with body force, and tangent (no damping).
       double fe[NDOF], Ke[NDOF][NDOF];
-      Brick::compute<true>(s.cons, Rayleigh{}, s.xe, u, v, nullptr, nullptr, fe, Ke);
+      Brick::compute<true>(s.cons, Rayleigh{}, s.xe, u, v, {}, {}, fe, Ke);
       compare(fe, &row[cf], NDOF, "f", c);
       compare(&Ke[0][0], &row[cK], NDOF * NDOF, "K", c);
       compare(&Ke[0][0], &row[cK0], NDOF * NDOF, "K0 (elastic: equals K)", c);
@@ -118,10 +118,10 @@ TEST(StdBrickReference, MatchesOpenSeesBrick) {
       // Rayleigh damping forces alone: zero displacement and no body force leave C v.
       const std::vector<double> zero(NDOF, 0.0);
       double fd[NDOF];
-      Brick::compute<false>(s.cons_nobody, s.damp, s.xe, zero.data(), v, nullptr, nullptr, fd,
+      Brick::compute<false>(s.cons_nobody, s.damp, s.xe, zero.data(), v, {}, {}, fd,
                             nullptr);
       compare(fd, &row[cdc], NDOF, "damping, consistent mass", c);
-      Brick::compute<false>(s.lump_nobody, s.damp, s.xe, zero.data(), v, nullptr, nullptr, fd,
+      Brick::compute<false>(s.lump_nobody, s.damp, s.xe, zero.data(), v, {}, {}, fd,
                             nullptr);
       compare(fd, &row[cdl], NDOF, "damping, lumped mass", c);
     }

@@ -29,6 +29,11 @@ std::string default_execution_space();
 // Number of threads (host) or concurrency (device) of the default execution space.
 int default_concurrency();
 
+// Number of threads that execute in lockstep on the default execution space: the warp
+// (NVIDIA, 32) or wavefront (AMD, 64) width, 1 on CPU backends. Team sizes and batch
+// padding derive from this at run time; nothing assumes 32 (memory contract, rule 4).
+int simd_width();
+
 // Kokkos version as "major.minor.patch".
 std::string kokkos_version();
 

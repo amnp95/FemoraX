@@ -25,10 +25,11 @@ struct Mat3D {
   static constexpr int NSTRAIN = 6;
   static constexpr int NSTATE = 0;
   struct Params { double E, nu, rho; };
-  static void update(const Params&, const double*, double*, const double*, double*,
-                     double (*)[NSTRAIN]) {}
+  static void update(const Params&, femorax::Strided<const double>, femorax::Strided<double>,
+                     const double*, double*, double (*)[NSTRAIN]) {}
   static void initial_tangent(const Params&, double (*)[NSTRAIN]) {}
-  static void committed_tangent(const Params&, const double*, double (*)[NSTRAIN]) {}
+  static void committed_tangent(const Params&, femorax::Strided<const double>,
+                                double (*)[NSTRAIN]) {}
   static double density(const Params& p) { return p.rho; }
 };
 
@@ -37,10 +38,11 @@ struct MatUniaxial {
   static constexpr int NSTRAIN = 1;
   static constexpr int NSTATE = 2;
   struct Params { double E; };
-  static void update(const Params&, const double*, double*, const double*, double*,
-                     double (*)[NSTRAIN]) {}
+  static void update(const Params&, femorax::Strided<const double>, femorax::Strided<double>,
+                     const double*, double*, double (*)[NSTRAIN]) {}
   static void initial_tangent(const Params&, double (*)[NSTRAIN]) {}
-  static void committed_tangent(const Params&, const double*, double (*)[NSTRAIN]) {}
+  static void committed_tangent(const Params&, femorax::Strided<const double>,
+                                double (*)[NSTRAIN]) {}
   static double density(const Params&) { return 0.0; }
 };
 
@@ -50,13 +52,15 @@ struct MockFunctions {
   struct Params { double dummy; };
   template <bool WantK>
   static void compute(const Params&, const Rayleigh&, const double (*)[NDM_], const double*,
-                      const double*, const double*, double*, double*, double (*)[NDOF_]) {}
+                      const double*, femorax::PointArray<const double>,
+                      femorax::PointArray<double>, double*, double (*)[NDOF_]) {}
   static void mass(const Params&, const double (*)[NDM_], double*) {}
-  static double max_omega_sq(const Params&, const double (*)[NDM_], const double*) {
+  static double max_omega_sq(const Params&, const double (*)[NDM_],
+                             femorax::PointArray<const double>) {
     return 1.0;
   }
   static double critical_dt(const Params&, const Rayleigh&, ExplicitScheme,
-                            const double (*)[NDM_], const double*) {
+                            const double (*)[NDM_], femorax::PointArray<const double>) {
     return 1.0;
   }
 };
@@ -132,7 +136,8 @@ struct NoCriticalDt {  // missing critical_dt and max_omega_sq
   struct Params { double dummy; };
   template <bool WantK>
   static void compute(const Params&, const Rayleigh&, const double (*)[3], const double*,
-                      const double*, const double*, double*, double*, double (*)[3]) {}
+                      const double*, femorax::PointArray<const double>,
+                      femorax::PointArray<double>, double*, double (*)[3]) {}
   static void mass(const Params&, const double (*)[3], double*) {}
 };
 

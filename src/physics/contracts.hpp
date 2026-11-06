@@ -8,6 +8,7 @@
 #include <concepts>
 #include <type_traits>
 
+#include "physics/common/strided.hpp"
 #include "physics/macros.hpp"
 
 namespace femorax {
@@ -65,8 +66,9 @@ concept Material = requires {
   requires detail::is_constexpr_int<decltype(M::NSTRAIN)>;
   requires detail::is_constexpr_int<decltype(M::NSTATE)>;
   requires M::NSTRAIN > 0 && M::NSTATE >= 0;
-} && requires(const typename M::Params& p, const double* committed, double* trial,
-              const double* eps, double* sig, double (*D)[M::NSTRAIN]) {
+} && requires(const typename M::Params& p, Strided<const double> committed,
+              Strided<double> trial, const double* eps, double* sig,
+              double (*D)[M::NSTRAIN]) {
   { M::update(p, committed, trial, eps, sig, D) } -> std::same_as<void>;
   { M::initial_tangent(p, D) } -> std::same_as<void>;
   // Tangent at the committed state (betaKcomm damping, stable time step). A material may
@@ -100,8 +102,8 @@ concept Element = requires {
   requires E::NDOF == detail::sum_ndf(E::NODE_NDF) + E::NEXTRA;
 } && requires(const typename E::Params& p, const Rayleigh& damp,
               const double (*xe)[E::NDM], const double* ue, const double* ve,
-              const double* committed, double* trial, double* fe, double (*Ke)[E::NDOF],
-              double* Me, ExplicitScheme scheme) {
+              PointArray<const double> committed, PointArray<double> trial, double* fe,
+              double (*Ke)[E::NDOF], double* Me, ExplicitScheme scheme) {
   { E::template compute<true>(p, damp, xe, ue, ve, committed, trial, fe, Ke) }
       -> std::same_as<void>;
   { E::template compute<false>(p, damp, xe, ue, ve, committed, trial, fe, Ke) }

@@ -37,8 +37,9 @@ int cmd_info() {
   std::printf("Kokkos %s\n", femorax::kokkos_version().c_str());
   std::printf("execution spaces:");
   for (const auto& s : femorax::enabled_execution_spaces()) std::printf(" %s", s.c_str());
-  std::printf("\ndefault space: %s (concurrency %d)\n",
-              femorax::default_execution_space().c_str(), femorax::default_concurrency());
+  std::printf("\ndefault space: %s (concurrency %d, SIMD width %d)\n",
+              femorax::default_execution_space().c_str(), femorax::default_concurrency(),
+              femorax::simd_width());
   return 0;
 }
 

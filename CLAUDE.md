@@ -136,6 +136,19 @@ Performance is the top priority after correctness. These rules apply to every ke
    optimization, and the commit message gives the before and after numbers.
 7. **Every new kernel comes with a benchmark** that states its compulsory memory traffic
    (`benchmarks/README.md`).
+8. **Memory and parallelism contract** (docs/design.md):
+   - Physics reads state through `Strided`/`PointArray` views, never a raw per-point
+     pointer. Per-element data is `value[k * nElements + e]`; per-point data is
+     `value[k * nPoints + e * NGP + gp]`.
+   - Inner loops inside an element or point use `inner_for` / `inner_reduce`, never raw
+     Kokkos. Their outputs go to caller-provided (scratch) memory, and a lane reads only what
+     the same index wrote.
+   - Team sizes come from `exec::simd_width()` at run time; never assume 32.
+   - Allocate everything in the compile step; nothing in the time loop. Data stays on the
+     device; host copies only for I/O. Work arrays in team scratch. Pad batches to the SIMD
+     width. Check the memory estimate against the device before running.
+   - Every physics change keeps `test_memory_contract` passing: bit-identical results for
+     every state layout and every lane split.
 
 Run `python3 benchmarks/check.py` (cpu-release) on every change before committing. A
 regression over the tolerance blocks the commit unless the slowdown is intended; then the

@@ -14,6 +14,7 @@
 // OpenSees keeps the trial and committed strain (epsilon, Cepsilon), but the stress is a
 // function of the total trial strain only, so no history is needed: NSTATE = 0.
 
+#include "physics/common/strided.hpp"
 #include "physics/contracts.hpp"
 #include "physics/macros.hpp"
 
@@ -32,9 +33,11 @@ struct ElasticIsotropic {
 
   // setTrialStrain(strain) followed by getStress() and getTangent().
   // committed and trial are unused (NSTATE = 0); D is written in full (zeros included).
-  FEMORAX_HD static void update(const Params& p, const double* committed, double* trial,
-                                const double epsilon[NSTRAIN], double sigma[NSTRAIN],
-                                double (*D)[NSTRAIN]) {
+  // State, for materials that have it, is read and written through the strided views:
+  // value k of this point is committed[k] (docs/design.md, memory contract rule 1).
+  FEMORAX_HD static void update(const Params& p, Strided<const double> committed,
+                                Strided<double> trial, const double epsilon[NSTRAIN],
+                                double sigma[NSTRAIN], double (*D)[NSTRAIN]) {
     (void)committed;
     (void)trial;
     double mu2 = p.E / (1.0 + p.v);
@@ -67,7 +70,7 @@ struct ElasticIsotropic {
   }
 
   // Tangent at the committed state: constant for this material.
-  FEMORAX_HD static void committed_tangent(const Params& p, const double* committed,
+  FEMORAX_HD static void committed_tangent(const Params& p, Strided<const double> committed,
                                            double (*D)[NSTRAIN]) {
     (void)committed;
     initial_tangent(p, D);

@@ -66,6 +66,16 @@ TEST(Runtime, ReductionAgreesAcrossBackends) {
   EXPECT_NEAR(other, serial, 1e-13);
 }
 
+TEST(Runtime, SimdWidthComesFromTheBackend) {
+  const int w = femorax::simd_width();
+  EXPECT_GE(w, 1);
+#if defined(KOKKOS_ENABLE_CUDA)
+  EXPECT_EQ(w, 32);
+#elif !defined(KOKKOS_ENABLE_HIP) && !defined(KOKKOS_ENABLE_SYCL)
+  EXPECT_EQ(w, 1);  // host backends execute one lane per thread
+#endif
+}
+
 TEST(Runtime, ViewsAreFP64) {
   Kokkos::View<double*> v("v", 4);
   static_assert(sizeof(decltype(v)::value_type) == 8);

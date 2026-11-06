@@ -29,6 +29,8 @@
 #include <array>
 #include <cmath>
 
+#include "physics/common/inner.hpp"
+#include "physics/common/strided.hpp"
 #include "physics/common/sym_eigen.hpp"
 #include "physics/contracts.hpp"
 #include "physics/explicit_stability.hpp"
@@ -284,26 +286,40 @@ struct StdBrick {
       }
   }
 
+  // Buffers written by the inner loops of compute. In lane-parallel layouts the launch
+  // layer places them in team scratch (inner.hpp: locals are private per lane).
+  struct Work {
+    double resid[NDOF];  // internal force with body force
+    double fdamp[NDOF];  // Rayleigh damping force
+  };
+
   // Internal force including the body force, plus all four Rayleigh damping forces
   // (OpenSees getResistingForce + getRayleighDampingForces), and, when WantK, the tangent
   // stiffness (getTangentStiff; damping terms are not added to Ke).
-  template <bool WantK>
-  FEMORAX_HD static void compute(const Params& p, const Rayleigh& damp,
+  //
+  // Inner loops: the 8 nodes (force) and the 64 node-pair 3x3 blocks (tangent) go through
+  // inner_for(ctx, ...); everything per Gauss point runs on every lane. fe, Ke and work
+  // must be shared between the lanes of the calling thread.
+  template <bool WantK, class Ctx>
+  FEMORAX_HD static void compute(const Ctx& ctx, const Params& p, const Rayleigh& damp,
                                  const double (*xe)[NDM], const double* ue, const double* ve,
-                                 const double* committed, double* trial, double* fe,
-                                 double (*Ke)[NDOF]) {
+                                 PointArray<const double> committed, PointArray<double> trial,
+                                 double* fe, double (*Ke)[NDOF], Work& work) {
     double xl[3][8];
     local_coords(xe, xl);
 
-    double resid[NDOF], fdamp[NDOF];
-    for (int a = 0; a < NDOF; ++a) resid[a] = fdamp[a] = 0.0;
+    inner_for(ctx, NNODE, [&](int j) {
+      for (int q = 0; q < 3; q++) work.resid[3 * j + q] = work.fdamp[3 * j + q] = 0.0;
+    });
     if constexpr (WantK) {
-      for (int a = 0; a < NDOF; ++a)
-        for (int c = 0; c < NDOF; ++c) Ke[a][c] = 0.0;
+      inner_for(ctx, NNODE * NNODE, [&](int blk) {
+        const int J = blk / NNODE, K = blk % NNODE;
+        for (int a = 0; a < 3; a++)
+          for (int c = 0; c < 3; c++) Ke[3 * J + a][3 * K + c] = 0.0;
+      });
     }
 
-    const double betaSum = damp.betaK + damp.betaKinit + damp.betaKcomm;
-    const bool stiffDamping = betaSum != 0.0;
+    const bool stiffDamping = damp.betaK != 0.0 || damp.betaKinit != 0.0 || damp.betaKcomm != 0.0;
     double D0[NSTRESS][NSTRESS], Dc[NSTRESS][NSTRESS];
     if (damp.betaKinit != 0.0) Mat::initial_tangent(p.mat, D0);
 
@@ -315,13 +331,12 @@ struct StdBrick {
 
       double strain[NSTRESS], stress[NSTRESS], dd[NSTRESS][NSTRESS];
       point_strain(s, ue, strain);
-      Mat::update(p.mat, committed + i * Mat::NSTATE, trial + i * Mat::NSTATE, strain, stress,
-                  dd);
+      Mat::update(p.mat, committed.point(i), trial.point(i), strain, stress, dd);
 
       // Damping stress (betaK Dt + betaKinit D0 + betaKcomm Dc) * strain rate.
       double dampStress[NSTRESS] = {0, 0, 0, 0, 0, 0};
       if (stiffDamping) {
-        if (damp.betaKcomm != 0.0) Mat::committed_tangent(p.mat, committed + i * Mat::NSTATE, Dc);
+        if (damp.betaKcomm != 0.0) Mat::committed_tangent(p.mat, committed.point(i), Dc);
         double rate[NSTRESS];
         point_strain(s, ve, rate);
         for (int a = 0; a < NSTRESS; ++a) {
@@ -342,39 +357,52 @@ struct StdBrick {
           for (int q = 0; q < 3; q++) v_gp[q] += s.shp[3][j] * ve[3 * j + q];
       }
 
-      for (int j = 0; j < NNODE; j++) {
+      inner_for(ctx, NNODE, [&](int j) {
         double residJ[3];
         point_node_force(s, stress, j, residJ);
         for (int q = 0; q < 3; q++) {
-          resid[3 * j + q] += residJ[q];
-          resid[3 * j + q] -= point_body_force(p, s, j, q);
+          work.resid[3 * j + q] += residJ[q];
+          work.resid[3 * j + q] -= point_body_force(p, s, j, q);
         }
-
         if (stiffDamping) {
           double dampJ[3];
           point_node_force(s, dampStress, j, dampJ);
-          for (int q = 0; q < 3; q++) fdamp[3 * j + q] += dampJ[q];
+          for (int q = 0; q < 3; q++) work.fdamp[3 * j + q] += dampJ[q];
         }
         if (damp.alphaM != 0.0) {
           // alphaM * M * v with this point's mass: temp = N_j * dvol * rho.
           const double temp = s.shp[3][j] * s.dvol * rho;
           for (int q = 0; q < 3; q++) {
             const double vq = p.massType == 0 ? v_gp[q] : ve[3 * j + q];
-            fdamp[3 * j + q] += damp.alphaM * temp * vq;
+            work.fdamp[3 * j + q] += damp.alphaM * temp * vq;
           }
         }
+      });
 
-        if constexpr (WantK) {
-          for (int k = 0; k < NNODE; k++) {
-            double stiffJK[3][3];
-            point_block_tangent(s, dd, j, k, stiffJK);
-            for (int a = 0; a < 3; a++)
-              for (int c = 0; c < 3; c++) Ke[3 * j + a][3 * k + c] += stiffJK[a][c];
-          }
-        }
+      if constexpr (WantK) {
+        inner_for(ctx, NNODE * NNODE, [&](int blk) {
+          const int J = blk / NNODE, K = blk % NNODE;
+          double stiffJK[3][3];
+          point_block_tangent(s, dd, J, K, stiffJK);
+          for (int a = 0; a < 3; a++)
+            for (int c = 0; c < 3; c++) Ke[3 * J + a][3 * K + c] += stiffJK[a][c];
+        });
       }
     }
-    for (int a = 0; a < NDOF; ++a) fe[a] = resid[a] + fdamp[a];
+    // Same index space as the writes above, so each lane reads only its own nodes.
+    inner_for(ctx, NNODE, [&](int j) {
+      for (int q = 0; q < 3; q++) fe[3 * j + q] = work.resid[3 * j + q] + work.fdamp[3 * j + q];
+    });
+  }
+
+  // Serial form (the Element contract): plain loops, local work buffers.
+  template <bool WantK>
+  FEMORAX_HD static void compute(const Params& p, const Rayleigh& damp, const double (*xe)[NDM],
+                                 const double* ue, const double* ve,
+                                 PointArray<const double> committed, PointArray<double> trial,
+                                 double* fe, double (*Ke)[NDOF]) {
+    Work work;
+    compute<WantK>(SerialInner{}, p, damp, xe, ue, ve, committed, trial, fe, Ke, work);
   }
 
   // Brick::formInertiaTerms with tangFlag = 1: the full 24x24 mass matrix (row-major,
@@ -426,7 +454,7 @@ struct StdBrick {
   // tangent. Runs once per element per stage (stable step check), so holding the 24x24
   // matrix in one thread is acceptable here.
   FEMORAX_HD static double max_omega_sq(const Params& p, const double (*xe)[NDM],
-                                        const double* committed) {
+                                        PointArray<const double> committed) {
     double xl[3][8];
     local_coords(xe, xl);
     double m[NNODE];
@@ -438,7 +466,7 @@ struct StdBrick {
       PointShape s;
       point_geometry(xl, i, s);
       double dd[NSTRESS][NSTRESS];
-      Mat::committed_tangent(p.mat, committed + i * Mat::NSTATE, dd);
+      Mat::committed_tangent(p.mat, committed.point(i), dd);
       for (int j = 0; j < NNODE; j++)
         for (int k = 0; k < NNODE; k++) {
           double stiffJK[3][3];
@@ -459,7 +487,7 @@ struct StdBrick {
 
   FEMORAX_HD static double critical_dt(const Params& p, const Rayleigh& damp,
                                        ExplicitScheme scheme, const double (*xe)[NDM],
-                                       const double* committed) {
+                                       PointArray<const double> committed) {
     return stable_dt(scheme, damp, max_omega_sq(p, xe, committed));
   }
 

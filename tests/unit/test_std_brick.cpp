@@ -54,7 +54,7 @@ struct Eval {
 Eval eval(const Brick::Params& p, const Coords& x, const double* u, const double* v,
           const Rayleigh& d = {}) {
   Eval e{};
-  Brick::compute<true>(p, d, xe(x), u, v, nullptr, nullptr, e.fe, e.Ke);
+  Brick::compute<true>(p, d, xe(x), u, v, {}, {}, e.fe, e.Ke);
   return e;
 }
 
@@ -229,7 +229,7 @@ TEST(StdBrick, ForceOnlyPathMatchesFullPathBitwise) {
   const Rayleigh d{0.8, 1e-3, 2e-4, 3e-4};
   const Eval full = eval(params(0), x, u, v, d);
   double fe[NDOF];
-  Brick::compute<false>(params(0), d, xe(x), u, v, nullptr, nullptr, fe, nullptr);
+  Brick::compute<false>(params(0), d, xe(x), u, v, {}, {}, fe, nullptr);
   for (int a = 0; a < NDOF; ++a) EXPECT_EQ(fe[a], full.fe[a]);
 }
 
@@ -303,7 +303,7 @@ TEST(StdBrick, DampingForceIsRayleighMatrixTimesVelocity) {
 TEST(StdBrick, MaxOmegaSquaredIsTheLargestEigenvalue) {
   const Coords x = distorted();
   const Brick::Params p = params();
-  const double w2 = Brick::max_omega_sq(p, xe(x), nullptr);
+  const double w2 = Brick::max_omega_sq(p, xe(x), {});
   ASSERT_GT(w2, 0.0);
   // Independent check: power iteration on M^-1/2 K M^-1/2 converges to the same value.
   const auto z = zeros();
@@ -338,11 +338,11 @@ TEST(StdBrick, MaxOmegaSquaredIsTheLargestEigenvalue) {
 
 TEST(StdBrick, CriticalStepShrinksWithStiffnessDampingAndElementSize) {
   const Brick::Params p = params();
-  const double dt = Brick::critical_dt(p, {}, ExplicitScheme::ExplicitDifference, xe(cube()), nullptr);
+  const double dt = Brick::critical_dt(p, {}, ExplicitScheme::ExplicitDifference, xe(cube()), {});
   const double dt_damped = Brick::critical_dt(p, {0.0, 1e-3, 0.0, 0.0},
-                                              ExplicitScheme::ExplicitDifference, xe(cube()), nullptr);
+                                              ExplicitScheme::ExplicitDifference, xe(cube()), {});
   const double dt_half = Brick::critical_dt(p, {}, ExplicitScheme::ExplicitDifference,
-                                            xe(cube(0.5, 0.5, 0.5)), nullptr);
+                                            xe(cube(0.5, 0.5, 0.5)), {});
   EXPECT_LT(dt_damped, dt);
   EXPECT_NEAR(dt_half, 0.5 * dt, 1e-12 * dt);  // omega scales with 1/h
   // Of the order of h / P-wave speed for this soil (Vp ~ 500 m/s for E = 377 MPa).

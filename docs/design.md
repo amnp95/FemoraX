@@ -304,6 +304,56 @@ numbers in the commit message. A run option overrides the default for experiment
 - **Training** happens outside FemoraX. FemoraX loads exported weights from a file named in
   the model (a schema addition when the first ML material arrives).
 
+## Memory and parallelism contract
+
+Rules every kernel follows, so the same physics code is fast on every backend. Tested in
+`tests/unit/test_memory_contract.cpp`.
+
+1. **Strided state access.** Physics code never receives the state of a point as a plain
+   contiguous pointer. It gets `Strided<T>` (`src/physics/common/strided.hpp`): value `k`
+   of the point is `ref[k] = base[k * stride]`. An element gets `PointArray<T>`, whose
+   `point(gp)` is that reference for point `gp`. With `stride = nPoints` the storage is
+   structure of arrays and coalesced; the launch layer may pick another stride per backend
+   (contiguous per point for some CPU kernels, a padded stride) without touching physics
+   code. Offsets are computed in 64 bits; indices stay 32-bit. The same rule applies to
+   any per-element or per-point array physics code reads from global memory.
+2. **Storage order follows the thread mapping.** Per-element data: `value[k * nElements + e]`.
+   Per-Gauss-point data: `value[k * nPoints + (e * NGP + gp)]`. Consecutive threads read
+   consecutive addresses in the flat layout (thread = element) and in the team layout
+   (thread = Gauss point).
+3. **Inner loops through our own helpers.** Work inside an element or point that can use
+   several threads (node-pair tangent blocks, yield surfaces, fibers, network neurons) is
+   written with `inner_for(ctx, n, f)` and `inner_reduce(ctx, n, f)`
+   (`src/physics/common/inner.hpp`). `SerialInner` runs plain loops; the launch layer's
+   `exec::VectorLanes` (`src/exec/inner_kokkos.hpp`) maps them to
+   `Kokkos::ThreadVectorRange`. Three levels: team = group of elements, team thread =
+   element or Gauss point, vector lane = work inside a point; the mapping is chosen per
+   element-material pair. To give the same bits under every mapping:
+   - outputs of an `inner_for` go to memory the caller provides (team scratch in
+     lane-parallel layouts), because locals are private per lane on a GPU;
+   - a lane reads only what the same index wrote (combine with an `inner_for` over the
+     same index space); there is no lane barrier;
+   - `inner_reduce` adds terms in index order, whatever the split;
+   - code outside inner loops runs redundantly on every lane; its state writes are pure
+     functions of the inputs.
+4. **Team sizes come from the backend at run time** (`exec::simd_width()`: 32 on NVIDIA,
+   64 on AMD data-center GPUs, 1 on CPU backends); nothing assumes 32. The team layout fills
+   a warp or wavefront with several elements (`elements_per_team = simd_width / NGP`).
+5. **Nodal gathers.** Nodes and elements are renumbered for cache locality in the compile
+   step (it can be turned off). In the team layout, the element's threads load its nodal
+   coordinates and values cooperatively into team scratch once, and all Gauss points read
+   from there.
+6. **Memory management.**
+   - Everything is allocated once in the compile step; nothing is allocated in the time
+     loop.
+   - All data is device-resident; host copies exist only for I/O (recorders, reader).
+   - Per-element and per-point work arrays live in Kokkos team scratch, not global memory.
+   - Batches are padded to a multiple of the SIMD width; padding elements are inert
+     (zero mass and stiffness, scattered nowhere).
+   - Before a run, a memory estimate (state, maps, vectors, recorder buffers, per backend)
+     is compared with the device's free memory; the run stops with a clear message naming
+     the estimate and the available memory if the model will not fit.
+
 ## Assembly
 
 - The sparsity pattern is fixed within an analysis stage, so maps from each element's local
