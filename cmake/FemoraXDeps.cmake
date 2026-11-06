@@ -41,3 +41,26 @@ if(FEMORAX_BUILD_TESTS)
     SYSTEM)
   FetchContent_MakeAvailable(googletest)
 endif()
+
+# ---------------------------------------------------------------------------
+# HDF5 (C library, system package libhdf5-dev): model reader and recorders.
+# ---------------------------------------------------------------------------
+find_package(HDF5 REQUIRED COMPONENTS C)
+
+# ---------------------------------------------------------------------------
+# Python for tools and tests: the project's virtual environment (.venv, with numpy and
+# h5py) when it exists. Override with -DFEMORAX_PYTHON=<interpreter>.
+# ---------------------------------------------------------------------------
+if(EXISTS "${PROJECT_SOURCE_DIR}/.venv/bin/python")
+  set(_femorax_default_python "${PROJECT_SOURCE_DIR}/.venv/bin/python")
+else()
+  set(_femorax_default_python "")
+endif()
+set(FEMORAX_PYTHON "${_femorax_default_python}" CACHE FILEPATH
+    "Python interpreter with numpy and h5py, for tools and tests")
+if(FEMORAX_BUILD_TESTS AND NOT FEMORAX_PYTHON)
+  message(FATAL_ERROR
+    "No Python for the tests. Create the virtual environment:\n"
+    "  python3 -m venv .venv && .venv/bin/pip install numpy h5py\n"
+    "or pass -DFEMORAX_PYTHON=<python with numpy and h5py>.")
+endif()

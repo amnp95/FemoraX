@@ -2,12 +2,19 @@
 //
 //   femorax --version        print the FemoraX version
 //   femorax info             print the build configuration (Kokkos version and backends)
+//   femorax check <model.h5> read and validate a model, and check this build can run it
 //   femorax run <model.h5>   run a model (not implemented yet)
 //
 // Kokkos options (for example --kokkos-num-threads=8) are accepted by every command.
+//
+// Exit status: 0 success, 1 usage error, 2 not implemented,
+//              3 unsupported component (the model should run on the OpenSees backend),
+//              4 invalid model file.
 
 #include "exec/runtime.hpp"
 #include "femorax_version.hpp"
+#include "io/model_reader.hpp"
+#include "io/support.hpp"
 
 #include <cstdio>
 #include <string_view>
@@ -21,6 +28,7 @@ void print_usage() {
       "commands:\n"
       "  --version          print the FemoraX version\n"
       "  info               print the build configuration\n"
+      "  check <model.h5>   validate a model and check this build can run it\n"
       "  run <model.h5>     run a model (not implemented yet)\n");
 }
 
@@ -34,12 +42,43 @@ int cmd_info() {
   return 0;
 }
 
+constexpr int kExitUnsupported = 3;
+constexpr int kExitInvalid = 4;
+
+int cmd_check(const char* path) {
+  try {
+    const femorax::io::Model m = femorax::io::read_model(path);
+    for (const auto& w : m.warnings) std::fprintf(stderr, "warning: %s\n", w.c_str());
+    femorax::io::check_supported(m, femorax::io::Capabilities{});
+    std::printf("%s: schema %d.%d, %zu nodes, %zu elements in %zu groups, %zu process steps\n",
+                path, m.version.major, m.version.minor, m.nodes.size(), m.element_count(),
+                m.elements.size(), m.process.size());
+    std::printf("ok: valid model; every component is in this build's supported set\n");
+    return 0;
+  } catch (const femorax::io::UnsupportedComponent& e) {
+    std::fprintf(stderr, "%s: %s\n", path, e.what());
+    return kExitUnsupported;
+  } catch (const femorax::io::ModelError& e) {
+    std::fprintf(stderr, "%s: invalid model: %s\n", path, e.what());
+    return kExitInvalid;
+  }
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
   if (argc >= 2 && std::string_view(argv[1]) == "--version") {
     std::printf("femorax %s\n", femorax::version_string);
     return 0;
+  }
+
+  // Host-only commands, without starting Kokkos.
+  if (argc >= 2 && std::string_view(argv[1]) == "check") {
+    if (argc != 3) {
+      std::fprintf(stderr, "usage: femorax check <model.h5>\n");
+      return 1;
+    }
+    return cmd_check(argv[2]);
   }
 
   femorax::Runtime runtime(argc, argv);  // strips --kokkos-* arguments from argv

@@ -7,6 +7,8 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <ostream>
+#include <string>
 
 namespace {
 
@@ -204,8 +206,11 @@ bool central_difference_bounded(double w, double c, double dt, int nsteps) {
 }
 
 struct ModeCase {
+  const char* name;
   double w, alphaM, betaK, betaKinit, betaKcomm;
 };
+
+void PrintTo(const ModeCase& c, std::ostream* os) { *os << c.name; }
 
 class StableDt : public ::testing::TestWithParam<ModeCase> {};
 
@@ -229,12 +234,13 @@ TEST_P(StableDt, CentralDifferenceIsTwoOverOmega) {
 
 INSTANTIATE_TEST_SUITE_P(
     Modes, StableDt,
-    ::testing::Values(ModeCase{100.0, 0.0, 0.0, 0.0, 0.0},      // undamped
-                      ModeCase{100.0, 0.5, 0.0, 0.0, 0.0},      // mass-proportional
-                      ModeCase{100.0, 0.0, 2e-3, 0.0, 0.0},     // stiffness-proportional
-                      ModeCase{300.0, 1.2, 6e-4, 0.0, 0.0},     // both
-                      ModeCase{50.0, 3.0, 4e-4, 3e-4, 3e-4},    // all four terms
-                      ModeCase{2000.0, 0.8, 1e-3, 0.0, 0.0}));  // heavy damping at high w
+    ::testing::Values(ModeCase{"undamped", 100.0, 0.0, 0.0, 0.0, 0.0},
+                      ModeCase{"mass_proportional", 100.0, 0.5, 0.0, 0.0, 0.0},
+                      ModeCase{"stiffness_proportional", 100.0, 0.0, 2e-3, 0.0, 0.0},
+                      ModeCase{"mass_and_stiffness", 300.0, 1.2, 6e-4, 0.0, 0.0},
+                      ModeCase{"all_four_terms", 50.0, 3.0, 4e-4, 3e-4, 3e-4},
+                      ModeCase{"heavy_damping_high_omega", 2000.0, 0.8, 1e-3, 0.0, 0.0}),
+    [](const ::testing::TestParamInfo<ModeCase>& p) { return std::string(p.param.name); });
 
 TEST(StableDt, UndampedExplicitDifferenceIsTwoOverOmega) {
   EXPECT_DOUBLE_EQ(femorax::stable_dt(ExplicitScheme::ExplicitDifference, Rayleigh{}, 400.0),

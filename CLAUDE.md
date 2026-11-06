@@ -101,6 +101,11 @@ ctest --preset cpu-debug
   and a standalone compile of every physics header with `-fno-exceptions -fno-rtti` and no
   Kokkos on the include path.
 - Benchmarks: `python3 benchmarks/check.py` (see "Performance" and `benchmarks/README.md`).
+- Validate a model file: `build/cpu-debug/src/app/femorax check model.femorax.h5`
+  (exit 0 valid, 3 unsupported component, 4 invalid). Example models:
+  `.venv/bin/python schema/v0/make_example.py <dir>`.
+- Reader tests use fixtures written by `tests/io/make_fixtures.py` (one file per rule,
+  listed in its manifest); add a fixture for every new reader rule.
 - CUDA and HIP builds: not set up yet (separate build trees, `-DKokkos_ENABLE_CUDA=ON`).
 
 ## Performance

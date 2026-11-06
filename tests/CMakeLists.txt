@@ -65,3 +65,34 @@ set_tests_properties(app.info PROPERTIES
   PASS_REGULAR_EXPRESSION "Kokkos ${FEMORAX_KOKKOS_VERSION}.*execution spaces:.*Serial.*OpenMP")
 add_test(NAME app.unknown_command COMMAND femorax frobnicate)
 set_tests_properties(app.unknown_command PROPERTIES WILL_FAIL TRUE)
+
+# ---------------------------------------------------------------------------
+# Model reader: fixtures written by Python (h5py, from .venv), read by C++.
+# ---------------------------------------------------------------------------
+set(FEMORAX_IO_FIXTURES "${CMAKE_CURRENT_BINARY_DIR}/io_fixtures")
+add_test(NAME io.make_fixtures
+         COMMAND ${FEMORAX_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/io/make_fixtures.py
+                 ${FEMORAX_IO_FIXTURES})
+set_tests_properties(io.make_fixtures PROPERTIES FIXTURES_SETUP io_fixtures)
+
+add_executable(femorax_io_tests
+  io/test_model_reader.cpp)
+target_link_libraries(femorax_io_tests PRIVATE femorax::io GTest::gtest_main)
+femorax_set_warnings(femorax_io_tests)
+gtest_discover_tests(femorax_io_tests
+  TEST_PREFIX "io."
+  DISCOVERY_MODE PRE_TEST
+  PROPERTIES FIXTURES_REQUIRED io_fixtures
+             ENVIRONMENT "FEMORAX_IO_FIXTURES=${FEMORAX_IO_FIXTURES}")
+
+# The command-line check: exit 0 for a valid model, 3 unsupported, 4 invalid.
+foreach(case IN ITEMS "explicit;0" "implicit_newmark;3" "duplicate_node;4")
+  list(GET case 0 name)
+  list(GET case 1 code)
+  add_test(NAME app.check.${name}
+           COMMAND ${CMAKE_COMMAND} -DCMD=$<TARGET_FILE:femorax>
+                   -DARGS=check\;${FEMORAX_IO_FIXTURES}/${name}.femorax.h5
+                   -DEXPECTED=${code}
+                   -P ${PROJECT_SOURCE_DIR}/cmake/RunExpectExit.cmake)
+  set_tests_properties(app.check.${name} PROPERTIES FIXTURES_REQUIRED io_fixtures)
+endforeach()

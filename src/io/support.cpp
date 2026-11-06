@@ -1,0 +1,70 @@
+#include "io/support.hpp"
+
+#include <algorithm>
+#include <string>
+
+#include "io/h5.hpp"
+
+namespace femorax::io {
+
+namespace {
+
+constexpr const char* kOpenSeesHint = " Run this model with the OpenSees backend.";
+
+[[noreturn]] void unsupported(const std::string& msg) {
+  throw UnsupportedComponent("unsupported component: " + msg + "." + kOpenSeesHint);
+}
+
+}  // namespace
+
+void check_supported(const Model& m, const Capabilities& caps) {
+  for (const auto& g : m.elements) {
+    if (std::find(caps.elements.begin(), caps.elements.end(), g.type) == caps.elements.end()) {
+      unsupported(std::string("element type \"") + to_string(g.type) + "\" (/elements/" + g.id +
+                  ") is not available in this build");
+    }
+  }
+
+  for (const auto& s : m.process) {
+    const std::string where = "/process/" + s.id;
+    if (std::holds_alternative<LoadConstStep>(s.step) && !caps.implicit) {
+      unsupported("load_const (" + where + ") is available from milestone 1b");
+    }
+    const auto* a = std::get_if<AnalysisStep>(&s.step);
+    if (!a) continue;
+
+    if (!is_explicit(a->integrator)) {
+      if (!caps.implicit) {
+        unsupported(std::string(to_string(a->integrator)) + " (" + where +
+                    ") is available from milestone 1b");
+      }
+      continue;
+    }
+
+    // Explicit stages.
+    if (a->algorithm != Algorithm::Linear) {
+      throw ModelError(where + ": " + to_string(a->integrator) +
+                       " requires the Linear algorithm, as in OpenSees");
+    }
+    for (const auto& g : m.elements) {
+      if (!g.lumped) {
+        unsupported(std::string(to_string(a->integrator)) + " (" + where + ") with element group /elements/" +
+                    g.id + ", which uses a consistent mass matrix: explicit stages need lumped "
+                    "mass (stdBrick -lumped, or SSPbrick); OpenSees would solve with the full "
+                    "mass matrix");
+      }
+    }
+    if (a->integrator == Integrator::CentralDifference) {
+      for (const auto& r : m.rayleigh) {
+        if (r.betaK != 0.0 || r.betaKinit != 0.0 || r.betaKcomm != 0.0) {
+          unsupported("CentralDifference (" + where + ") with stiffness-proportional damping in "
+                      "/damping/rayleigh/" + r.id + ": OpenSees solves a non-diagonal system "
+                      "here, which needs the linear solver of milestone 1b; use "
+                      "ExplicitDifference, or mass-proportional damping only");
+        }
+      }
+    }
+  }
+}
+
+}  // namespace femorax::io
