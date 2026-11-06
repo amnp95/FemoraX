@@ -47,7 +47,8 @@ Sessions start with: `claude --add-dir ../Femora --add-dir ../OpenSees`
    only in `src/native/`, only when a profile shows a portable kernel is too slow, and always
    with the portable version kept as a fallback.
 4. **FP64 everywhere** in physics, state and assembly. Mixed precision only inside solver
-   preconditioners, behind an explicit option.
+   preconditioners, behind an explicit option, and inside machine-learned materials, which
+   convert their inputs and outputs to and from FP64 (docs/design.md).
 5. **FemoraX never imports Femora.** Femora is a test-only dependency used for cross-validation.
 6. **Solvers sit behind `femorax::LinearSolver`.** No solver-library types outside `src/solvers/`.
 7. **Every assembly path has a deterministic mode** (graph coloring). Validation tests use it.
@@ -118,9 +119,14 @@ Performance is the top priority after correctness. These rules apply to every ke
 2. **One fused gather-compute-scatter kernel per batch.** Each element is gathered,
    computed and scattered in the same kernel; no separate gather or scatter passes, and no
    global per-element temporaries for `fe` or `Ke`.
-3. **Thread layout chosen per element type.** The launch traits of each element in
-   `src/exec/` choose the layout (one thread per element for bricks; a team per element for
-   heavy elements such as fiber beams). Physics code never knows about threads.
+3. **Thread layout chosen per element type, by benchmark.** Each element offers its work
+   per Gauss point as pointwise physics functions (docs/design.md, "Element kernels"), and
+   the launch layer offers several layouts built from them (one thread per element, a team
+   per element with one thread per Gauss point, team-computed 3x3 tangent blocks). The
+   benchmark picks the default per element-material pair and backend. Physics code never
+   knows about threads.
+3a. **Never hold a full element tangent in one thread** in implicit assembly; compute and
+   scatter it as node-pair blocks.
 4. **32-bit indices** for nodes, elements, DOFs, equations and assembly maps. 64-bit only
    for counts that can pass 2^31 (such as nonzero offsets of a large matrix), checked in the
    compile step.

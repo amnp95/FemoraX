@@ -208,6 +208,106 @@ that sets the limit; `allow_unstable_dt` turns the stop into a warning. Nonlinea
 re-check every N steps. Tests run a single mode and a column just below and just above
 `dt_crit` for both schemes, with and without each damping term.
 
+## Element kernels
+
+Applies from the stdBrick kernel on. The goal is that every element runs in the thread
+layout that is fastest for it on each backend, with the physics written once.
+
+### Pointwise physics functions
+
+Each element exposes its work at one integration point as separate physics functions, in
+the style of libCEED's pointwise QFunctions. The whole-element `compute` is built from
+them, so the one-thread-per-element path and the team paths run the same arithmetic.
+
+```cpp
+template <class Mat>
+struct StdBrick {
+  // Geometry of point gp: shape function gradients dN/dx [NNODE][NDM] and weight*det(J).
+  FEMORAX_HD static void point_geometry(const double xe[NNODE][NDM], int gp,
+                                        double dNdx[NNODE][NDM], double& wdetJ);
+  // Strain (and strain rate) from ue, ve; material update; the point's stress for the
+  // force, including stiffness-proportional damping stress (betaK*Dt + betaKinit*D0 +
+  // betaKcomm*Dc) * strain_rate. Writes sig and, when WantK, the material tangent D.
+  template <bool WantK>
+  FEMORAX_HD static void point_update(const Params& p, const Rayleigh& damp,
+                                      const double dNdx[NNODE][NDM],
+                                      const double ue[NDOF], const double ve[NDOF],
+                                      const double* committed_gp, double* trial_gp,
+                                      double sig[Mat::NSTRAIN],
+                                      double D[Mat::NSTRAIN][Mat::NSTRAIN]);
+  // Contribution of one point to node I's force: wdetJ * B_I^T * sig.
+  FEMORAX_HD static void point_node_force(const double dNdx[NNODE][NDM], double wdetJ,
+                                          const double sig[Mat::NSTRAIN], int I,
+                                          double fI[3]);
+  // Contribution of one point to the 3x3 block of node pair (I, J): wdetJ * B_I^T D B_J.
+  FEMORAX_HD static void point_block_tangent(const double dNdx[NNODE][NDM], double wdetJ,
+                                             const double D[Mat::NSTRAIN][Mat::NSTRAIN],
+                                             int I, int J, double KIJ[3][3]);
+};
+```
+
+Body force and mass-proportional damping (`alphaM * M * v`, diagonal with lumped mass) are
+node terms, added once per node after the point sums. `contracts.hpp` gains these
+functions when stdBrick lands.
+
+### Thread layouts
+
+The launch layer offers several layouts per element; each is one fused
+gather-compute-scatter kernel.
+
+- **Explicit stdBrick, team layout:** a team of 8 threads per element, one per Gauss point,
+  and several elements per team (for example 4 elements = 32 threads). Each thread does
+  `point_geometry` and `point_update`; the element's force is reduced over its 8 points in
+  team scratch (shared) memory in a fixed order; then one scatter per node.
+- **Explicit stdBrick, flat layout:** one thread per element runs the whole element.
+- **SSPbrick** (one integration point): one thread per element.
+- **Implicit assembly:** never hold the full 24x24 tangent in one thread. A team per element
+  first runs `point_update` for every point (stress and `D` into scratch memory), then its
+  threads compute the 64 node-pair 3x3 blocks in parallel (`point_block_tangent` summed
+  over the points) and scatter each block directly through the assembly map. The force is
+  reduced as in the explicit team layout.
+
+Reductions within a team use a fixed order, so each layout is deterministic on its own.
+Different layouts sum in different orders and may differ in the last bits; every layout
+must pass the same verification tests against OpenSees.
+
+### Choosing the layout
+
+The benchmark harness runs every layout of every registered (element, material) pair and
+reports the fastest per backend. The defaults live in a committed table per backend
+(`src/exec/layout_defaults.hpp`), updated from benchmark results with the before/after
+numbers in the commit message. A run option overrides the default for experiments.
+
+### Later
+
+- **Matrix-free operator** (with the implicit iterative solvers): store the material
+  tangent at each Gauss point (symmetric, 21 values for 3D; once per material when it is
+  constant, as for elastic materials) and apply `K*v = sum over points of B^T D B v`
+  without a global matrix. For iterative solvers and low GPU memory. The assembled path
+  stays for direct solvers and AMG.
+- **libCEED comparison:** implement elastic stdBrick in libCEED as a speed benchmark for
+  our kernels (benchmark code only, never a dependency of FemoraX).
+
+## Machine-learned constitutive models (design note, no code yet)
+
+- **Small networks** run inline at each Gauss point like any material. Their weights are
+  material parameters, held once in a shared device array that every point reads.
+- **Larger networks** use a **batched material path**: the element kernel writes the
+  Gauss-point inputs to a buffer, one batched GEMM (or a short sequence of them) evaluates
+  the network for all points, and a second element kernel finishes (force, tangent,
+  scatter). The batched path is an official material option in the material contract, not
+  an ML special case; the elastic-predictor / plastic-corrector split of the multi-yield
+  materials uses the same mechanism (predict everywhere, then correct the compacted set).
+- **Tangent:** the analytic derivative of the network, a network that outputs the tangent
+  as well, or finite differences, chosen per material. Explicit analysis needs stress only.
+- **Precision:** an exception to the FP64 rule. An ML material may compute internally in
+  FP32 or lower; its inputs and outputs are converted to and from FP64 at the material
+  boundary, so element, state and assembly code stay FP64.
+- **History:** hidden states of recurrent networks are ordinary material state, in the
+  committed/trial buffers, so commit and revert work unchanged.
+- **Training** happens outside FemoraX. FemoraX loads exported weights from a file named in
+  the model (a schema addition when the first ML material arrives).
+
 ## Assembly
 
 - The sparsity pattern is fixed within an analysis stage, so maps from each element's local
@@ -272,7 +372,8 @@ GPU gains most, because almost all the work is element state determination.
 
 ## Precision and hardware
 
-- FP64 throughout. Laptop and consumer GPUs have weak FP64; they are for development and
+- FP64 throughout (one exception: the internals of machine-learned materials, see
+  "Machine-learned constitutive models"). Laptop and consumer GPUs have weak FP64; they are for development and
   medium models. Large runs go to data-center GPUs (for example through Femora's TACC jobs).
 - Apple GPUs have no FP64; on Macs FemoraX runs on the CPU backend.
 - Kokkos enables one device backend per build, so FemoraX ships separate builds
