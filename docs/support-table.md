@@ -10,7 +10,7 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
-| stdBrick | in progress (1a) | |
+| stdBrick | in progress (1a): physics verified | consistent and lumped mass; force, tangent and masses bit-identical to OpenSees `955ceb0`, damping forces within 2.3e-15 (matrix-free, docs/deviations.md). Runnable once the compile step and explicit kernels land |
 | SSPbrick | in progress (1a, after stdBrick) | |
 | PML3D, SSPquad, ElasticBeamColumn, DispBeamColumn, ForceBeamColumn, Truss, ASDEmbeddedNodeElement3D, embedded node contact, ZeroLengthContactASDimplex | planned | |
 

@@ -111,10 +111,32 @@ concept Element = requires {
   { E::critical_dt(p, damp, scheme, xe, committed) } -> std::same_as<double>;
 };
 
-// An element that may appear in an explicit stage must be able to lump its mass.
+// An element that may appear in an explicit stage must be able to lump its mass, and gives
+// the lumped (diagonal) mass per node.
 template <class E>
 concept ExplicitElement =
-    Element<E> && E::EXPLICIT && (E::MASS == MassType::Lumped || E::MASS == MassType::Selectable);
+    Element<E> && E::EXPLICIT && (E::MASS == MassType::Lumped || E::MASS == MassType::Selectable) &&
+    requires(const typename E::Params& p, const double (*xe)[E::NDM], double* m) {
+      { E::lumped_mass(p, xe, m) } -> std::same_as<void>;
+    };
+
+// An element whose work splits into integration points (docs/design.md, "Element
+// kernels"): the launch layer can then run one thread per point and reduce in shared
+// memory, or compute the tangent as node-pair blocks. Elements that do not split this way
+// (for example force-based beams) only satisfy Element.
+template <class E>
+concept PointwiseElement =
+    Element<E> && (E::NGP > 0) && requires { typename E::PointShape; } &&
+    requires(const typename E::Params& p, const double (*xl)[8], int gp,
+             typename E::PointShape& s, const typename E::PointShape& cs, const double* u,
+             double* strain, const double* stress, double* fI,
+             const double (*dd)[6], double (*KIJ)[3]) {
+      { E::point_geometry(xl, gp, s) } -> std::same_as<void>;
+      { E::point_strain(cs, u, strain) } -> std::same_as<void>;
+      { E::point_node_force(cs, stress, gp, fI) } -> std::same_as<void>;
+      { E::point_body_force(p, cs, gp, gp) } -> std::same_as<double>;
+      { E::point_block_tangent(cs, dd, gp, gp, KIJ) } -> std::same_as<void>;
+    };
 
 // An (element, material) pair that can be instantiated as a batch.
 template <class E, class M>

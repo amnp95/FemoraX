@@ -167,8 +167,9 @@ static_assert(!femorax::Element<RuntimeNdof>);
 static_assert(!femorax::Element<RuntimeExplicitFlag>);
 static_assert(!femorax::ExplicitElement<RuntimeExplicitFlag>);
 
-static_assert(femorax::ExplicitElement<Brick>);
-static_assert(femorax::ExplicitElement<Beam3D>);
+static_assert(!femorax::ExplicitElement<Brick>);   // mock has no lumped_mass
+static_assert(!femorax::ExplicitElement<Beam3D>);  // mock has no lumped_mass
+static_assert(!femorax::PointwiseElement<Brick>);  // mock has no point functions
 static_assert(!femorax::ExplicitElement<BrickUP20>);           // EXPLICIT = false
 static_assert(!femorax::ExplicitElement<ConsistentOnlyExplicit>);
 

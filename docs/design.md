@@ -222,33 +222,29 @@ them, so the one-thread-per-element path and the team paths run the same arithme
 ```cpp
 template <class Mat>
 struct StdBrick {
-  // Geometry of point gp: shape function gradients dN/dx [NNODE][NDM] and weight*det(J).
-  FEMORAX_HD static void point_geometry(const double xe[NNODE][NDM], int gp,
-                                        double dNdx[NNODE][NDM], double& wdetJ);
-  // Strain (and strain rate) from ue, ve; material update; the point's stress for the
-  // force, including stiffness-proportional damping stress (betaK*Dt + betaKinit*D0 +
-  // betaKcomm*Dc) * strain_rate. Writes sig and, when WantK, the material tangent D.
-  template <bool WantK>
-  FEMORAX_HD static void point_update(const Params& p, const Rayleigh& damp,
-                                      const double dNdx[NNODE][NDM],
-                                      const double ue[NDOF], const double ve[NDOF],
-                                      const double* committed_gp, double* trial_gp,
-                                      double sig[Mat::NSTRAIN],
-                                      double D[Mat::NSTRAIN][Mat::NSTRAIN]);
-  // Contribution of one point to node I's force: wdetJ * B_I^T * sig.
-  FEMORAX_HD static void point_node_force(const double dNdx[NNODE][NDM], double wdetJ,
-                                          const double sig[Mat::NSTRAIN], int I,
-                                          double fI[3]);
-  // Contribution of one point to the 3x3 block of node pair (I, J): wdetJ * B_I^T D B_J.
-  FEMORAX_HD static void point_block_tangent(const double dNdx[NNODE][NDM], double wdetJ,
-                                             const double D[Mat::NSTRAIN][Mat::NSTRAIN],
-                                             int I, int J, double KIJ[3][3]);
+  struct PointShape { double shp[4][8]; double dvol; };  // dN/dx, dN/dy, dN/dz, N; w*det(J)
+  // Shape functions of point gp (OpenSees order gp = 4i + 2j + k) from coordinates xl[3][8].
+  FEMORAX_HD static void point_geometry(const double xl[3][8], int gp, PointShape& s);
+  // B u: strain from nodal displacements, or strain rate from nodal velocities.
+  FEMORAX_HD static void point_strain(const PointShape& s, const double u[NDOF],
+                                      double strain[6]);
+  // This point's share of node j's force: B_j^T (stress * dvol).
+  FEMORAX_HD static void point_node_force(const PointShape& s, const double stress[6],
+                                          int j, double fj[3]);
+  // This point's body force at node j, component q: dvol * b[q] * N_j.
+  FEMORAX_HD static double point_body_force(const Params& p, const PointShape& s, int j, int q);
+  // This point's share of the 3x3 block of node pair (J, K): B_J^T (D * dvol) B_K.
+  FEMORAX_HD static void point_block_tangent(const PointShape& s, const double (*D)[6],
+                                             int J, int K, double KJK[3][3]);
 };
 ```
 
-Body force and mass-proportional damping (`alphaM * M * v`, diagonal with lumped mass) are
-node terms, added once per node after the point sums. `contracts.hpp` gains these
-functions when stdBrick lands.
+The material update sits between `point_strain` and `point_node_force` (in `compute`, or
+in the launch layer's point threads). Stiffness-proportional damping is a damping stress
+`(betaK*Dt + betaKinit*D0 + betaKcomm*Dc) * strain_rate` pushed through
+`point_node_force`; mass-proportional damping is `alphaM * N_j * dvol * rho * v` per point
+(consistent: v interpolated at the point; lumped: the node's own v). The `PointwiseElement`
+concept in `contracts.hpp` checks these functions.
 
 ### Thread layouts
 

@@ -85,3 +85,4 @@ endfunction()
 
 add_custom_target(reference_drivers)
 femorax_reference_driver(nd_material)
+femorax_reference_driver(brick_element)

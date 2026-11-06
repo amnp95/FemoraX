@@ -9,6 +9,8 @@ add_executable(femorax_unit_tests
   unit/test_contracts.cpp
   unit/test_elastic_isotropic.cpp
   unit/test_elastic_isotropic_reference.cpp
+  unit/test_std_brick.cpp
+  unit/test_std_brick_reference.cpp
   unit/test_runtime.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec GTest::gtest)
 target_compile_definitions(femorax_unit_tests PRIVATE

@@ -29,6 +29,7 @@ cmake --build build/reference -j8          # OpenSees executable and all drivers
 
 ```
 build/reference/drivers/nd_material tests/reference/data/nd
+build/reference/drivers/brick_element tests/reference/data/element
 ```
 
 Commit the data with the port it verifies. Each file records the OpenSees commit that
@@ -55,3 +56,4 @@ produced it; a port's tests check that it matches the pinned commit.
 | Driver | Covers | Output |
 |---|---|---|
 | `nd_material` | nD materials along strain paths (monotonic, cyclic, volumetric load/unload, random reversals), with commit and revert | `data/nd/<Material>_<case>_<path>.txt` |
+| `brick_element` | OpenSees `Brick` (stdBrick) in a real Domain: internal force with body force, tangent, initial tangent, consistent and lumped mass, Rayleigh damping forces (all four terms) for 4 geometries x 2 materials x 4 fields. `getRayleighDampingForces` is protected in OpenSees, so the driver re-exports it from a subclass (`BrickProbe`) | `data/element/Brick_<geometry>_<material>_{state,mass}.txt` |

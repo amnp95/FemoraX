@@ -33,6 +33,14 @@ struct ReferenceFile {
     return static_cast<int>(it - columns.begin());
   }
 
+  // Header "coords 0 0 0 1 0 0 ..." -> values("coords") == {0, 0, 0, 1, 0, 0, ...}.
+  std::vector<double> values(const std::string& key) const {
+    std::istringstream in(header.at(key));
+    std::vector<double> v;
+    for (std::string x; in >> x;) v.push_back(std::strtod(x.c_str(), nullptr));
+    return v;
+  }
+
   // Header "params E 1 nu 0.3" -> param("E") == 1.
   double param(const std::string& name) const {
     std::istringstream in(header.at("params"));
