@@ -268,9 +268,11 @@ gather-compute-scatter kernel.
   over the points) and scatter each block directly through the assembly map. The force is
   reduced as in the explicit team layout.
 
-Reductions within a team use a fixed order, so each layout is deterministic on its own.
-Different layouts sum in different orders and may differ in the last bits; every layout
-must pass the same verification tests against OpenSees.
+Reductions within a team use a fixed order, and the team layout reduces in the same order
+as the flat one, so all layouts give the same bits on a given backend (tested on OpenMP and
+CUDA). Across backends results agree to rounding only: nvcc fuses multiply-adds
+(`--fmad=true`), the host compiler does not (GCC with `-std=c++20` does not contract), so GPU
+results are verified against host references and OpenSees at a documented tolerance.
 
 ### Choosing the layout
 

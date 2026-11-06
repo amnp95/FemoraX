@@ -62,6 +62,7 @@ std::string to_json(const std::vector<Result>& results, const Options& options);
 
 // Each benchmark source file defines one of these; bench_main.cpp calls them all.
 void register_stream(Registry& registry, const Options& options);
+void register_peak(Registry& registry, const Options& options);
 void register_explicit(Registry& registry, const Options& options);
 
 }  // namespace femorax::bench

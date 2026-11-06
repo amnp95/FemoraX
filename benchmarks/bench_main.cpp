@@ -47,6 +47,7 @@ int main(int argc, char* argv[]) {
   {
     femorax::bench::Registry registry;
     femorax::bench::register_stream(registry, options);
+    femorax::bench::register_peak(registry, options);
     femorax::bench::register_explicit(registry, options);
 
     const auto results = femorax::bench::run_all(registry, options);

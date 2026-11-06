@@ -28,3 +28,22 @@ void register_stream(Registry& registry, const Options& options) {
 }
 
 }  // namespace femorax::bench
+
+#include "exec/peak.hpp"
+
+namespace femorax::bench {
+
+// FP64 arithmetic reference: 8 independent multiply-add chains per work item.
+void register_peak(Registry& registry, const Options& options) {
+  const int n = options.quick ? (1 << 14) : (1 << 20);
+  const int iters = options.quick ? 64 : 1024;
+  auto k = std::make_shared<exec::PeakFp64>(n);
+  registry.add({.name = "peak/fp64_fma",
+                .unit = "call",
+                .bytes = std::int64_t{8} * n,
+                .flops = 16.0 * n * iters,
+                .items = n,
+                .run = [k, iters] { k->run(iters); }});
+}
+
+}  // namespace femorax::bench

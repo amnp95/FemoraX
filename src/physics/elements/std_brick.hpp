@@ -202,6 +202,58 @@ struct StdBrick {
     s.dvol = wg * xsj;
   }
 
+  // --- Precomputed geometry (small strain: the reference geometry never changes) --------
+  // Per Gauss point: the 24 global derivatives shp[0..2][0..7] in that order, then dvol.
+  static constexpr int NGEOM = 25;
+
+  // Shape function values N_j at point gp: shp3d's shp[3][*], with the same arithmetic
+  // (they depend on the natural coordinates only, so they are not stored).
+  FEMORAX_HD static void point_shape_values(int gp, double N[8]) {
+    const double one_over_root3 = 1.0 / std::sqrt(3.0);
+    const double sg[2] = {-one_over_root3, one_over_root3};
+    const double ss[3] = {sg[(gp >> 2) & 1], sg[(gp >> 1) & 1], sg[gp & 1]};
+    const double ap1 = 1.0 + ss[0], am1 = 1.0 - ss[0];
+    const double ap2 = 1.0 + ss[1], am2 = 1.0 - ss[1];
+    const double ap3 = 1.0 + ss[2], am3 = 1.0 - ss[2];
+    double c1 = 0.125 * am1 * am2;
+    N[0] = c1 * am3;
+    N[4] = c1 * ap3;
+    c1 = 0.125 * ap1 * ap2;
+    N[2] = c1 * am3;
+    N[6] = c1 * ap3;
+    c1 = 0.125 * am1 * ap2;
+    N[3] = c1 * am3;
+    N[7] = c1 * ap3;
+    c1 = 0.125 * ap1 * am2;
+    N[1] = c1 * am3;
+    N[5] = c1 * ap3;
+  }
+
+  // Compute point gp's geometry and store it (compile step).
+  FEMORAX_HD static void point_store_geometry(const double xl[3][8], int gp, Strided<double> g) {
+    PointShape s;
+    point_geometry(xl, gp, s);
+    for (int k = 0; k < 24; ++k) g[k] = s.shp[k / 8][k % 8];
+    g[24] = s.dvol;
+  }
+
+  // Rebuild point gp's shape from stored geometry: bit-identical to point_geometry.
+  FEMORAX_HD static void point_load_geometry(int gp, Strided<const double> g, PointShape& s) {
+    for (int k = 0; k < 24; ++k) s.shp[k / 8][k % 8] = g[k];
+    point_shape_values(gp, s.shp[3]);
+    s.dvol = g[24];
+  }
+
+  // Geometry sources for compute: recomputed from coordinates, or loaded from the cache.
+  struct RecomputedGeometry {
+    const double (*xl)[8];
+    FEMORAX_HD void shape(int gp, PointShape& s) const { point_geometry(xl, gp, s); }
+  };
+  struct CachedGeometry {
+    PointArray<const double> g;
+    FEMORAX_HD void shape(int gp, PointShape& s) const { point_load_geometry(gp, g.point(gp), s); }
+  };
+
   // Brick::update: strain (11 22 33 12 23 31, engineering shear) from nodal values u.
   // The same operator gives the strain rate from nodal velocities.
   FEMORAX_HD static void point_strain(const PointShape& s, const double ul[NDOF],
@@ -304,7 +356,18 @@ struct StdBrick {
                                       int i, Strided<const double> committed_i,
                                       Strided<double> trial_i, const double (*D0)[NSTRESS],
                                       PointResult& r, double (*dd)[NSTRESS]) {
-    point_geometry(xl, i, r.s);
+    PointShape s;
+    point_geometry(xl, i, s);
+    point_update_shape(p, damp, s, ue, ve, committed_i, trial_i, D0, r, dd);
+  }
+
+  // The same with the point's shape already built (recomputed or from the cache).
+  FEMORAX_HD static void point_update_shape(const Params& p, const Rayleigh& damp,
+                                            const PointShape& s, const double* ue,
+                                            const double* ve, Strided<const double> committed_i,
+                                            Strided<double> trial_i, const double (*D0)[NSTRESS],
+                                            PointResult& r, double (*dd)[NSTRESS]) {
+    r.s = s;
     double strain[NSTRESS];
     point_strain(r.s, ue, strain);
     Mat::update(p.mat, committed_i, trial_i, strain, r.stress, dd);
@@ -377,7 +440,17 @@ struct StdBrick {
                                  double* fe, double (*Ke)[NDOF], Work& work) {
     double xl[3][8];
     local_coords(xe, xl);
+    compute_with<WantK>(ctx, RecomputedGeometry{xl}, p, damp, ue, ve, committed, trial, fe, Ke,
+                        work);
+  }
 
+  // compute with any geometry source (RecomputedGeometry or CachedGeometry).
+  template <bool WantK, class Ctx, class Geometry>
+  FEMORAX_HD static void compute_with(const Ctx& ctx, const Geometry& geometry, const Params& p,
+                                      const Rayleigh& damp, const double* ue, const double* ve,
+                                      PointArray<const double> committed,
+                                      PointArray<double> trial, double* fe,
+                                      double (*Ke)[NDOF], Work& work) {
     inner_for(ctx, NNODE, [&](int j) {
       for (int q = 0; q < 3; q++) work.resid[3 * j + q] = work.fdamp[3 * j + q] = 0.0;
     });
@@ -393,9 +466,11 @@ struct StdBrick {
     if (damp.betaKinit != 0.0) Mat::initial_tangent(p.mat, D0);
 
     for (int i = 0; i < NGP; i++) {
+      PointShape s;
+      geometry.shape(i, s);
       PointResult r;
       double dd[NSTRESS][NSTRESS];
-      point_update(p, damp, xl, ue, ve, i, committed.point(i), trial.point(i), D0, r, dd);
+      point_update_shape(p, damp, s, ue, ve, committed.point(i), trial.point(i), D0, r, dd);
 
       inner_for(ctx, NNODE, [&](int j) {
         double residJ[3], body[3], dampJ[3];
@@ -431,6 +506,17 @@ struct StdBrick {
                                  double* fe, double (*Ke)[NDOF]) {
     Work work;
     compute<WantK>(SerialInner{}, p, damp, xe, ue, ve, committed, trial, fe, Ke, work);
+  }
+
+  // Serial form with precomputed geometry (geometry.point(gp) holds NGEOM values).
+  template <bool WantK>
+  FEMORAX_HD static void compute_cached(const Params& p, const Rayleigh& damp,
+                                        PointArray<const double> geometry, const double* ue,
+                                        const double* ve, PointArray<const double> committed,
+                                        PointArray<double> trial, double* fe, double (*Ke)[NDOF]) {
+    Work work;
+    compute_with<WantK>(SerialInner{}, CachedGeometry{geometry}, p, damp, ue, ve, committed,
+                        trial, fe, Ke, work);
   }
 
   // Brick::formInertiaTerms with tangFlag = 1: the full 24x24 mass matrix (row-major,

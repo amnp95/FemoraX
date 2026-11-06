@@ -46,13 +46,17 @@ TEST(Runtime, ReportsEveryEnabledBackend) {
 #endif
 }
 
-TEST(Runtime, DefaultSpaceIsOpenMPInCpuBuild) {
-#if defined(KOKKOS_ENABLE_OPENMP) && !defined(KOKKOS_ENABLE_CUDA) && !defined(KOKKOS_ENABLE_HIP)
+TEST(Runtime, DefaultSpaceMatchesTheBuild) {
+#if defined(KOKKOS_ENABLE_CUDA)
+  EXPECT_EQ(femorax::default_execution_space(), "Cuda");
+#elif defined(KOKKOS_ENABLE_HIP)
+  EXPECT_EQ(femorax::default_execution_space(), "HIP");
+#elif defined(KOKKOS_ENABLE_OPENMP)
   EXPECT_EQ(femorax::default_execution_space(), "OpenMP");
-  EXPECT_GE(femorax::default_concurrency(), 1);
 #else
-  GTEST_SKIP() << "not a CPU-only build";
+  EXPECT_EQ(femorax::default_execution_space(), "Serial");
 #endif
+  EXPECT_GE(femorax::default_concurrency(), 1);
 }
 
 TEST(Runtime, ReductionAgreesAcrossBackends) {

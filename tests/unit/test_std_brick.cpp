@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 namespace {
@@ -231,6 +232,34 @@ TEST(StdBrick, ForceOnlyPathMatchesFullPathBitwise) {
   double fe[NDOF];
   Brick::compute<false>(params(0), d, xe(x), u, v, {}, {}, fe, nullptr);
   for (int a = 0; a < NDOF; ++a) EXPECT_EQ(fe[a], full.fe[a]);
+}
+
+TEST(StdBrick, CachedGeometryMatchesRecomputedBitwise) {
+  const Coords x = distorted();
+  refdrv::Lcg rng(21);
+  double u[NDOF], v[NDOF];
+  for (double& a : u) a = 1e-3 * rng.symmetric();
+  for (double& a : v) a = 1e-2 * rng.symmetric();
+  const Rayleigh d{0.8, 1e-3, 2e-4, 3e-4};
+  double xl[3][8];
+  Brick::local_coords(xe(x), xl);
+  double geom[Brick::NGP * Brick::NGEOM];
+  const femorax::PointArray<double> g{geom, Brick::NGP, 1};  // per-point layout, 1 element
+  for (int gp = 0; gp < Brick::NGP; ++gp) Brick::point_store_geometry(xl, gp, g.point(gp));
+  for (int massType : {0, 1}) {
+    double f1[NDOF], f2[NDOF], K1[NDOF][NDOF], K2[NDOF][NDOF];
+    Brick::compute<true>(params(massType), d, xe(x), u, v, {}, {}, f1, K1);
+    Brick::compute_cached<true>(params(massType), d, g, u, v, {}, {}, f2, K2);
+    EXPECT_EQ(std::memcmp(f1, f2, sizeof(f1)), 0);
+    EXPECT_EQ(std::memcmp(K1, K2, sizeof(K1)), 0);
+  }
+  // The stored shape-function values equal shp3d's, bit for bit.
+  for (int gp = 0; gp < Brick::NGP; ++gp) {
+    Brick::PointShape a, b;
+    Brick::point_geometry(xl, gp, a);
+    Brick::point_load_geometry(gp, g.point(gp), b);
+    EXPECT_EQ(std::memcmp(&a, &b, sizeof(a)), 0) << "gp " << gp;
+  }
 }
 
 TEST(StdBrick, MassMatricesConserveTotalMass) {

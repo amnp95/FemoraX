@@ -1,6 +1,10 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "cpu-base",
@@ -28,7 +32,9 @@
       "name": "cpu-release",
       "displayName": "CPU (Serial + OpenMP), release",
       "inherits": "cpu-base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     },
     {
       "name": "cpu-asan",
@@ -39,28 +45,81 @@
         "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
       }
+    },
+    {
+      "name": "cuda-ampere86",
+      "displayName": "CUDA, Ampere 8.6 (RTX 30-series laptop), release",
+      "description": "Run 'cmake -P cmake/FetchKokkosSource.cmake' once first (provides nvcc_wrapper).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "PATH": "/usr/local/cuda-13.1/bin:$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "${sourceDir}/build/_kokkos/kokkos-5.1.0/bin/nvcc_wrapper",
+        "FETCHCONTENT_SOURCE_DIR_KOKKOS": "${sourceDir}/build/_kokkos/kokkos-5.1.0",
+        "Kokkos_ENABLE_SERIAL": "ON",
+        "Kokkos_ENABLE_OPENMP": "OFF",
+        "Kokkos_ENABLE_CUDA": "ON",
+        "Kokkos_ARCH_AMPERE86": "ON",
+        "FEMORAX_BUILD_TESTS": "ON",
+        "FEMORAX_WERROR": "ON"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "cpu-debug", "configurePreset": "cpu-debug" },
-    { "name": "cpu-release", "configurePreset": "cpu-release" },
-    { "name": "cpu-asan", "configurePreset": "cpu-asan" }
+    {
+      "name": "cpu-debug",
+      "configurePreset": "cpu-debug"
+    },
+    {
+      "name": "cpu-release",
+      "configurePreset": "cpu-release"
+    },
+    {
+      "name": "cpu-asan",
+      "configurePreset": "cpu-asan"
+    },
+    {
+      "name": "cuda-ampere86",
+      "configurePreset": "cuda-ampere86",
+      "environment": {
+        "PATH": "/usr/local/cuda-13.1/bin:$penv{PATH}"
+      }
+    }
   ],
   "testPresets": [
     {
       "name": "cpu-debug",
       "configurePreset": "cpu-debug",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "cpu-release",
       "configurePreset": "cpu-release",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
     },
     {
       "name": "cpu-asan",
       "configurePreset": "cpu-asan",
-      "output": { "outputOnFailure": true }
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "cuda-ampere86",
+      "configurePreset": "cuda-ampere86",
+      "environment": {
+        "PATH": "/usr/local/cuda-13.1/bin:$penv{PATH}"
+      },
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

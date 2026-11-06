@@ -1,6 +1,7 @@
 # Launch layer: the only place Kokkos is used (CLAUDE.md rule 3).
 add_library(femorax_exec
   explicit_force.cpp
+  peak.cpp
   runtime.cpp
   stream.cpp
   timing.cpp)

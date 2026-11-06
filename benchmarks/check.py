@@ -153,12 +153,14 @@ def compare(current: dict, base: dict, tol: float) -> list[str]:
 def print_report(current: dict, base: dict | None, tol: float) -> None:
     cur = by_name(current)
     triad = cur.get("stream/triad", {}).get("gbytes_per_s", 0.0)
+    peak = cur.get("peak/fp64_fma", {}).get("gflops", 0.0)
     b = by_name(base) if base else {}
-    print(f"{'benchmark':36s} {'per':>5s} {'min [us]':>11s} {'GB/s':>8s} {'%triad':>7s}"
-          f" {'base [us]':>11s} {'change':>8s}")
+    print(f"{'benchmark':44s} {'min [us]':>11s} {'GB/s':>8s} {'%triad':>7s} {'GFLOP/s':>8s}"
+          f" {'%peak':>6s} {'base [us]':>11s} {'change':>8s}")
     for name in sorted(cur):
         r = cur[name]
         frac = f"{100 * r['gbytes_per_s'] / triad:6.1f}%" if triad > 0 and r["bytes"] else "     - "
+        pk = f"{100 * r['gflops'] / peak:5.1f}%" if peak > 0 and r["flops"] else "    - "
         if name in b:
             ratio = r["min_s"] / b[name]["min_s"] - 1.0
             gated = r.get("gated", True)
@@ -168,7 +170,8 @@ def print_report(current: dict, base: dict | None, tol: float) -> None:
             tail = f" {b[name]['min_s'] * 1e6:11.2f} {ratio:+7.1%}{flag}"
         else:
             tail = f" {'new':>11s}"
-        print(f"{name:36s} {r['unit']:>5s} {r['min_s'] * 1e6:11.2f} {r['gbytes_per_s']:8.2f} {frac}{tail}")
+        print(f"{name:44s} {r['min_s'] * 1e6:11.2f} {r['gbytes_per_s']:8.2f} {frac} "
+              f"{r['gflops']:8.2f} {pk}{tail}")
     for name in sorted(set(b) - set(cur)):
         print(f"{name:36s} (in baseline, not run)")
 

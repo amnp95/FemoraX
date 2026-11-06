@@ -16,6 +16,8 @@
 
 #include <cmath>
 #include <cstring>
+#include <algorithm>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -237,7 +239,7 @@ struct KokkosLaneResult {
 };
 
 KokkosLaneResult run_kokkos_lanes(const std::vector<Element>& els, const Brick::Params& p,
-                                  const Rayleigh& d) {
+                                  const Rayleigh& d, int vl) {
   using Space = Kokkos::DefaultExecutionSpace;
   using Policy = Kokkos::TeamPolicy<Space>;
   using Member = Policy::member_type;
@@ -252,7 +254,6 @@ KokkosLaneResult run_kokkos_lanes(const std::vector<Element>& els, const Brick::
   Kokkos::View<double**, Space> fe("fe", nE, NDOF), Ke("Ke", nE, NDOF * NDOF);
   Kokkos::View<double*, Space> reduced("reduced", nE);
 
-  const int vl = Policy::vector_length_max();
   constexpr int work_doubles = 2 * NDOF + NDOF + NDOF * NDOF + 64;  // Work, fe, Ke, reduce
   Policy policy(nE, 1, vl);
   policy.set_scratch_size(0, Kokkos::PerTeam(work_doubles * sizeof(double)));
@@ -282,7 +283,23 @@ TEST(MemoryContract, KokkosLaneMappingMatchesSerial) {
   const int nE = static_cast<int>(els.size());
   const Brick::Params p{{377000.0, 0.3, 2.0285}, {0.5, -1.0, -19.9}, 0};
   const Rayleigh d{0.3, 1e-3, 2e-4, 3e-4};
-  const auto [fe, Ke, reduced] = run_kokkos_lanes(els, p, d);
+  // Lanes per thread: one, and the backend's maximum (a full warp on a GPU).
+  using Policy = Kokkos::TeamPolicy<Kokkos::DefaultExecutionSpace>;
+  const int vmax = std::min(Policy::vector_length_max(), 32);
+  const auto one = run_kokkos_lanes(els, p, d, 1);
+  const auto [fe, Ke, reduced] = run_kokkos_lanes(els, p, d, vmax);
+  // The lane split never changes a bit, on any backend.
+  auto bits = [](const auto& a, const auto& b) {
+    auto ha = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), a);
+    auto hb = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), b);
+    return std::memcmp(ha.data(), hb.data(), ha.size() * sizeof(double)) == 0;
+  };
+  EXPECT_TRUE(bits(one.fe, fe)) << "fe differs between 1 and " << vmax << " lanes";
+  EXPECT_TRUE(bits(one.Ke, Ke)) << "Ke differs between 1 and " << vmax << " lanes";
+  EXPECT_TRUE(bits(one.reduced, reduced)) << "inner_reduce differs between 1 and " << vmax << " lanes";
+  // Against the host serial result: bit for bit on host backends; to rounding where the
+  // device compiler fuses multiply-adds (nvcc --fmad=true).
+  constexpr bool host = std::is_same_v<Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>;
   auto h_fe = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), fe);
   auto h_Ke = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), Ke);
   auto h_red = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), reduced);
@@ -291,9 +308,13 @@ TEST(MemoryContract, KokkosLaneMappingMatchesSerial) {
     Brick::compute<true>(p, d, els[e].xe, els[e].u, els[e].v, {}, {}, f, K);
     double s = 0;
     for (int i = 0; i < NDOF; ++i) s += f[i] * (i + 1);
-    for (int i = 0; i < NDOF; ++i) EXPECT_EQ(h_fe(e, i), f[i]) << "element " << e;
-    for (int i = 0; i < NDOF * NDOF; ++i) EXPECT_EQ(h_Ke(e, i), (&K[0][0])[i]) << "element " << e;
-    EXPECT_EQ(h_red(e), s) << "element " << e;
+    double fs = 0, ks = 0;
+    for (int i = 0; i < NDOF; ++i) fs = std::max(fs, std::abs(f[i]));
+    for (int i = 0; i < NDOF * NDOF; ++i) ks = std::max(ks, std::abs((&K[0][0])[i]));
+    const double tf = host ? 0.0 : 1e-13 * fs, tk = host ? 0.0 : 1e-13 * ks;
+    for (int i = 0; i < NDOF; ++i) EXPECT_NEAR(h_fe(e, i), f[i], tf) << "element " << e;
+    for (int i = 0; i < NDOF * NDOF; ++i) EXPECT_NEAR(h_Ke(e, i), (&K[0][0])[i], tk) << "element " << e;
+    EXPECT_NEAR(h_red(e), s, host ? 0.0 : 1e-13 * std::abs(s) * NDOF) << "element " << e;
   }
 }
 

@@ -117,7 +117,20 @@ ctest --preset cpu-debug
   `.venv/bin/python schema/v0/make_example.py <dir>`.
 - Reader tests use fixtures written by `tests/io/make_fixtures.py` (one file per rule,
   listed in its manifest); add a fixture for every new reader rule.
-- CUDA and HIP builds: not set up yet (separate build trees, `-DKokkos_ENABLE_CUDA=ON`).
+- CUDA build (laptop RTX 3050 Ti, Ampere 8.6; CUDA 13.1 in `/usr/local/cuda-13.1`):
+  ```
+  cmake -P cmake/FetchKokkosSource.cmake   # once: pinned Kokkos source with nvcc_wrapper
+  cmake --preset cuda-ampere86
+  cmake --build --preset cuda-ampere86 -j8
+  ctest --preset cuda-ampere86
+  ```
+  `scripts/check.sh` adds this preset when `nvidia-smi` sees a GPU. The card's FP64 rate is
+  1/64 of FP32: its FP64 timings do not represent data-center GPUs; its memory behaviour
+  does. HIP: not set up yet.
+- Determinism is per backend: every layout, scatter and geometry mode gives the same bits
+  run after run on one backend. CPU and GPU results agree to rounding only, because nvcc
+  fuses multiply-adds (`--fmad=true`); GPU tests compare with host references at a
+  tolerance.
 
 ## Performance
 
@@ -167,8 +180,12 @@ regression.
 
 ## Development hardware
 
-The GPU laptops have not arrived. Develop and test on the Kokkos Serial and OpenMP backends
-first. Every kernel must pass its tests on CPU before it is run on GPU.
+- CPU: Intel i7-11370H (4 cores, 8 threads), measured 45 GB/s triad, 32 GFLOP/s FP64 with
+  this build's flags.
+- GPU: NVIDIA GeForce RTX 3050 Ti Laptop GPU (4 GB, Ampere 8.6) through WSL, measured
+  152 GB/s triad, 102 GFLOP/s FP64.
+- Run benchmarks on AC power: on battery the laptop throttles (40% slower kernels).
+- Every kernel must pass its tests on CPU before it is run on GPU.
 
 ## Conventions
 

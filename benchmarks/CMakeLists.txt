@@ -4,7 +4,8 @@ add_executable(femorax_bench
   bench_main.cpp
   harness.cpp
   bench_stream.cpp
-  bench_explicit.cpp)
+  bench_explicit.cpp
+  flop_count.cpp)
 target_link_libraries(femorax_bench PRIVATE femorax::exec femorax::compile)
 target_compile_definitions(femorax_bench PRIVATE FEMORAX_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
 femorax_set_warnings(femorax_bench)

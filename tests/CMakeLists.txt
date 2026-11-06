@@ -25,10 +25,13 @@ gtest_discover_tests(femorax_unit_tests
   TEST_PREFIX "unit."
   DISCOVERY_MODE PRE_TEST)
 
-foreach(nthreads 1 8)
-  add_test(NAME unit_all.threads${nthreads}
-           COMMAND femorax_unit_tests --kokkos-num-threads=${nthreads})
-endforeach()
+# OpenMP builds: the whole binary again with 1 and 8 threads (thread-count dependence).
+if(Kokkos_ENABLE_OPENMP)
+  foreach(nthreads 1 8)
+    add_test(NAME unit_all.threads${nthreads}
+             COMMAND femorax_unit_tests --kokkos-num-threads=${nthreads})
+  endforeach()
+endif()
 
 # ---------------------------------------------------------------------------
 # Physics purity (CLAUDE.md rule 2)
@@ -71,8 +74,15 @@ add_test(NAME app.version COMMAND femorax --version)
 set_tests_properties(app.version PROPERTIES
   PASS_REGULAR_EXPRESSION "^femorax ${PROJECT_VERSION}")
 add_test(NAME app.info COMMAND femorax info)
+set(expected_spaces "Serial")
+if(Kokkos_ENABLE_OPENMP)
+  string(APPEND expected_spaces ".*OpenMP")
+endif()
+if(Kokkos_ENABLE_CUDA)
+  string(APPEND expected_spaces ".*Cuda")
+endif()
 set_tests_properties(app.info PROPERTIES
-  PASS_REGULAR_EXPRESSION "Kokkos ${FEMORAX_KOKKOS_VERSION}.*execution spaces:.*Serial.*OpenMP")
+  PASS_REGULAR_EXPRESSION "Kokkos ${FEMORAX_KOKKOS_VERSION}.*execution spaces:.*${expected_spaces}")
 add_test(NAME app.unknown_command COMMAND femorax frobnicate)
 set_tests_properties(app.unknown_command PROPERTIES WILL_FAIL TRUE)
 

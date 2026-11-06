@@ -13,6 +13,7 @@
 #include <cstring>
 #include <map>
 #include <set>
+#include <type_traits>
 
 namespace {
 
@@ -63,8 +64,14 @@ std::vector<double> reference_force(const Compiled& c, const std::vector<double>
   return f;
 }
 
+// Host backends compute like the host reference, bit for bit. A GPU compiler fuses
+// multiply-adds (nvcc --fmad=true), so there the reference holds to rounding only.
+constexpr bool kHostBackend =
+    std::is_same_v<Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>;
+
 std::vector<double> run(ExplicitForce& k, const std::vector<double>& u, const std::vector<double>& v,
-                        Layout l, Scatter s, int ept = 0) {
+                        Layout l, Scatter s, int ept = 0,
+                        femorax::exec::Geometry g = femorax::exec::Geometry::Recompute) {
   auto hu = Kokkos::create_mirror_view(k.u);
   auto hv = Kokkos::create_mirror_view(k.v);
   for (std::size_t i = 0; i < u.size(); ++i) {
@@ -73,7 +80,7 @@ std::vector<double> run(ExplicitForce& k, const std::vector<double>& u, const st
   }
   Kokkos::deep_copy(k.u, hu);
   Kokkos::deep_copy(k.v, hv);
-  k.compute(l, s, ept);
+  k.compute(l, s, ept, g);
   auto hf = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), k.f);
   return std::vector<double>(hf.data(), hf.data() + hf.extent(0));
 }
@@ -152,16 +159,28 @@ TEST(ExplicitForce, EveryLayoutAndScatterMatchesTheHostReference) {
     for (double x : ref) scale = std::max(scale, std::abs(x));
     ASSERT_GT(scale, 0.0);
 
-    for (Layout l : {Layout::Flat, Layout::Team}) {
-      for (int ept : {1, 3, 4}) {
-        if (l == Layout::Flat && ept != 1) continue;
-        SCOPED_TRACE(std::string(femorax::exec::to_string(l)) + " ept " + std::to_string(ept));
-        // Colored: bit-identical to the host reference, whatever the thread count.
-        const auto fc = run(k, u, v, l, Scatter::Colored, ept);
-        EXPECT_EQ(std::memcmp(fc.data(), ref.data(), ref.size() * sizeof(double)), 0);
-        // Atomic: the same sums in another order.
-        const auto fa = run(k, u, v, l, Scatter::Atomic, ept);
-        for (std::size_t q = 0; q < ref.size(); ++q) EXPECT_NEAR(fa[q], ref[q], 1e-13 * scale);
+    // The deterministic result on this backend: flat, colored, recomputed geometry.
+    const auto base = run(k, u, v, Layout::Flat, Scatter::Colored);
+    if (kHostBackend) {
+      EXPECT_EQ(std::memcmp(base.data(), ref.data(), ref.size() * sizeof(double)), 0);
+    } else {
+      for (std::size_t q = 0; q < ref.size(); ++q) EXPECT_NEAR(base[q], ref[q], 1e-13 * scale);
+    }
+    for (auto g : {femorax::exec::Geometry::Recompute, femorax::exec::Geometry::Cached}) {
+      for (Layout l : {Layout::Flat, Layout::Team}) {
+        for (int ept : {1, 3, 4}) {
+          if (l == Layout::Flat && ept != 1) continue;
+          SCOPED_TRACE(std::string(femorax::exec::to_string(l)) + " ept " + std::to_string(ept) +
+                       " " + femorax::exec::to_string(g));
+          // Colored: bit-identical to the base result, run after run and in every layout.
+          const auto fc = run(k, u, v, l, Scatter::Colored, ept, g);
+          EXPECT_EQ(std::memcmp(fc.data(), base.data(), base.size() * sizeof(double)), 0);
+          const auto again = run(k, u, v, l, Scatter::Colored, ept, g);
+          EXPECT_EQ(std::memcmp(again.data(), fc.data(), fc.size() * sizeof(double)), 0);
+          // Atomic: the same sums in another order.
+          const auto fa = run(k, u, v, l, Scatter::Atomic, ept, g);
+          for (std::size_t q = 0; q < ref.size(); ++q) EXPECT_NEAR(fa[q], base[q], 1e-13 * scale);
+        }
       }
     }
   }
