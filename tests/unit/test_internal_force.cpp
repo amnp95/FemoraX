@@ -405,6 +405,18 @@ TEST(ForceSettings, ChoiceOrderOverrideThenSavedThenTuned) {
   std::filesystem::remove(cache);
 }
 
+TEST(ForceSettings, SSPbrickDefaultsToTheCachedGeometry) {
+  // SSPbrick's recompute path rebuilds the stabilization in every call (4-6x slower on the
+  // laptop), so the default force and operator settings must resolve to the cache whenever
+  // it exists; GeometryCache::Auto builds it on a model this small.
+  const Compiled c = compile_model(column(femorax::io::ElementType::SSPbrick), CompileOptions{});
+  InternalForce k(c, femorax::exec::GeometryCache::Auto);
+  ASSERT_TRUE(k.has_geometry_cache());
+  EXPECT_EQ(k.resolve(femorax::exec::default_force_settings()).geometry, femorax::exec::Geometry::Cached);
+  EXPECT_EQ(k.resolve(femorax::exec::OperatorSettings{}).geometry, femorax::exec::Geometry::Cached);
+  EXPECT_GT(k.geometry_cache_bytes(), 0);
+}
+
 TEST(ForceSettings, SettingsStringsRoundTrip) {
   for (const auto* t : {"flat_gather", "flat_gather_cached", "team_gather_ept4_cached", "team_atomic_ept2",
                         "flat_colored"}) {

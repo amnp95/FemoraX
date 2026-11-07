@@ -10,10 +10,10 @@
 //
 // What is ported, and the OpenSees function it matches:
 //   point_geometry       GetStab's geometry: J[0..19], mVol, dNmod (the rows of Bnot), and
-//                        the bracket of getMass' massTerm / getResistingForce's polyJac
+//                        each node's volume weight (mass and body force; see below)
 //   point_strain         update: strain = Bnot u
 //   point_node_force     getResistingForce: mVol * Bnot^T stress
-//   point_body_force     getResistingForce, applyLoad == 0: b * polyJac at every node
+//   point_body_force     getResistingForce, applyLoad == 0: b times the node's volume weight
 //   point_block_tangent  getTangentStiff's mVol * Bnot^T C Bnot, by node-pair block
 //   element_constants    GetStab's hourglass vectors (gst gut gus gstu: the rows of Mben)
 //                        and the 12 x 12 matrix interior = FCF - KuT FeCFe^-1 FeCFhg, from
@@ -41,6 +41,13 @@
 //   different rounding order.
 // - interior is stored as its upper triangle (78 values), so Kstab is exactly symmetric;
 //   OpenSees' product KuT FeCFe^-1 FeCFhg is symmetric to rounding only.
+// - Mass and body force (docs/deviations.md, "SSPbrick: exact lumped mass"): node i's
+//   volume weight is the integral of N_i over the element (2 x 2 x 2 Gauss, exact for the
+//   trilinear map, as stdBrick's lumped mass), so the total mass and body force are rho V
+//   and b V for every shape. OpenSees' getMass / polyJac, J[0] * (1 + (...)/3 + ...), is
+//   exact only for parallelepipeds; it stays available as a test-only option
+//   (SSPbrickMass::OpenSees) so the distorted-element comparisons with OpenSees still check
+//   everything else.
 // - Only the body-force path with no eleLoad (applyLoad == 0) exists; schema v0 has no
 //   eleLoad.
 
@@ -53,6 +60,7 @@
 #include "physics/common/strided.hpp"
 #include "physics/common/sym_eigen.hpp"
 #include "physics/contracts.hpp"
+#include "physics/elements/std_brick.hpp"
 #include "physics/explicit_stability.hpp"
 #include "physics/macros.hpp"
 
@@ -757,9 +765,27 @@ FEMORAX_HD inline void interior_matrix(const Geometry& g, double C1, double C2, 
     }
 }
 
+// The integral of N_i over the element, at every node: 2 x 2 x 2 Gauss on the trilinear map
+// (exact), the same points and order as stdBrick's lumped mass (Brick::formInertiaTerms).
+FEMORAX_HD inline void nodal_volumes(const double xl[3][8], double w[8]) {
+  for (int j = 0; j < 8; ++j) w[j] = 0.0;
+  const double one_over_root3 = 1.0 / std::sqrt(3.0);
+  const double sg[2] = {-one_over_root3, one_over_root3};
+  for (int gp = 0; gp < 8; ++gp) {
+    const double ss[3] = {sg[(gp >> 2) & 1], sg[(gp >> 1) & 1], sg[gp & 1]};
+    double shp[4][8], xsj;
+    brick_detail::shp3d(ss, xsj, shp, xl);
+    for (int j = 0; j < 8; ++j) w[j] += shp[3][j] * xsj;
+  }
+}
+
 }  // namespace ssp_detail
 
-template <class Mat>
+// How SSPbrick weights its nodes for the mass and the body force: Exact (the integral of
+// N_i; production) or OpenSees (getMass' formula, exact for parallelepipeds only; tests).
+enum class SSPbrickMass : int { Exact = 0, OpenSees = 1 };
+
+template <class Mat, SSPbrickMass MASS_FORMULA = SSPbrickMass::Exact>
 struct SSPbrick {
   static_assert(Material<Mat>);
   using Material = Mat;
@@ -794,13 +820,12 @@ struct SSPbrick {
     double b[3];  // body force per unit volume (b1 b2 b3)
   };
 
-  // The single integration point: Bnot's derivatives, the volume, J[0] and the per-node
-  // bracket of the mass and body-force integrals.
+  // The single integration point: Bnot's derivatives, the volume, and each node's volume
+  // weight (mass = rho * nodeVol, body force = b * nodeVol).
   struct PointShape {
     double dNmod[8][3];
     double mVol;
-    double J0;
-    double poly[8];
+    double nodeVol[8];
   };
 
   FEMORAX_HD static void local_coords(const double (*xe)[NDM], double xl[3][8]) {
@@ -819,29 +844,30 @@ struct SSPbrick {
     for (int i = 0; i < 8; ++i)
       for (int k = 0; k < 3; ++k) s.dNmod[i][k] = g.dNmod[i][k];
     s.mVol = g.mVol;
-    s.J0 = g.J[0];
-    for (int i = 0; i < 8; ++i) s.poly[i] = ssp_detail::poly_bracket(g.J, h, i);
+    if constexpr (MASS_FORMULA == SSPbrickMass::OpenSees) {
+      for (int i = 0; i < 8; ++i) s.nodeVol[i] = g.J[0] * ssp_detail::poly_bracket(g.J, h, i);  // polyJac
+    } else {
+      ssp_detail::nodal_volumes(xl, s.nodeVol);
+    }
   }
 
   // --- Precomputed geometry ---------------------------------------------------------------
-  // dNmod (24 values, node-major), mVol, J0, poly (8).
-  static constexpr int NGEOM = 24 + 1 + 1 + 8;
+  // dNmod (24 values, node-major), mVol, nodeVol (8).
+  static constexpr int NGEOM = 24 + 1 + 8;
 
   FEMORAX_HD static void point_store_geometry(const double xl[3][8], int gp, Strided<double> g) {
     PointShape s;
     point_geometry(xl, gp, s);
     for (int k = 0; k < 24; ++k) g[k] = s.dNmod[k / 3][k % 3];
     g[24] = s.mVol;
-    g[25] = s.J0;
-    for (int i = 0; i < 8; ++i) g[26 + i] = s.poly[i];
+    for (int i = 0; i < 8; ++i) g[25 + i] = s.nodeVol[i];
   }
 
   FEMORAX_HD static void point_load_geometry(int gp, Strided<const double> g, PointShape& s) {
     (void)gp;
     for (int k = 0; k < 24; ++k) s.dNmod[k / 3][k % 3] = g[k];
     s.mVol = g[24];
-    s.J0 = g[25];
-    for (int i = 0; i < 8; ++i) s.poly[i] = g[26 + i];
+    for (int i = 0; i < 8; ++i) s.nodeVol[i] = g[25 + i];
   }
 
   // --- Element constants (GetStab) ----------------------------------------------------------
@@ -972,10 +998,9 @@ struct SSPbrick {
     fj[2] = (bz * stress[2] + by * stress[4] + bx * stress[5]) * s.mVol;
   }
 
-  // getResistingForce (applyLoad == 0): mInternalForces(3i+q) -= b[q] * polyJac.
+  // getResistingForce (applyLoad == 0): mInternalForces(3i+q) -= b[q] * (node i's weight).
   FEMORAX_HD static double point_body_force(const Params& p, const PointShape& s, int j, int q) {
-    const double polyJac = s.J0 * s.poly[j];
-    return p.b[q] * polyJac;
+    return p.b[q] * s.nodeVol[j];
   }
 
   // The point's share of the 3x3 block (J, K) of mVol Bnot^T D Bnot.
@@ -999,9 +1024,9 @@ struct SSPbrick {
       }
   }
 
-  // getMass' massTerm at node j: density * J[0] * bracket.
+  // The lumped mass at node j: density times the node's volume weight.
   FEMORAX_HD static double node_mass(const Params& p, const PointShape& s, int j) {
-    return Mat::density(p.mat) * s.J0 * s.poly[j];
+    return Mat::density(p.mat) * s.nodeVol[j];
   }
 
   // (M v) at node j: the lumped mass times v_j (one point holds the whole mass).

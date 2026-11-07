@@ -316,20 +316,51 @@ TEST(SSPbrick, MassIsDiagonalAndExactForParallelepipeds) {
     for (double mm : mb) vb += mm;
     EXPECT_NEAR(rhoV, vb, 1e-13 * vb);
   }
-  // OpenSees' getMass formula (density * J[0] * (1 + ...)) does not conserve the mass of a
-  // distorted element; ported as is (docs/deviations.md, "SSPbrick"). Record the size.
-  const Coords x = distorted(0.15);
-  double m[8];
-  Ssp::lumped_mass(params(), xe(x), m);
-  double xl[3][8];
-  Ssp::local_coords(xe(x), xl);
-  Ssp::PointShape s;
-  Ssp::point_geometry(xl, 0, s);
-  double total = 0;
-  for (double mm : m) total += mm;
-  const double rel = total / (2.0285 * s.mVol) - 1.0;
-  std::printf("[ SSPbrick mass of a distorted element: %.3e relative to rho * volume ]\n", rel);
-  EXPECT_LT(std::abs(rel), 2e-2);
+}
+
+TEST(SSPbrick, TotalMassAndBodyForceAreRhoVAndBVOnDistortedElements) {
+  // The exact lumped mass (docs/deviations.md): node i carries rho times the integral of N_i,
+  // so the totals are rho V and b V for every shape, and the nodal split equals stdBrick's
+  // lumped mass (the row sums of the consistent mass). V: SSPbrick's own mVol.
+  using SspOS = femorax::SSPbrick<ElasticIsotropic, femorax::SSPbrickMass::OpenSees>;
+  const Brick::Params pb{{377000.0, 0.3, 2.0285}, {0, 0, 0}, 1};
+  for (double amp : {0.05, 0.15, 0.3}) {
+    SCOPED_TRACE("perturbation " + std::to_string(amp));
+    const Coords x = distorted(amp);
+    double xl[3][8];
+    Ssp::local_coords(xe(x), xl);
+    Ssp::PointShape s;
+    Ssp::point_geometry(xl, 0, s);
+    const double V = s.mVol, rho = 2.0285;
+    double m[8], mb[8];
+    Ssp::lumped_mass(params(), xe(x), m);
+    Brick::lumped_mass(pb, xe(x), mb);
+    double total = 0;
+    for (int n = 0; n < 8; ++n) {
+      total += m[n];
+      EXPECT_NEAR(m[n], mb[n], 1e-13 * mb[n]) << "node " << n;
+    }
+    EXPECT_NEAR(total, rho * V, 1e-13 * rho * V);
+    // Body force alone (u = v = 0): the nodal forces sum to -b V in every direction.
+    const Ssp::Params pf{{377000.0, 0.3, 2.0285}, {0.5, -1.0, -19.9}};
+    const auto z = zeros();
+    double fe[NDOF];
+    Ssp::compute<false>(pf, {}, xe(x), z.data(), z.data(), {}, {}, fe, nullptr);
+    for (int q = 0; q < 3; ++q) {
+      double sum = 0;
+      for (int n = 0; n < 8; ++n) sum += fe[3 * n + q];
+      EXPECT_NEAR(sum, -pf.b[q] * V, 1e-13 * 19.9 * V) << "direction " << q;
+    }
+    // OpenSees' formula, kept as a test-only variant, is off by much more.
+    double mo[8];
+    SspOS::lumped_mass(SspOS::Params{{377000.0, 0.3, 2.0285}, {0, 0, 0}}, xe(x), mo);
+    double total_os = 0;
+    for (double v : mo) total_os += v;
+    const double rel = total_os / (rho * V) - 1.0;
+    std::printf("[ distorted by %.2f: OpenSees formula total mass %+.3e relative to rho V; exact %+.1e ]\n", amp,
+                rel, total / (rho * V) - 1.0);
+    EXPECT_GT(std::abs(rel), 1e-5);
+  }
 }
 
 TEST(SSPbrick, DampingForceIsRayleighMatrixTimesVelocity) {

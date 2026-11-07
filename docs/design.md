@@ -342,7 +342,7 @@ stays in the code, the tests and the benchmarks.
 ### Geometry cache
 
 - The recompute path is permanent. Cached geometry (25 doubles per Gauss point, 1.6 KB per
-  stdBrick; SSPbrick: 34 doubles at its one point plus 110 element constants, 1.2 KB) is
+  stdBrick; SSPbrick: 33 doubles at its one point plus 110 element constants, 1.1 KB) is
   used only for elements with `GEOMETRY_CACHEABLE`, and only if it fits: with
   `GeometryCache::Auto` the cache is built when the model, the cache and the work vectors
   fit in 80% of the device's free memory (`exec::device_free_memory_bytes`). Otherwise

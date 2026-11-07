@@ -138,31 +138,37 @@ Default tolerances (until a component states otherwise):
 - Why: performance rule 3a (no full element matrix in one thread; the explicit path forms
   no matrices) and the matrix-free implicit operator.
 - Effect on results: rounding only. Against OpenSees on 4 geometries x 2 materials x 4
-  fields: mass bit-identical; tangent and initial tangent within 9.0e-15 of the largest
-  entry, force within 1.2e-14, damping within 3.2e-14; 49,060 of 81,408 values
-  bit-identical.
+  fields (with OpenSees' mass formula, entry below): mass within 2.0e-16, tangent and
+  initial tangent within 9.0e-15 of the largest entry, force within 1.2e-14, damping
+  within 3.2e-14; 49,007 of 81,408 values bit-identical.
 - Test: `tests/unit/test_ssp_brick_reference.cpp` (gate: relative 1e-12, the element
   default); the system tests above.
 
-### SSPbrick — OpenSees' mass and body force of distorted elements (ported as is)
+### SSPbrick — exact lumped mass and body force (decided 2026-11-07, milestone 2)
 - OpenSees: `SRC/element/UWelements/SSPbrick.cpp` (`getMass`, `getResistingForce`),
   commit 955ceb0
-- Difference: none; FemoraX reproduces it (`ssp_detail::poly_bracket`). Recorded because
-  it is wrong for some meshes: node i's mass and body-force weight are `J[0] * (1 +
-  (... + J[7] + J[8] + J[9])/3 + (...)/9 + (...)/27)`, which adds 1 to terms with units of
-  volume. It is exact when `J[4..19]` vanish, i.e. for parallelepipeds (every Femora grid),
-  and wrong otherwise: the element's total mass and body force differ from `rho V` and
-  `b V` (`V`, SSPbrick's own volume, equals stdBrick's): 3.6e-3 relative with nodes moved
-  by up to 15% of the edge, 0.46% / 2.1% in the OpenSees example at 13% / 26%; the nodal
-  split differs from the consistent-mass row sums by up to 20%. The stable step uses the
-  same masses.
-- Why kept: matching OpenSees until it is decided; it changes nothing for Femora's
-  structured grids. A fix (integrating `N_i det J`, as stdBrick's lumped mass does) is a
-  one-function change in the element.
-- Effect on results: none for parallelepiped elements; for distorted ones, the mass and
-  gravity load errors above, as in OpenSees.
-- Test: `SSPbrick.MassIsDiagonalAndExactForParallelepipeds` (exact for boxes and sheared
-  parallelepipeds; reports the distorted case); the standalone OpenSees example
+- Difference: OpenSees gives node i the mass `density * J[0] * (1 + (... + J[7] + J[8] +
+  J[9])/3 + (...)/9 + (...)/27)` and the body force `b` times the same weight (`polyJac`).
+  The bracket adds 1 to terms with units of volume, so it is exact only when `J[4..19]`
+  vanish, i.e. for parallelepipeds. FemoraX weights node i by the integral of `N_i` over
+  the element (2 x 2 x 2 Gauss on the trilinear map, exact; the same points as stdBrick's
+  lumped mass): mass `rho * w_i`, body force `b * w_i`, so the totals are `rho V` and `b V`
+  for every shape. OpenSees' formula stays as a test-only variant
+  (`SSPbrick<Mat, SSPbrickMass::OpenSees>`).
+- Why: OpenSees' mass and gravity load are wrong for distorted elements: the totals are
+  off by 3.6e-4, 3.6e-3 and 1.7e-2 relative with nodes moved by up to 5%, 15% and 30% of
+  the edge (0.46% and 2.1% in the OpenSees example at 13% and 26%), and the nodal split
+  differs from the consistent-mass row sums by up to 20%. The stable step uses the same
+  masses.
+- Effect on results: rounding only for parallelepiped elements (every Femora grid):
+  against OpenSees on the cube and soil-column geometries the production element's mass
+  is within 6.6e-16, force within 5.4e-16, damping within 4.0e-15, tangent bit-identical.
+  On distorted elements FemoraX's mass and gravity load are the exact ones, OpenSees' are
+  not (above).
+- Test: `SSPbrick.TotalMassAndBodyForceAreRhoVAndBVOnDistortedElements` (totals rho V and
+  b V to 1e-13, nodal masses equal stdBrick's lumped mass), `SSPbrickReference.*` (every
+  geometry through the OpenSees-formula variant; the production element on the
+  parallelepipeds); the standalone OpenSees example
   `tests/reference/opensees_issues/6_sspbrick_distorted_mass.tcl`.
 
 ### stdBrick — features not ported
