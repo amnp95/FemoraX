@@ -59,7 +59,7 @@ class ReaderFixtures : public ::testing::Test {
 TEST_F(ReaderFixtures, ReadsExplicitSoilColumn) {
   const Model m = read_model(path("explicit.femorax.h5"));
   EXPECT_EQ(m.version.major, 0);
-  EXPECT_EQ(m.version.minor, 2);
+  EXPECT_EQ(m.version.minor, 3);
   EXPECT_EQ(m.ndm, 3);
   EXPECT_EQ(m.model_name, "layered_elastic_soil_column_explicit");
   EXPECT_TRUE(m.warnings.empty());
@@ -143,6 +143,43 @@ TEST_F(ReaderFixtures, ImplicitModelNeedsMilestone1b) {
   Capabilities with_implicit;
   with_implicit.implicit = true;
   EXPECT_NO_THROW(check_supported(m, with_implicit));
+}
+
+TEST_F(ReaderFixtures, StaticLoadControlAndModifiedNewton) {
+  // Schema 0.3: the gravity stage as a Static LoadControl analysis.
+  const Model s = read_model(path("static_load_control.femorax.h5"));
+  const auto& g = std::get<AnalysisStep>(s.process[0].step);
+  EXPECT_EQ(g.type, AnalysisType::Static);
+  EXPECT_EQ(g.integrator, Integrator::LoadControl);
+  EXPECT_DOUBLE_EQ(g.load_increment, 0.1);
+  EXPECT_EQ(g.load_num_iter, 2);
+  EXPECT_DOUBLE_EQ(g.load_min_increment.value(), 0.05);
+  EXPECT_DOUBLE_EQ(g.load_max_increment.value(), 0.2);
+  EXPECT_EQ(g.num_steps.value(), 10);
+  EXPECT_FALSE(g.final_time.has_value());
+  EXPECT_EQ(g.dt, 0.0);
+  Capabilities with_implicit;
+  with_implicit.implicit = true;
+  EXPECT_NO_THROW(check_supported(s, with_implicit));
+
+  // ModifiedNewton with its options and the FemoraX solver attributes.
+  const Model m = read_model(path("modified_newton.femorax.h5"));
+  const auto& a = std::get<AnalysisStep>(m.process[0].step);
+  EXPECT_EQ(a.algorithm, Algorithm::ModifiedNewton);
+  EXPECT_FALSE(a.modified_newton_initial);
+  EXPECT_TRUE(a.modified_newton_factor_once);
+  EXPECT_DOUBLE_EQ(a.solver_tolerance.value(), 1e-10);
+  EXPECT_EQ(a.solver_max_iterations.value(), 500);
+  EXPECT_EQ(a.preconditioner, Preconditioner::Jacobi);
+  EXPECT_EQ(std::get<AnalysisStep>(read_model(path("preconditioner_auto.femorax.h5")).process[0].step).preconditioner,
+            Preconditioner::Auto);
+  // Defaults when the attributes are absent.
+  const Model n = read_model(path("implicit_newmark.femorax.h5"));
+  const auto& d = std::get<AnalysisStep>(n.process[0].step);
+  EXPECT_EQ(d.type, AnalysisType::Transient);
+  EXPECT_FALSE(d.solver_tolerance.has_value());
+  EXPECT_FALSE(d.solver_max_iterations.has_value());
+  EXPECT_EQ(d.preconditioner, Preconditioner::Auto);  // absent: FemoraX chooses
 }
 
 TEST_F(ReaderFixtures, ReadsOlderMinorVersion) {

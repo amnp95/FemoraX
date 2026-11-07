@@ -331,6 +331,42 @@ def m_process_kind(kind):
     return m
 
 
+def gravity_step(f: h5py.File) -> h5py.Group:
+    """The first analysis step of the implicit example (the gravity stage)."""
+    return explicit_step(f)
+
+
+def m_static(extra=None, drop=("dt",), version=None):
+    """The gravity stage as a Static LoadControl analysis (schema 0.3)."""
+    def m(f):
+        g = gravity_step(f)
+        for k in drop:
+            if k in g.attrs:
+                del g.attrs[k]
+        for k in ("gamma", "beta"):
+            if k in g.attrs:
+                del g.attrs[k]
+        g.attrs["analysis_type"] = "Static"
+        g.attrs["integrator"] = "LoadControl"
+        g.attrs["load_increment"] = np.float64(0.1)
+        g.attrs["num_steps"] = np.int32(10)
+        for k, v in (extra or {}).items():
+            g.attrs[k] = v
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
+
+
+def m_attrs(values, version=None):
+    def m(f):
+        g = explicit_step(f)
+        for k, v in values.items():
+            g.attrs[k] = v
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
+
+
 S = "/process/{explicit}"  # placeholder resolved below
 
 CASES = [
@@ -347,7 +383,31 @@ CASES = [
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 0.x files", m_version(1, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 3)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 4)),
+    # --- schema 0.3: Static / LoadControl, ModifiedNewton, solver attributes ---------
+    ("static_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
+     m_static(version=[0, 2])),
+    ("static_with_dt", "implicit", "invalid", "applies only to Transient analyses",
+     m_static(drop=(), extra={"dt": np.float64(1.0)})),
+    ("static_without_steps", "implicit", "invalid", "missing",
+     lambda f: (m_static()(f), gravity_step(f).attrs.__delitem__("num_steps"))),
+    ("static_newmark", "implicit", "invalid", "a Static analysis needs the LoadControl integrator",
+     lambda f: (m_static()(f), gravity_step(f).attrs.__setitem__("integrator", "Newmark"))),
+    ("transient_load_control", "implicit", "invalid",
+     "the LoadControl integrator needs a Static analysis",
+     m_attrs({"integrator": "LoadControl", "load_increment": np.float64(0.1)})),
+    ("load_increment_on_newmark", "implicit", "invalid", "applies only to the LoadControl integrator",
+     m_attrs({"load_increment": np.float64(0.1)})),
+    ("modified_newton_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
+     m_attrs({"algorithm": "ModifiedNewton"}, version=[0, 2])),
+    ("modified_newton_flag_on_newton", "implicit", "invalid",
+     "applies only to the ModifiedNewton algorithm", m_attrs({"modified_newton_initial": np.uint8(1)})),
+    ("solver_tolerance_range", "implicit", "invalid", "must be in (0, 1)",
+     m_attrs({"solver_tolerance": np.float64(2.0)})),
+    ("solver_max_iterations_range", "implicit", "invalid", "must be at least 1",
+     m_attrs({"solver_max_iterations": np.int32(0)})),
+    ("solver_attribute_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
+     m_attrs({"solver_tolerance": np.float64(1e-8)}, version=[0, 2])),
     ("command_in_0_1_file", "explicit", "invalid", "was added in schema 0.2", m_commands("old_file")),
     ("command_mixed_pairs", "explicit", "invalid", "one equalDOF command ties one node pair",
      m_commands("mixed_pairs")),
@@ -435,6 +495,18 @@ CASES = [
      m_central_betak),
     ("implicit_newmark", "implicit", "unsupported", "Newmark (/process/000000) is available "
      "from milestone 1b", None),
+    # Read correctly (0.3), then refused by this build until the implicit stages land.
+    ("static_load_control", "implicit", "unsupported", "LoadControl (/process/000000) is available "
+     "from milestone 1b", m_static(extra={"num_iter": np.int32(2), "min_increment": np.float64(0.05),
+                                          "max_increment": np.float64(0.2)})),
+    ("modified_newton", "implicit", "unsupported", "available from milestone 1b",
+     m_attrs({"algorithm": "ModifiedNewton", "modified_newton_factor_once": np.uint8(1),
+              "solver_tolerance": np.float64(1e-10), "solver_max_iterations": np.int32(500),
+              "preconditioner": "jacobi"})),
+    ("preconditioner_auto", "implicit", "unsupported", "available from milestone 1b",
+     m_attrs({"preconditioner": "auto"})),
+    ("unknown_preconditioner", "implicit", "unsupported", 'preconditioner "ilu"',
+     m_attrs({"preconditioner": "ilu"})),
 ]
 
 

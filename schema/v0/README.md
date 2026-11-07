@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 0.2
+# FemoraX model file, schema version 0.3
 
-Status: **0.0, 0.1 and 0.2 approved 2026-11-05**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -41,6 +41,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.0 | first version |
 | 0.1 | VTKHDF recorder: optional `elements` dataset (the element tags to record); `region` stays rejected |
 | 0.2 | equalDOF: optional `command` dataset (which `equalDOF` command each row comes from) |
+| 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
 
@@ -96,7 +97,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `schema_version` | `[2]` int32 | `[0, 1]` (a reader of 0.1 also reads `[0, 0]`) |
+| `schema_version` | `[2]` int32 | `[0, 3]` (a reader of 0.3 also reads 0.0, 0.1 and 0.2) |
 | `ndm` | int32 | spatial dimension; must be `3` in v0 |
 | `generator` | string | e.g. `"femora 0.9.1"`; informational |
 | `model_name` | string | Femora `model_name`; informational |
@@ -302,14 +303,18 @@ step has attrs `kind` (string) and `label` (string, *optional*, Femora's descrip
 | Attribute | Type | Meaning |
 |---|---|---|
 | `name` | string | Femora analysis name |
-| `analysis_type` | string | `"Transient"` |
-| `dt` | float64 | step size |
-| `num_steps` | int32 | exactly one of `num_steps` or `final_time` |
+| `analysis_type` | string | `"Transient"`, or `"Static"` *(since 0.3)* |
+| `dt` | float64 | step size (Transient only) |
+| `num_steps` | int32 | Transient: exactly one of `num_steps` or `final_time`; Static: required (`analyze num_steps`) |
 | `final_time` | float64 | step while `time < final_time`, exactly as Femora's `while {[getTime] < final_time}` loop. Time advances by adding `dt` to the domain time in double precision at each step, in the same place and order as the OpenSees integrator, so the number of steps and the time stamps match OpenSees bit for bit |
-| `integrator` | string | `"ExplicitDifference"`, `"CentralDifference"` or `"Newmark"` |
+| `integrator` | string | Transient: `"ExplicitDifference"`, `"CentralDifference"` or `"Newmark"`; Static: `"LoadControl"` *(since 0.3)* |
 | `gamma`, `beta` | float64 | Newmark only |
 | `newmark_form` | string *(optional)* | Newmark `-form`: `"D"` (default), `"V"`, `"A"` |
-| `algorithm` | string | `"Linear"` (required for the explicit integrators) or `"Newton"` |
+| `load_increment` | float64 | LoadControl only *(since 0.3)*: `integrator LoadControl <incr>` |
+| `num_iter` | int32 *(optional)* | LoadControl `<numIter>` (default 1) |
+| `min_increment`, `max_increment` | float64 *(optional)* | LoadControl `<minIncr> <maxIncr>` (default: `load_increment`) |
+| `algorithm` | string | `"Linear"` (required for the explicit integrators), `"Newton"` or `"ModifiedNewton"` *(since 0.3)* |
+| `modified_newton_initial`, `modified_newton_factor_once` | uint8 *(optional, since 0.3)* | ModifiedNewton `-initial`, `-factoronce`. FemoraX is matrix-free: `-initial` keeps the initial tangent, `-factoronce` keeps the first tangent of the stage, otherwise the tangent of each step's first iteration is kept |
 | `constraint_handler` | string | `"Transformation"`; `"Plain"` only when there are no MP constraints |
 | `numberer` | string | recorded, ignored (FemoraX numbers its own equations) |
 | `system` | string | recorded, ignored (explicit: lumped diagonal; 1b: Eigen) |
@@ -319,6 +324,12 @@ step has attrs `kind` (string) and `label` (string, *optional*, Femora's descrip
 | `max_retries`, `num_sublevels`, `num_substeps` | int32 *(optional)* | Femora's retry and substep recovery (1b; an explicit step with the Linear algorithm never fails, so 1a ignores them) |
 | `initialize` | uint8 *(optional)* | `initialize` after `analysis` |
 | `allow_unstable_dt` | uint8 *(optional)* | FemoraX only: warn instead of stop when `dt` exceeds the stable step |
+| `solver_tolerance` | float64 *(optional, since 0.3)* | FemoraX only: relative tolerance of each Krylov solve, in (0, 1). Absent: FemoraX chooses (1e-12 with the Linear algorithm, 1e-10 with Newton and ModifiedNewton) |
+| `solver_max_iterations` | int32 *(optional, since 0.3)* | FemoraX only: maximum Krylov iterations per solve. Absent: FemoraX chooses (the number of equations, between 200 and 10000) |
+| `preconditioner` | string *(optional, since 0.3)* | FemoraX only: `"auto"` (default: FemoraX chooses; Jacobi today) or `"jacobi"`. The solver itself (CG or GMRES) follows from the declared tangent symmetry and is never chosen in the file |
+
+Users and exporters need not set any of the three: absent, FemoraX chooses. They exist for
+studies and for cases where the automatic choice needs overriding.
 
 Rules for explicit stages (decided for milestone 1a):
 
@@ -346,8 +357,9 @@ The reader stops on these, naming the component and suggesting the OpenSees back
   global `rayleigh`, other damping types;
 - recorders other than Node and VTKHDF, Node recorder output other than `-file`
   (`-xml`, `-binary`, `-tcp`), VTKHDF responses other than `disp vel accel`;
-- analyses other than `Transient` (`Static`, `VariableTransient`, ramped `dt_min`/`dt_max`),
-  other integrators, algorithms, handlers;
+- analyses other than `Transient` and `Static` (`VariableTransient`, ramped `dt_min`/`dt_max`),
+  static integrators other than `LoadControl` (`DisplacementControl`, ...), other
+  integrators, algorithms, handlers;
 - other process actions (`remove recorders`, `remove loadPattern`, `updateMaterialStage`,
   arbitrary Tcl from `model.actions.tcl`);
 - partitioned models (`num_partitions > 1`); v0 runs one partition.

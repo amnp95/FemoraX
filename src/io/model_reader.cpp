@@ -35,6 +35,7 @@ const char* to_string(Integrator i) {
     case Integrator::ExplicitDifference: return "ExplicitDifference";
     case Integrator::CentralDifference: return "CentralDifference";
     case Integrator::Newmark: return "Newmark";
+    case Integrator::LoadControl: return "LoadControl";
   }
   return "?";
 }
@@ -473,27 +474,47 @@ void read_recorders(Group& root, Model& m) {
   rs->finish();
 }
 
-AnalysisStep read_analysis(Group& g) {
+AnalysisStep read_analysis(Group& g, const Model& m) {
   AnalysisStep a;
   a.name = g.attr_string("name");
   const std::string type = g.attr_string("analysis_type");
-  if (type != "Transient") unsupported("analysis type " + quoted(type) + " in " + g.path(), "Transient");
-  a.dt = g.attr_double("dt");
-  if (!(a.dt > 0.0) || !std::isfinite(a.dt)) invalid(g.attr_item("dt") + " must be positive");
-  a.num_steps = g.opt_attr_int("num_steps");
-  a.final_time = g.opt_attr_double("final_time");
-  if (a.num_steps.has_value() == a.final_time.has_value()) {
-    invalid(g.path() + ": give exactly one of 'num_steps' and 'final_time'");
+  if (type == "Transient") {
+    a.type = AnalysisType::Transient;
+  } else if (type == "Static") {
+    require_minor(m, 3, g.attr_item("analysis_type") + " \"Static\"");
+    a.type = AnalysisType::Static;
+  } else {
+    unsupported("analysis type " + quoted(type) + " in " + g.path(), "Transient, Static");
   }
-  if (a.num_steps && *a.num_steps < 0) invalid(g.attr_item("num_steps") + " must not be negative");
-  if (a.final_time) require_finite(*a.final_time, g.attr_item("final_time"));
+  const bool is_static = a.type == AnalysisType::Static;
+  if (is_static) {
+    if (g.has_attr("dt")) invalid(g.attr_item("dt") + " applies only to Transient analyses");
+    if (g.has_attr("final_time")) invalid(g.attr_item("final_time") + " applies only to Transient analyses");
+    a.num_steps = g.attr_int("num_steps");
+    if (*a.num_steps < 0) invalid(g.attr_item("num_steps") + " must not be negative");
+  } else {
+    a.dt = g.attr_double("dt");
+    if (!(a.dt > 0.0) || !std::isfinite(a.dt)) invalid(g.attr_item("dt") + " must be positive");
+    a.num_steps = g.opt_attr_int("num_steps");
+    a.final_time = g.opt_attr_double("final_time");
+    if (a.num_steps.has_value() == a.final_time.has_value()) {
+      invalid(g.path() + ": give exactly one of 'num_steps' and 'final_time'");
+    }
+    if (a.num_steps && *a.num_steps < 0) invalid(g.attr_item("num_steps") + " must not be negative");
+    if (a.final_time) require_finite(*a.final_time, g.attr_item("final_time"));
+  }
 
   const std::string integ = g.attr_string("integrator");
   if (integ == "ExplicitDifference") a.integrator = Integrator::ExplicitDifference;
   else if (integ == "CentralDifference") a.integrator = Integrator::CentralDifference;
   else if (integ == "Newmark") a.integrator = Integrator::Newmark;
+  else if (integ == "LoadControl") a.integrator = Integrator::LoadControl;
   else unsupported("integrator " + quoted(integ) + " in " + g.path(),
-                   "ExplicitDifference, CentralDifference, Newmark");
+                   "ExplicitDifference, CentralDifference, Newmark, LoadControl");
+  if (is_static != (a.integrator == Integrator::LoadControl)) {
+    invalid(g.path() + ": " + (is_static ? "a Static analysis needs the LoadControl integrator"
+                                         : "the LoadControl integrator needs a Static analysis"));
+  }
   if (a.integrator == Integrator::Newmark) {
     a.gamma = g.attr_double("gamma");
     a.beta = g.attr_double("beta");
@@ -506,11 +527,38 @@ AnalysisStep read_analysis(Group& g) {
       if (g.has_attr(k)) invalid(g.attr_item(k) + " applies only to the Newmark integrator");
     }
   }
+  if (a.integrator == Integrator::LoadControl) {
+    a.load_increment = g.attr_double("load_increment");
+    require_finite(a.load_increment, g.attr_item("load_increment"));
+    a.load_num_iter = g.opt_attr_int("num_iter").value_or(1);
+    if (a.load_num_iter < 1) invalid(g.attr_item("num_iter") + " must be at least 1");
+    a.load_min_increment = g.opt_attr_double("min_increment");
+    a.load_max_increment = g.opt_attr_double("max_increment");
+    if (a.load_min_increment) require_finite(*a.load_min_increment, g.attr_item("min_increment"));
+    if (a.load_max_increment) require_finite(*a.load_max_increment, g.attr_item("max_increment"));
+  } else {
+    for (const char* k : {"load_increment", "num_iter", "min_increment", "max_increment"}) {
+      if (g.has_attr(k)) invalid(g.attr_item(k) + " applies only to the LoadControl integrator");
+    }
+  }
 
   const std::string alg = g.attr_string("algorithm");
   if (alg == "Linear") a.algorithm = Algorithm::Linear;
   else if (alg == "Newton") a.algorithm = Algorithm::Newton;
-  else unsupported("algorithm " + quoted(alg) + " in " + g.path(), "Linear, Newton");
+  else if (alg == "ModifiedNewton") {
+    require_minor(m, 3, g.attr_item("algorithm") + " \"ModifiedNewton\"");
+    a.algorithm = Algorithm::ModifiedNewton;
+  } else {
+    unsupported("algorithm " + quoted(alg) + " in " + g.path(), "Linear, Newton, ModifiedNewton");
+  }
+  if (a.algorithm == Algorithm::ModifiedNewton) {
+    a.modified_newton_initial = g.opt_attr_bool("modified_newton_initial").value_or(false);
+    a.modified_newton_factor_once = g.opt_attr_bool("modified_newton_factor_once").value_or(false);
+  } else {
+    for (const char* k : {"modified_newton_initial", "modified_newton_factor_once"}) {
+      if (g.has_attr(k)) invalid(g.attr_item(k) + " applies only to the ModifiedNewton algorithm");
+    }
+  }
 
   const std::string handler = g.attr_string("constraint_handler");
   if (handler == "Transformation") a.constraint_handler = ConstraintHandler::Transformation;
@@ -534,6 +582,24 @@ AnalysisStep read_analysis(Group& g) {
   a.num_substeps = g.opt_attr_int("num_substeps");
   a.initialize = g.opt_attr_bool("initialize").value_or(false);
   a.allow_unstable_dt = g.opt_attr_bool("allow_unstable_dt").value_or(false);
+
+  // FemoraX solver options (0.3).
+  for (const char* k : {"solver_tolerance", "solver_max_iterations", "preconditioner"}) {
+    if (g.has_attr(k)) require_minor(m, 3, g.attr_item(k));
+  }
+  a.solver_tolerance = g.opt_attr_double("solver_tolerance");
+  if (a.solver_tolerance && !(*a.solver_tolerance > 0.0 && *a.solver_tolerance < 1.0)) {
+    invalid(g.attr_item("solver_tolerance") + " must be in (0, 1)");
+  }
+  a.solver_max_iterations = g.opt_attr_int("solver_max_iterations");
+  if (a.solver_max_iterations && *a.solver_max_iterations < 1) {
+    invalid(g.attr_item("solver_max_iterations") + " must be at least 1");
+  }
+  if (auto pc = g.opt_attr_string("preconditioner")) {
+    if (*pc == "auto") a.preconditioner = Preconditioner::Auto;
+    else if (*pc == "jacobi") a.preconditioner = Preconditioner::Jacobi;
+    else unsupported("preconditioner " + quoted(*pc) + " in " + g.path(), "auto, jacobi");
+  }
   return a;
 }
 
@@ -545,7 +611,7 @@ void read_process(Group& root, Model& m) {
     s.id = id;
     s.label = g.opt_attr_string("label").value_or("");
     const std::string kind = g.attr_string("kind");
-    if (kind == "analysis") s.step = read_analysis(g);
+    if (kind == "analysis") s.step = read_analysis(g, m);
     else if (kind == "pattern") s.step = PatternStep{g.attr_int("tag")};
     else if (kind == "recorder") s.step = RecorderStep{g.attr_string("name")};
     else if (kind == "set_time") {

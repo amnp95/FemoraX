@@ -20,7 +20,7 @@ struct SchemaVersion {
 
 // The schema version this reader implements. It reads files of the same major version
 // with a minor version up to this one.
-inline constexpr SchemaVersion reader_schema_version{0, 2};
+inline constexpr SchemaVersion reader_schema_version{0, 3};
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
 struct Metadata {
@@ -140,8 +140,10 @@ struct Recorder {
 };
 
 // ---------------------------------------------------------------------------
-enum class Integrator { ExplicitDifference, CentralDifference, Newmark };
-enum class Algorithm { Linear, Newton };
+enum class AnalysisType { Transient, Static };
+enum class Integrator { ExplicitDifference, CentralDifference, Newmark, LoadControl };
+enum class Algorithm { Linear, Newton, ModifiedNewton };
+enum class Preconditioner { Auto, Jacobi };  // Auto: FemoraX chooses (Jacobi today)
 enum class ConstraintHandler { Transformation, Plain };
 enum class TestType { NormUnbalance, NormDispIncr, EnergyIncr };
 
@@ -150,13 +152,24 @@ bool is_explicit(Integrator i);
 
 struct AnalysisStep {
   std::string name;
-  double dt = 0.0;
+  AnalysisType type = AnalysisType::Transient;
+  double dt = 0.0;                         // Transient only
   std::optional<std::int32_t> num_steps;  // exactly one of num_steps, final_time
   std::optional<double> final_time;
   Integrator integrator = Integrator::ExplicitDifference;
   double gamma = 0.0, beta = 0.0;          // Newmark
   std::string newmark_form = "D";
+  // LoadControl (Static, schema 0.3): integrator LoadControl incr numIter minIncr maxIncr.
+  double load_increment = 0.0;
+  std::int32_t load_num_iter = 1;
+  std::optional<double> load_min_increment, load_max_increment;
   Algorithm algorithm = Algorithm::Linear;
+  // ModifiedNewton options (schema 0.3): -initial, -factoronce.
+  bool modified_newton_initial = false, modified_newton_factor_once = false;
+  // FemoraX solver options (schema 0.3, all optional; absent: FemoraX chooses).
+  std::optional<double> solver_tolerance;
+  std::optional<std::int32_t> solver_max_iterations;
+  Preconditioner preconditioner = Preconditioner::Auto;
   ConstraintHandler constraint_handler = ConstraintHandler::Transformation;
   std::string numberer;                    // recorded, not used
   std::string system;                      // recorded, not used
