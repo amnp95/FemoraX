@@ -84,7 +84,7 @@ void register_solvers(Registry& registry, const Options& options) {
   // SpMV on the 40^3 soil column's pattern (renumbering on): reads the row offsets
   // (8 bytes per row), columns and values (12 bytes per nonzero), x once and writes y.
   {
-    const int side = options.quick ? 8 : 40;
+    const int side = options.side();
     auto spmv = std::make_shared<Spmv>(side);
     const std::int64_t rows = spmv->a->info().rows, nnz = spmv->a->nnz();
     registry.add({.name = "solvers/spmv/" + std::to_string(side) + "^3",

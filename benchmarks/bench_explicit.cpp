@@ -30,7 +30,7 @@ namespace {
 
 void register_model(Registry& registry, const Options& options, bool damped) {
   testing::ColumnSpec s;
-  s.nx = s.ny = s.nz = options.quick ? 6 : 40;
+  s.nx = s.ny = s.nz = options.side();
   s.damping = damped;
   const auto model = testing::soil_column(s);
   compile::CompileOptions co;

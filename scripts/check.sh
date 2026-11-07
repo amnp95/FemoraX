@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Pre-commit check: build every CPU preset, run its tests, then the benchmark check.
-# Stops at the first failure, so a failed build is never hidden by stale test binaries.
+# Pre-commit check: build every preset and run its correctness tests (unit tests, OpenSees
+# comparisons, small models). Stops at the first failure, so a failed build is never hidden
+# by stale test binaries. Benchmarks are not part of it: performance is measured on TACC
+# (benchmarks/README.md).
 #
-#   scripts/check.sh            # cpu-debug, cpu-release, cpu-asan, then benchmarks
+#   scripts/check.sh            # cpu-debug, cpu-release, cpu-asan
 #                               # (plus cuda-ampere86 when nvidia-smi sees a GPU)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,9 +24,3 @@ for preset in ${presets}; do
   echo "== ${preset}: test"
   ctest --preset "${preset}" -j"$(nproc)" 2>&1 | tail -3
 done
-echo "== benchmarks (cpu-release)"
-python3 benchmarks/check.py --no-build
-if [[ " ${presets} " == *" cuda-ampere86 "* ]]; then
-  echo "== benchmarks (cuda-ampere86)"
-  python3 benchmarks/check.py --no-build --preset cuda-ampere86
-fi

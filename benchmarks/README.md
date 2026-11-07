@@ -3,40 +3,60 @@
 Performance is the top priority after correctness. Every change is checked against a
 per-machine baseline, so slowdowns are caught at the change that causes them.
 
-## Run
+## Where and when
+
+Benchmarks never block a commit and never run in `scripts/check.sh`. Performance is
+measured on TACC only (Vista, Stampede3); laptop timings are not representative (thermal
+throttling, weak FP64 on consumer GPUs). The suite still builds everywhere, and the
+`bench.smoke` test runs it once on tiny models as a correctness check.
+
+## Run on TACC
+
+`benchmarks/run_all.sh` detects the machine (Vista or Stampede3) and the node type, loads
+the modules, builds FemoraX in `build/tacc-<machine>-<node>`, runs the full suite on the
+40^3, 64^3 and 96^3 soil columns, and writes `benchmarks/results/<machine>-<node>-<date>-
+<commit>/` (`meta.json` with the commit, machine, node, CPU, GPU, modules and date, and one
+result file per size). It submits no jobs.
 
 ```
-cmake --preset cpu-release                # once
-python3 benchmarks/check.py               # builds femorax_bench, runs it, compares
+# 1. Get a compute node (interactive):
+idev -p gh-dev -N 1 -n 1 -t 01:00:00            # Vista Grace-Hopper (H200)
+idev -p gg -N 1 -n 1 -t 01:00:00                # Vista Grace-Grace (CPU)
+idev -p h100 -N 1 -n 1 -t 01:00:00              # Stampede3 H100 nodes
+idev -p spr -N 1 -n 1 -t 01:00:00               # Stampede3 Sapphire Rapids (CPU)
+# 2. Build and run (on the compute node, so the build targets its CPU and GPU):
+cd $WORK/FemoraX
+benchmarks/run_all.sh
+benchmarks/run_all.sh --no-build --sizes "40 128" --reps 10   # rerun, other sizes
+
+# 3. Compare with the baseline of the same machine and node type (or record one):
+python3 benchmarks/check.py --no-build --preset tacc-vista-gh
+python3 benchmarks/check.py --no-build --preset tacc-vista-gh --update-baseline
 ```
 
-`check.py` exits 0 when no gated benchmark is slower than the baseline by more than the
-tolerance (default 10% on the minimum time over 20 runs), relative to the machine's state,
-and 1 on a regression.
+Modules default to `gcc cuda cmake hdf5` (GPU nodes) or `gcc cmake hdf5` (CPU nodes);
+override with `FEMORAX_MODULES="gcc/13.2.0 cuda/12.6 cmake hdf5"`. The configure step
+downloads Kokkos and GoogleTest; if the compute node has no internet access, run
+`benchmarks/run_all.sh --build-only` once on a login node first (it fetches the sources;
+the build on the compute node then reuses them). Check the names with
+`module spider` on the machine. Intel GPU (Stampede3 `pvc`) nodes are not supported yet.
+
+`check.py` compares one run (40^3 by default) with `baselines/<host>-<cpu>-<space><threads>.json`
+for the same machine; baselines are recorded on TACC only. It reports each case relative
+to the machine state measured in the same run (below), and exits 1 when a gated case is
+slower than the tolerance (default 10%), as information: nothing blocks a commit.
 
 **Machine state.** The FP64 peak (`peak/fp64_fma`) and STREAM triad (`stream/triad`)
-references are run before and after the benchmarks, and their mean time against the
-baseline is the machine's state (printed as "machine state: ... +x% against the
-baseline"). Each benchmark's time is divided by the slowdown of its bounding reference:
-the peak for compute-bound cases, the triad for memory-bound ones, chosen by the roofline
-of the baseline machine (flops per compulsory byte against peak / triad). The report shows
-the raw change and the change relative to the reference ("vs ref"); the gate uses the
-latter. Thermal throttling, a battery or a power mode slow the references as much as the
-kernels and no longer fail the gate; a code slowdown still does. The references
-themselves are not gated.
+references run before and after the benchmarks; their mean time against the baseline is
+the machine's state. Each benchmark's time is divided by the slowdown of its bounding
+reference (peak for compute-bound, triad for memory-bound, from the roofline of the
+baseline machine or the benchmark's declared `bound`), and the report shows the raw change
+and the change relative to the reference ("vs ref"). A case over the tolerance is re-run
+once, after a pause (`--cooldown`, default 30 s), next to freshly measured references.
 
-Gated cases are the paths that run: each backend's default layout and its deterministic
-form. Other layout variants are measured and reported, marked
-"not gated", because they decide `src/exec/force_settings.cpp` but do not run in
-production (on CPU the team-layout times vary by 40-60% between runs). A regressed case is
-re-run once and the faster result kept, so a single noisy run does not fail the check. It
-refuses Debug builds. Results of the last run are in `build/<preset>/bench/last.json`.
-
-Useful options: `--filter <text>[,<text>...]` (any substring matches), `--reps N`, `--tolerance 0.05`, `--no-build`,
-`--baseline <file>`, `--update-baseline`.
-
-Threads are pinned (`OMP_PROC_BIND=spread`, `OMP_PLACES=threads`) unless already set.
-Close heavy programs before a run; on a laptop, keep it on mains power.
+Gated cases are the paths that run in production: each backend's default layout and its
+deterministic form, and the default operator and solvers. Other variants are reported,
+marked "not gated", because they decide the defaults.
 
 ## What is measured
 
@@ -54,10 +74,10 @@ For each benchmark, per call (a kernel launch) or per step (a whole time step):
   FEM kernels) are judged by this number;
 - **GFLOP/s**, when the benchmark counts its floating-point operations.
 
-## Baselines
+## Baselines (TACC only)
 
-`baselines/<host>-<cpu>-<space><threads>.json`, one per machine and backend, committed.
-A baseline is created on the first run on a new machine.
+`baselines/<host>-<cpu>-<space><threads>.json`, one per TACC machine, node type and
+backend, committed. A baseline is created on the first run on a new machine.
 
 Update a baseline (`--update-baseline`) only:
 
@@ -95,7 +115,8 @@ Current:
   y = K_eff x (stiffness, Rayleigh damping, consistent mass) in every scatter, geometry and
   tangent-source variant; the default is gated. Compare with `solvers/spmv/<n>^3`.
 - `solvers/cg20/<n>^3`: 20 CG iterations with Jacobi on a Newmark step (dt = 1e-3) with
-  the default operator: the implicit solver's cost per solve.
+  the default operator: the implicit solver's cost per solve; `solvers/gmres20/<n>^3`, the
+  same with GMRES(30), the cost of a non-symmetric stage.
 - `explicit_force/<n>^3/<layout>_<scatter>[_ept<k>]`: stdBrick + ElasticIsotropic internal
   and Rayleigh damping force on an n x n x n Femora-style soil column (renumbering on), in
   every layout and scatter mode; team variants for each elements-per-team that fits the

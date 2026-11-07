@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 compile_commands.json
 /.venv/
+/benchmarks/results/

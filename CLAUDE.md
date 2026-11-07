@@ -114,7 +114,8 @@ ctest --preset cpu-debug
 - `physics_purity.*` tests enforce rule 2: a source scan (`cmake/CheckPhysicsPurity.cmake`)
   and a standalone compile of every physics header with `-fno-exceptions -fno-rtti` and no
   Kokkos on the include path.
-- Benchmarks: `python3 benchmarks/check.py` (see "Performance" and `benchmarks/README.md`).
+- Benchmarks: on TACC only, `benchmarks/run_all.sh` (see "Performance" and
+  `benchmarks/README.md`); never part of the commit check.
 - Validate a model file: `build/cpu-debug/src/app/femorax check model.femorax.h5`
   (exit 0 valid, 3 unsupported component, 4 invalid). Example models:
   `.venv/bin/python schema/v0/make_example.py <dir>`.
@@ -159,7 +160,7 @@ Performance is the top priority after correctness. These rules apply to every ke
 5. **Node and element renumbering** (RCM or a space-filling curve) in the compile step,
    before batches and maps are built, so neighbouring threads touch neighbouring memory.
 6. **Optimize only what the benchmarks show is slow.** Tests must pass before and after an
-   optimization, and the commit message gives the before and after numbers.
+   optimization, and the commit message gives the before and after numbers (TACC runs).
 7. **Every new kernel comes with a benchmark** that states its compulsory memory traffic
    (`benchmarks/README.md`).
 8. **Memory and parallelism contract** (docs/design.md):
@@ -176,19 +177,24 @@ Performance is the top priority after correctness. These rules apply to every ke
    - Every physics change keeps `test_memory_contract` passing: bit-identical results for
      every state layout and every lane split.
 
-Run `python3 benchmarks/check.py` (cpu-release) on every change before committing. A
-regression over the tolerance blocks the commit unless the slowdown is intended; then the
-commit message explains it and the baseline is updated. Never update a baseline to hide a
-regression.
+Correctness before every commit; performance on TACC:
+- `scripts/check.sh` before every commit: builds every preset and runs the correctness
+  tests (unit tests, OpenSees comparisons, small models such as the 10x10x40 column). It
+  runs no benchmarks; benchmarks never block a commit.
+- Performance is measured on TACC only (Vista, Stampede3), with `benchmarks/run_all.sh` in
+  an idev session or a job, on big models (40x40x40 and larger). Baselines are recorded
+  there only (`benchmarks/baselines/`); `benchmarks/check.py` compares a TACC run with
+  them. Never update a baseline to hide a regression.
+- Laptop timings are for orientation only (thermal throttling; weak FP64 on the laptop
+  GPU) and are never a baseline.
 
 ## Development hardware
 
-- CPU: Intel i7-11370H (4 cores, 8 threads), measured 45 GB/s triad, 32 GFLOP/s FP64 with
-  this build's flags.
-- GPU: NVIDIA GeForce RTX 3050 Ti Laptop GPU (4 GB, Ampere 8.6) through WSL, measured
-  152 GB/s triad, 102 GFLOP/s FP64.
-- Run benchmarks on AC power: on battery the laptop throttles (40% slower kernels).
-- Every kernel must pass its tests on CPU before it is run on GPU.
+- Laptop (development, correctness tests, small models): Intel i7-11370H (4 cores,
+  8 threads); NVIDIA GeForce RTX 3050 Ti Laptop GPU (4 GB, Ampere 8.6) through WSL, FP64 at
+  1/64 of FP32. Every kernel must pass its tests on CPU before it is run on GPU.
+- TACC (performance): Vista (Grace-Hopper H200 nodes `gh`, Grace-Grace `gg`) and Stampede3
+  (H100 nodes `h100`, Sapphire Rapids `spr`, ...).
 
 ## Conventions
 
@@ -209,8 +215,8 @@ regression.
 - For a new module or any architectural change: propose a plan first and wait for approval.
 - One element or material per change, together with its tests and benchmarks.
 - One commit per finished step. Before each commit run `scripts/check.sh`: it builds every
-  CPU preset (stopping at the first failed build, so stale test binaries cannot hide it),
-  runs each suite, then the benchmark check.
+  preset (stopping at the first failed build, so stale test binaries cannot hide it) and
+  runs each correctness suite. No benchmarks.
 - Never mark a port finished with skipped or loosened tests. If a tolerance must change,
   explain why in `docs/deviations.md`.
 - When a component becomes supported, update `docs/support-table.md`.

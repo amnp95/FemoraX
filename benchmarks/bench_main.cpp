@@ -1,6 +1,7 @@
 // femorax_bench: run the benchmark suite.
 //
 //   femorax_bench [--json out.json] [--filter text[,text...]] [--reps N] [--warmup N] [--quick]
+//                 [--size N]   (soil-column models of N x N x N elements; default 40)
 //                 [--kokkos-...]
 //
 // Use benchmarks/check.py to run it against a baseline; see benchmarks/README.md.
@@ -33,10 +34,15 @@ int main(int argc, char* argv[]) {
     else if (a == "--reps") options.reps = std::atoi(next());
     else if (a == "--warmup") options.warmup = std::atoi(next());
     else if (a == "--quick") options.quick = true;
+    else if (a == "--size") options.size = std::atoi(next());
     else {
       std::fprintf(stderr, "femorax_bench: unknown option '%s'\n", argv[i]);
       return 1;
     }
+  }
+  if (options.size < 2) {
+    std::fprintf(stderr, "femorax_bench: --size must be at least 2\n");
+    return 1;
   }
   if (options.reps < 1) {
     std::fprintf(stderr, "femorax_bench: --reps must be at least 1\n");

@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -83,7 +84,12 @@ def machine_state(before: dict, after: dict) -> dict[str, float]:
 
 
 def reference_for(r: dict, base: dict) -> str:
-    """The reference that bounds a benchmark on the baseline machine (roofline)."""
+    """The reference that bounds a benchmark: declared ("compute" or "memory"), or from the
+    roofline of the baseline machine."""
+    if r.get("bound") == "compute":
+        return "peak/fp64_fma"
+    if r.get("bound") == "memory":
+        return "stream/triad"
     bb = by_name(base)
     triad = bb.get("stream/triad", {}).get("gbytes_per_s", 0.0)
     peak = bb.get("peak/fp64_fma", {}).get("gflops", 0.0)
@@ -104,7 +110,9 @@ def machine_factor(r: dict, base: dict, state: dict[str, float]) -> float:
 
 
 def normalized_change(r: dict, b: dict, base: dict, state: dict[str, float]) -> float:
-    return r["min_s"] / (b["min_s"] * machine_factor(r, base, state)) - 1.0
+    # A re-run case carries the references measured next to it.
+    st = r.get("rerun_state", state)
+    return r["min_s"] / (b["min_s"] * machine_factor(r, base, st)) - 1.0
 
 
 def main() -> int:
@@ -119,6 +127,8 @@ def main() -> int:
     ap.add_argument("--update-baseline", action="store_true",
                     help="write the current results as the baseline")
     ap.add_argument("--no-build", action="store_true", help="do not rebuild femorax_bench")
+    ap.add_argument("--cooldown", type=float, default=30.0,
+                    help="seconds to pause before re-running regressed cases (default 30)")
     args = ap.parse_args()
 
     build_dir = ROOT / "build" / args.preset
@@ -175,14 +185,24 @@ def main() -> int:
     base = json.loads(baseline_path.read_text())
     regressed = compare(current, base, args.tolerance, state)
     if regressed:
-        # Re-run only the regressed cases once, keeping the faster result, so one noisy run
-        # does not fail the check.
-        rerun = run_bench(exe, out_dir / "rerun.json", args, ",".join(regressed))
-        fresh = by_name(rerun)
+        # Re-run each regressed case once, after a short pause and next to fresh references,
+        # and keep the faster result: a long run heats the machine past its turbo budget, so
+        # references measured at the start no longer describe the end. The case is then
+        # normalized with the references of its own re-run.
+        time.sleep(args.cooldown)
         cur = by_name(current)
         for name in regressed:
-            if name in fresh and fresh[name]["min_s"] < cur[name]["min_s"]:
-                cur[name] = fresh[name]
+            rerun = run_bench(exe, out_dir / "rerun.json", args, ",".join(REFERENCES + (name,)))
+            fresh = by_name(rerun)
+            local = {n: fresh[n]["min_s"] for n in REFERENCES if n in fresh}
+            if name not in fresh:
+                continue
+            old_norm = normalized_change(cur[name], by_name(base)[name], base, state)
+            new_norm = normalized_change(fresh[name], by_name(base)[name], base, local)
+            if new_norm < old_norm:
+                r = dict(fresh[name])
+                r["rerun_state"] = local
+                cur[name] = r
         current["results"] = list(cur.values())
         (out_dir / "last.json").write_text(json.dumps(current, indent=2) + "\n")
         regressed = compare(current, base, args.tolerance, state)

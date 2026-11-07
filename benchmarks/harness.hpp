@@ -25,6 +25,10 @@ struct Benchmark {
   // backend's default layout, the deterministic validation path, the bandwidth
   // reference); variants that only inform the layout choice are reported, not gated.
   bool gated = true;
+  // What limits it, for the gate's machine-state normalization: "compute" (FP64 peak),
+  // "memory" (STREAM triad), or empty: from the roofline when bytes and flops are counted.
+  // Set it when the flops are not counted (check.py otherwise assumes memory).
+  std::string bound = "";
 };
 
 struct Result {
@@ -40,6 +44,8 @@ struct Options {
   int reps = 20;
   std::string filter;  // run only benchmarks whose name contains this
   bool quick = false;  // small problem sizes (for a fast smoke run in the test suite)
+  int size = 40;       // n of the n x n x n soil-column models (--size)
+  int side() const { return quick ? 6 : size; }
 };
 
 class Registry {
