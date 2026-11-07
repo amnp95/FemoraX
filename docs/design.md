@@ -583,6 +583,38 @@ So symmetry is declared, not assumed:
   with the global matrix assembled on the host from element matrices
   (`compile/sparsity.hpp` gives the pattern).
 
+### Krylov iteration study (milestone 1b step 10, 2026-11-07)
+
+CG with Jacobi, relative tolerance 1e-12, consistent mass, n x n x 40 soil columns
+(`tests/system/soil_column/krylov_study.py`; GPU, average iterations per solve). Implicit
+dynamic steps at multiples of the explicit stable step (5.28e-4 s for this mesh, with
+damping):
+
+| column | equations | static gravity | 0.5 dt_crit | 1 dt_crit | 4 dt_crit | 16 dt_crit |
+|---|---|---|---|---|---|---|
+| 10x10x40, Rayleigh damping | ~14.5k | 145 | 42 | 39 | 41 | 77 |
+| 20x20x40, Rayleigh damping | ~53k | 214 | 43 | 39 | 41 | 90 |
+| 40x40x40, Rayleigh damping | ~202k | 319 | 43 | 38 | 41 | 95 |
+| 10x10x40, no damping | ~14.5k | 145 | 47 | 43 | 38 | 74 |
+| 20x20x40, no damping | ~53k | 214 | 47 | 43 | 38 | 86 |
+| 40x40x40, no damping | ~202k | 319 | 47 | 42 | 38 | 90 |
+
+What it shows:
+- **Dynamic steps up to a few times the explicit step:** about 40 iterations, flat in the
+  model size, as the theory says (`M/dt^2` dominates `K_eff`). The count is set by the
+  tolerance and the consistent mass's own conditioning, not by the mesh.
+- **Larger steps** (16 dt_crit): 75-95, growing slowly with the model.
+- **Static gravity:** 145 -> 214 -> 319 as the column widens (about n^0.55 here); at the
+  target scale this becomes thousands. Static and gravity stages need multigrid.
+- **Explicit versus implicit on this mesh:** one implicit step costs about as many
+  operator applications as its CG iterations, each about one explicit force evaluation.
+  At 16 dt_crit an implicit step (~90 applies) costs more than the 16 explicit steps it
+  replaces. With Jacobi, implicit dynamics pays only where the explicit step is very
+  small for other reasons (stiff pore water, contact, tiny elements), or with a better
+  preconditioner.
+- **Next:** Chebyshev-Jacobi (step 11) to cut the dynamic counts; matrix-free multigrid
+  (later milestone) for static gravity and large steps.
+
 ### Optional for the future: hypre BoomerAMG
 
 Not on the main path. hypre's BoomerAMG would be an optional preconditioner for an
