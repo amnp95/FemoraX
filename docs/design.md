@@ -615,6 +615,23 @@ What it shows:
 - **Next:** Chebyshev-Jacobi (step 11) to cut the dynamic counts; matrix-free multigrid
   (later milestone) for static gravity and large steps.
 
+Chebyshev-Jacobi (step 11, `src/solvers/chebyshev.hpp`; 40x40x40, damped; CG iterations,
+and operator applications = iterations x degree):
+
+| preconditioner | static gravity | 1 dt_crit | 16 dt_crit | GPU wall time, 10 steps at 1 / 16 dt_crit |
+|---|---|---|---|---|
+| Jacobi | 319 (319) | 38 (38) | 95 (95) | 4.4 s / 7.1 s |
+| Chebyshev degree 2 | 167 (334) | 21 (42) | 50 (101) | 4.7 s / 7.4 s |
+| Chebyshev degree 4 | 89 (356) | 19 (76) | 26 (105) | 6.3 s / 7.4 s |
+| Chebyshev degree 8 | 52 (416) | 10 (78) | 15 (116) | 6.5 s / 8.0 s |
+
+It cuts the CG iterations (and with them the global reductions: two dot products per
+iteration) by the degree, but not the operator applications, so on one GPU it is no
+faster. Jacobi stays the automatic choice. Chebyshev is for later: across many GPUs, where
+each global reduction is a synchronization of every device, and as the smoother inside
+matrix-free multigrid. It stays available behind the developer override
+`FEMORAX_PRECONDITIONER=chebyshev[:degree]` for such studies.
+
 ### Optional for the future: hypre BoomerAMG
 
 Not on the main path. hypre's BoomerAMG would be an optional preconditioner for an

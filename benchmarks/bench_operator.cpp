@@ -17,6 +17,7 @@
 #include "exec/internal_force.hpp"
 #include "exec/matrix_free_operator.hpp"
 #include "solvers/cg.hpp"
+#include "solvers/chebyshev.hpp"
 #include "solvers/gmres.hpp"
 #include "solvers/jacobi.hpp"
 #include "exec/runtime.hpp"
@@ -93,6 +94,28 @@ void register_operator(Registry& registry, const Options& options) {
                 .run = [k, cg] {
                   Kokkos::deep_copy(cg->xs, 0.0);
                   cg->cg->solve(cg->b, cg->xs);
+                },
+                .bound = "compute"});
+
+  // 20 CG iterations with Chebyshev-Jacobi of degree 4 (3 operator applications per
+  // preconditioner apply, no extra reductions).
+  struct Ch {
+    std::unique_ptr<solvers::Chebyshev> pc;
+    std::unique_ptr<solvers::ConjugateGradient> cg;
+  };
+  auto ch = std::make_shared<Ch>();
+  ch->pc = std::make_unique<solvers::Chebyshev>(solvers::ChebyshevOptions{}, simd_width());
+  ch->pc->setup(cg->a);
+  ch->cg = std::make_unique<solvers::ConjugateGradient>(o, simd_width());
+  ch->cg->setup(cg->a, ch->pc.get());
+  registry.add({.name = "solvers/cg20_chebyshev4/" + std::to_string(s.nx) + "^3",
+                .unit = "call",
+                .bytes = 0,
+                .flops = 0.0,
+                .items = 20,
+                .run = [k, cg, ch] {
+                  Kokkos::deep_copy(cg->xs, 0.0);
+                  ch->cg->solve(cg->b, cg->xs);
                 },
                 .bound = "compute"});
 

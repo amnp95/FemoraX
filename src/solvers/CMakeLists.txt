@@ -4,6 +4,7 @@
 add_library(femorax_solvers
   block_ops.cpp
   cg.cpp
+  chebyshev.cpp
   csr_operator.cpp
   gmres.cpp
   jacobi.cpp

@@ -36,7 +36,7 @@ def run(fx: str, model: Path) -> list[tuple[str, float]]:
         raise SystemExit(f"femorax failed on {model}")
     stages = []
     for line in out.stdout.splitlines():
-        m = re.search(r"stage (\w+): .* ([0-9.]+) (cg|gmres) iterations per step", line)
+        m = re.search(r"stage (\w+): .* ([0-9.]+) (cg|gmres)\+\w+ iterations per step", line)
         if m:
             stages.append((m.group(1), float(m.group(2))))
     return stages

@@ -50,6 +50,7 @@ struct ImplicitStageReport {
   std::int64_t newton_iterations = 0;  // total over the stage
   std::int64_t krylov_iterations = 0;  // total over the stage
   std::string solver;                  // "cg" or "gmres"
+  std::string preconditioner;          // "jacobi", "chebyshev"
   int max_newton_iterations = 0;       // in one step
   bool fell_back = false;              // a CG solve needed GMRES
 };

@@ -18,6 +18,7 @@
 #include "exec/force_settings.hpp"
 #include "exec/matrix_free_operator.hpp"
 #include "exec/runtime.hpp"
+#include "solvers/chebyshev.hpp"
 #include "solvers/jacobi.hpp"
 
 namespace {
@@ -138,6 +139,41 @@ TEST(ConjugateGradient, ImplicitDynamicStepsMatchEigen) {
     Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt(c.ref.to_eigen(c.ref.effective(k.stiffness, k.damping, k.mass)));
     const Eigen::VectorXd want = ldlt.solve(Eigen::Map<const Eigen::VectorXd>(hb.data(), static_cast<Eigen::Index>(n)));
     EXPECT_LE(rel_error(download(x), want), 1e-10);
+  }
+}
+
+TEST(ConjugateGradient, ChebyshevJacobiPreconditioner) {
+  // A fixed polynomial in the Jacobi-scaled operator: CG with it reaches the same answer
+  // as Eigen, in fewer iterations than with Jacobi (each costing degree applications).
+  const Column c = make_column(3, 16);
+  InternalForce force(c.compiled, femorax::exec::GeometryCache::On);
+  const auto n = c.body.size();
+  const Vec u("u", n), b = upload(c.body);
+  for (const auto& k : {OperatorCoefficients{1.0, 0.0, 0.0}, OperatorCoefficients{1.0, 2e3, 4e6}}) {
+    MatrixFreeOperator a(force, u, k);
+    Jacobi jacobi;
+    jacobi.setup(a);
+    SolveOptions o;
+    o.relative_tolerance = 1e-13;
+    ConjugateGradient cg(o, femorax::simd_width());
+    cg.setup(a, &jacobi);
+    const Vec xj("xj", n);
+    const auto rj = cg.solve(b, xj);
+    for (int degree : {2, 4, 8}) {
+      SCOPED_TRACE("degree " + std::to_string(degree));
+      femorax::solvers::ChebyshevOptions co;
+      co.degree = degree;
+      femorax::solvers::Chebyshev cheb(co, femorax::simd_width());
+      cheb.setup(a);
+      EXPECT_GT(cheb.lambda_max(), 1.0);  // D^-1 A has eigenvalues around 1 and above
+      cg.setup(a, &cheb);
+      const Vec xc("xc", n);
+      const auto rc = cg.solve(b, xc);
+      EXPECT_TRUE(rc.converged);
+      EXPECT_FALSE(rc.indefinite);
+      EXPECT_LT(rc.iterations, rj.iterations);
+      EXPECT_LE(rel_error(download(xc), Eigen::Map<const Eigen::VectorXd>(download(xj).data(), static_cast<Eigen::Index>(n))), 1e-10);
+    }
   }
 }
 

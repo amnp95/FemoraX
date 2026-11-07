@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "exec/runtime.hpp"
 #include "exec/tcl_time.hpp"
 #include "io/h5.hpp"
+#include "solvers/chebyshev.hpp"
 #include "solvers/jacobi.hpp"
 #include "solvers/krylov.hpp"
 #include "solvers/vector_ops.hpp"
@@ -141,9 +143,22 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
   so.max_iterations = an.solver_max_iterations.value_or(
       static_cast<int>(std::max<std::int64_t>(200, std::min<std::int64_t>(s.n, 10000))));
   MatrixFreeOperator op(force, u, k, s.os);
-  solvers::Jacobi jacobi;
+  // Preconditioner: Jacobi (the automatic choice today). Developer override for studies:
+  // FEMORAX_PRECONDITIONER=chebyshev[:degree] (not a user setting; the model file's
+  // preconditioner attribute is "auto" or "jacobi").
+  solvers::Jacobi jacobi_pc;
+  std::unique_ptr<solvers::Chebyshev> chebyshev;
+  if (const char* e = std::getenv("FEMORAX_PRECONDITIONER"); e && std::string(e).rfind("chebyshev", 0) == 0) {
+    solvers::ChebyshevOptions co;
+    const std::string spec(e);
+    if (const auto colon = spec.find(":"); colon != std::string::npos) co.degree = std::atoi(spec.c_str() + colon + 1);
+    chebyshev = std::make_unique<solvers::Chebyshev>(co, s.lanes);
+  }
+  solvers::Preconditioner& jacobi = chebyshev ? static_cast<solvers::Preconditioner&>(*chebyshev)
+                                              : static_cast<solvers::Preconditioner&>(jacobi_pc);
   solvers::KrylovSolver solver(so, s.lanes);
   rep.solver = op.info().symmetry == solvers::Symmetry::SymmetricPositiveDefinite ? "cg" : "gmres";
+  rep.preconditioner = jacobi.name();
   bool have_tangent = false;
   auto update_tangent = [&] {
     if (stored) force.store_tangents(u, s.os);
@@ -269,14 +284,14 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
   if (!is_static) Kokkos::deep_copy(s.v_committed, v);
   Kokkos::fence();
   if (verbose && rep.steps > 0) {
-    std::printf("femorax: stage %s: %s, %s, %lld steps, %.2f Newton and %.1f %s iterations per step%s\n",
+    std::printf("femorax: stage %s: %s, %s, %lld steps, %.2f Newton and %.1f %s+%s iterations per step%s\n",
                 an.name.c_str(), io::to_string(an.integrator),
                 an.algorithm == io::Algorithm::Linear     ? "Linear"
                 : an.algorithm == io::Algorithm::Newton ? "Newton"
                                                         : "ModifiedNewton",
                 static_cast<long long>(rep.steps), static_cast<double>(rep.newton_iterations) / rep.steps,
                 static_cast<double>(rep.krylov_iterations) / std::max<std::int64_t>(1, rep.newton_iterations),
-                rep.solver.c_str(), rep.fell_back ? " (CG fell back to GMRES)" : "");
+                rep.solver.c_str(), rep.preconditioner.c_str(), rep.fell_back ? " (CG fell back to GMRES)" : "");
   }
   return rep;
 }

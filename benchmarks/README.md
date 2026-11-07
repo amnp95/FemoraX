@@ -116,7 +116,8 @@ Current:
   tangent-source variant; the default is gated. Compare with `solvers/spmv/<n>^3`.
 - `solvers/cg20/<n>^3`: 20 CG iterations with Jacobi on a Newmark step (dt = 1e-3) with
   the default operator: the implicit solver's cost per solve; `solvers/gmres20/<n>^3`, the
-  same with GMRES(30), the cost of a non-symmetric stage.
+  same with GMRES(30), the cost of a non-symmetric stage; `solvers/cg20_chebyshev4/<n>^3`,
+  CG with the degree-4 Chebyshev-Jacobi preconditioner.
 - `explicit_force/<n>^3/<layout>_<scatter>[_ept<k>]`: stdBrick + ElasticIsotropic internal
   and Rayleigh damping force on an n x n x n Femora-style soil column (renumbering on), in
   every layout and scatter mode; team variants for each elements-per-team that fits the
