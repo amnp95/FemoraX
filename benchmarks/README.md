@@ -88,6 +88,9 @@ Current:
 - `stream/*`: copy and triad, the bandwidth reference.
 - `solvers/dot`, `solvers/axpy`: the solver vector kernels on 2^25 entries (the
   deterministic chunked dot product, and axpy), judged by %triad.
+- `solvers/spmv/<n>^3`: CSR y = A x on the n x n x n soil column's pattern (one thread
+  per row), judged by %triad. Not gated: assembled operators exist only in tests; it is
+  the reference for the matrix-free operator.
 - `explicit_force/<n>^3/<layout>_<scatter>[_ept<k>]`: stdBrick + ElasticIsotropic internal
   and Rayleigh damping force on an n x n x n Femora-style soil column (renumbering on), in
   every layout and scatter mode; team variants for each elements-per-team that fits the

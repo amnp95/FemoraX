@@ -422,6 +422,20 @@
       "gflops": 7.24374966
     },
     {
+      "name": "solvers/spmv/40^3",
+      "unit": "call",
+      "bytes": 176809688,
+      "flops": 28737720,
+      "items": 14368860,
+      "gated": false,
+      "reps": 20,
+      "min_s": 0.00302164699,
+      "median_s": 0.003733265,
+      "max_s": 0.010019421,
+      "gbytes_per_s": 58.5143429,
+      "gflops": 9.51061461
+    },
+    {
       "name": "stream/copy",
       "unit": "call",
       "bytes": 536870912,
