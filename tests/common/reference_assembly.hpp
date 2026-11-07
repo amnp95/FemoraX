@@ -28,6 +28,9 @@ namespace femorax::testing {
 struct ReferenceSystem {
   compile::SparsityPattern pattern;
   std::vector<double> K, K0, Kc, M, C;  // values in pattern order
+  // M r_d for the rigid unit translation r_d of every element DOF in direction d, fixed DOFs
+  // included (the UniformExcitation load is -ag M r_d), plus the nodal masses.
+  std::vector<double> Mr[3];
 
   // c1 K + c2 C + c3 M, the effective stiffness of an implicit step.
   std::vector<double> effective(double c1, double c2, double c3) const {
@@ -112,6 +115,10 @@ void assemble_batch(const compile::Compiled& c, const compile::Batch& b, const s
     const Rayleigh& d = ps.damping;
     for (int a = 0; a < NDOF; ++a) {
       if (eq[a] < 0) continue;
+      for (int k = 0; k < NDOF; ++k) r.Mr[k % 3][static_cast<std::size_t>(eq[a])] += Me[a * NDOF + k];
+    }
+    for (int a = 0; a < NDOF; ++a) {
+      if (eq[a] < 0) continue;
       for (int k = 0; k < NDOF; ++k) {
         if (eq[k] < 0) continue;
         const std::int64_t pos = r.pattern.find(eq[a], eq[k]);
@@ -136,6 +143,7 @@ inline ReferenceSystem assemble_reference(const io::Model& m, const compile::Com
   const auto nnz = static_cast<std::size_t>(r.pattern.nnz());
   r.K.assign(nnz, 0.0);
   r.K0 = r.Kc = r.M = r.C = r.K;
+  for (auto& v : r.Mr) v.assign(static_cast<std::size_t>(c.dofs.num_equations), 0.0);
   if (u.empty()) u.assign(static_cast<std::size_t>(c.dofs.num_equations), 0.0);
   for (const auto& b : c.batches) {
     registry::for_each_pair([&]<class E, class M>(int index) {
@@ -148,7 +156,10 @@ inline ReferenceSystem assemble_reference(const io::Model& m, const compile::Com
   for (std::int32_t i = 0; i < c.dofs.num_nodes(); ++i) internal[c.dofs.node_tag[i]] = i;
   for (std::size_t k = 0; k < m.mass.node.size(); ++k) {
     const std::int32_t q = c.dofs.equation(internal.at(m.mass.node[k]), m.mass.dof[k] - 1);
-    if (q >= 0) r.M[static_cast<std::size_t>(r.pattern.find(q, q))] += m.mass.value[k];
+    if (q >= 0) {
+      r.M[static_cast<std::size_t>(r.pattern.find(q, q))] += m.mass.value[k];
+      r.Mr[m.mass.dof[k] - 1][static_cast<std::size_t>(q)] += m.mass.value[k];
+    }
   }
   return r;
 }

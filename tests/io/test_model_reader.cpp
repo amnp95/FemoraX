@@ -129,7 +129,7 @@ TEST_F(ReaderFixtures, ReadsExplicitSoilColumn) {
   EXPECT_NO_THROW(check_supported(m, Capabilities{}));
 }
 
-TEST_F(ReaderFixtures, ImplicitModelNeedsMilestone1b) {
+TEST_F(ReaderFixtures, ImplicitModelIsSupported) {
   const Model m = read_model(path("implicit_newmark.femorax.h5"));
   EXPECT_FALSE(m.elements[0].lumped);
   const auto& gravity = std::get<AnalysisStep>(m.process[0].step);
@@ -139,10 +139,10 @@ TEST_F(ReaderFixtures, ImplicitModelNeedsMilestone1b) {
   EXPECT_EQ(gravity.num_steps.value(), 30);
   EXPECT_EQ(gravity.test_type.value(), TestType::NormUnbalance);
 
-  EXPECT_THROW(check_supported(m, Capabilities{}), UnsupportedComponent);
-  Capabilities with_implicit;
-  with_implicit.implicit = true;
-  EXPECT_NO_THROW(check_supported(m, with_implicit));
+  EXPECT_NO_THROW(check_supported(m, Capabilities{}));
+  Capabilities explicit_only;
+  explicit_only.implicit = false;
+  EXPECT_THROW(check_supported(m, explicit_only), UnsupportedComponent);
 }
 
 TEST_F(ReaderFixtures, StaticLoadControlAndModifiedNewton) {

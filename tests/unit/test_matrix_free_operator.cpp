@@ -135,6 +135,30 @@ TEST(MatrixFreeOperator, MatchesTheAssembledReferenceInEveryVariant) {
   }
 }
 
+TEST(MatrixFreeOperator, GroundLoadIncludesTheMovingBase) {
+  // M r_d over every element DOF (the fixed base too) plus nodal masses: a consistent mass
+  // loads the DOFs next to the base through their coupling to it.
+  for (bool lumped : {false, true}) {
+    SCOPED_TRACE(lumped ? "lumped" : "consistent");
+    const auto m = column(lumped);
+    const Compiled c = compile_model(m, CompileOptions{});
+    const auto ref = femorax::testing::assemble_reference(m, c);
+    InternalForce force(c, GeometryCache::On);
+    const auto n = static_cast<std::size_t>(c.dofs.num_equations);
+    const Vec u("u", n), y("y", n);
+    for (int d = 0; d < 3; ++d) {
+      force.mass_times_ground(d, {}, u, y);
+      EXPECT_LE(max_diff(download(y), ref.Mr[d]), 1e-12 * max_abs(ref.Mr[d]));
+    }
+    if (!lumped) {
+      // Not the same as M times the free-DOF indicator: the base coupling is there.
+      std::vector<double> r(n);
+      for (std::size_t q = 0; q < n; ++q) r[q] = c.eq_dof[q] == 0 ? 1.0 : 0.0;
+      EXPECT_GT(max_diff(ref.multiply(ref.M, r), ref.Mr[0]), 1e-3 * max_abs(ref.Mr[0]));
+    }
+  }
+}
+
 TEST(MatrixFreeOperator, SolverInterfaceAndSymmetry) {
   const auto m = column(false);
   const Compiled c = compile_model(m, CompileOptions{});

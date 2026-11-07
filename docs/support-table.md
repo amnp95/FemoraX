@@ -57,7 +57,8 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 |---|---|---|
 | CentralDifference | in progress (1a) | lumped mass, alphaM damping only (others need the 1b solver); deliberately differs from OpenSees for lumped stdBrick (docs/deviations.md) |
 | ExplicitDifference | in progress (1a) | all four Rayleigh terms; stable-step check per stage; matches OpenSees within 4.8e-13 on every recorded value (`tests/system/soil_column`) |
-| Newmark | in progress (1b) | with Newton and the Eigen direct solver |
+| Newmark | in progress (1b) | form D, matrix-free with CG or GMRES (chosen from the tangent symmetry) and Jacobi; Linear, Newton, ModifiedNewton; NormUnbalance, NormDispIncr, EnergyIncr; equals the OpenSees recurrence with exact solves to 1e-8 (`test_implicit`); system test against OpenSees next |
+| LoadControl (Static) | in progress (1b) | adaptive increment as OpenSees; static gravity equals the exact solution (`test_implicit`) |
 
 ## Recorders
 

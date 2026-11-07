@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 #include "compile/batches.hpp"
@@ -15,6 +16,8 @@
 #include "exec/internal_force.hpp"
 #include "exec/recorders.hpp"
 #include "exec/runtime.hpp"
+#include "exec/tcl_time.hpp"
+#include "exec/implicit_stage.hpp"
 #include "io/h5.hpp"
 
 namespace femorax::exec {
@@ -25,15 +28,6 @@ using Space = Kokkos::DefaultExecutionSpace;
 using Index = std::int32_t;
 using IVec = Kokkos::View<int*, Space>;
 using CVec = Kokkos::View<std::int8_t*, Space>;
-
-// A time as OpenSees' Tcl `getTime` returns it: printed with "%f", then read back by Tcl.
-// Femora ends a stage with `while {[getTime] < %f} { analyze 1 dt }`, so the loop compares
-// both times rounded to six decimals; matching that gives the same number of steps.
-double as_tcl_time(double t) {
-  char buf[64];
-  std::snprintf(buf, sizeof(buf), "%f", t);
-  return std::strtod(buf, nullptr);
-}
 
 double now() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -183,6 +177,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   }
 
   double time = 0.0;  // the domain time
+  std::unique_ptr<ImplicitStage> implicit;  // created at the first implicit stage
   for (const auto& step : model.process) {
     if (const auto* p = std::get_if<io::PatternStep>(&step.step)) {
       motions.activate(p->tag);
@@ -197,6 +192,27 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       if (!recorders.activate(r->name)) throw io::ModelError("process step names an unknown recorder " + r->name);
     } else if (const auto* s = std::get_if<io::SetTimeStep>(&step.step)) {
       time = s->time;
+    } else if (const auto* lc = std::get_if<io::LoadConstStep>(&step.step)) {
+      // loadConst [-time t]: the supported patterns (UniformExcitation) have no load
+      // factor to freeze; the body force is constant anyway. Only the time changes.
+      if (lc->time) time = *lc->time;
+    } else if (const auto* ia = std::get_if<io::AnalysisStep>(&step.step); ia && !io::is_explicit(ia->integrator)) {
+      const auto* an = ia;
+      if (!implicit) implicit = std::make_unique<ImplicitStage>(force, c, u, v_rec, a, choice.settings);
+      StageReport st;
+      st.name = an->name;
+      st.integrator = io::to_string(an->integrator);
+      st.dt = an->dt;
+      const double t0 = now();
+      const ImplicitStageReport ir = implicit->run(*an, time, motions, recorders, opt.verbose);
+      st.steps = ir.steps;
+      st.seconds = now() - t0;
+      st.newton_iterations = ir.newton_iterations;
+      st.krylov_iterations = ir.krylov_iterations;
+      st.solver = ir.solver;
+      if (!all_finite(u))
+        throw io::ModelError("stage \"" + an->name + "\": displacements are not finite at the end of the stage");
+      rep.stages.push_back(st);
     } else if (const auto* an = std::get_if<io::AnalysisStep>(&step.step)) {
       StageReport st;
       st.name = an->name;

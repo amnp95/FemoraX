@@ -25,6 +25,7 @@ add_executable(femorax_unit_tests
   unit/test_matrix_free_operator.cpp
   unit/test_cg.cpp
   unit/test_gmres.cpp
+  unit/test_implicit.cpp
   unit/test_runtime.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest
                       Eigen3::Eigen)
@@ -32,15 +33,24 @@ target_compile_definitions(femorax_unit_tests PRIVATE
   FEMORAX_REFERENCE_DATA="${PROJECT_SOURCE_DIR}/tests/reference/data")
 femorax_set_warnings(femorax_unit_tests)
 
+# ctest runs these cases in parallel (-j); with every case on all hardware threads the
+# OpenMP threads oversubscribe the machine and spin-wait each other to a crawl (the implicit
+# tests launch many small kernels). Each case gets 2 threads; thread-count dependence is
+# covered by the whole-binary runs below.
 gtest_discover_tests(femorax_unit_tests
   TEST_PREFIX "unit."
-  DISCOVERY_MODE PRE_TEST)
+  DISCOVERY_MODE PRE_TEST
+  PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 
 # OpenMP builds: the whole binary again with 1 and 8 threads (thread-count dependence).
 if(Kokkos_ENABLE_OPENMP)
   foreach(nthreads 1 8)
     add_test(NAME unit_all.threads${nthreads}
              COMMAND femorax_unit_tests --kokkos-num-threads=${nthreads})
+    # The 8-thread run alone on the machine, for the same reason.
+    if(nthreads GREATER 1)
+      set_tests_properties(unit_all.threads${nthreads} PROPERTIES RUN_SERIAL TRUE)
+    endif()
   endforeach()
 endif()
 
@@ -117,7 +127,7 @@ gtest_discover_tests(femorax_io_tests
              ENVIRONMENT "FEMORAX_IO_FIXTURES=${FEMORAX_IO_FIXTURES}")
 
 # The command-line check: exit 0 for a valid model, 3 unsupported, 4 invalid.
-foreach(case IN ITEMS "explicit;0" "implicit_newmark;3" "duplicate_node;4")
+foreach(case IN ITEMS "explicit;0" "implicit_newmark;0" "element_type;3" "duplicate_node;4")
   list(GET case 0 name)
   list(GET case 1 code)
   add_test(NAME app.check.${name}

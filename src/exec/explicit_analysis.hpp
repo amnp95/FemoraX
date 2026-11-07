@@ -1,7 +1,7 @@
 #pragma once
 
-// Runs a model's process (patterns, recorders, set_time, explicit analysis stages) on the
-// device.
+// Runs a model's process (patterns, recorders, set_time, load_const, explicit and implicit
+// analysis stages) on the device. Implicit stages: exec/implicit_stage.hpp.
 //
 // Integrators, ported from OpenSees (commit 955ceb0), on lumped (diagonal) mass:
 //   ExplicitDifference  SRC/analysis/integrator/ExplicitDifference.cpp
@@ -42,6 +42,9 @@ struct StageReport {
   std::int64_t steps = 0;
   double dt = 0, critical_dt = 0;
   double seconds = 0;  // wall time of the time loop (device work included)
+  // Implicit stages: Newton iterations and Krylov iterations in total, and the solver.
+  std::int64_t newton_iterations = 0, krylov_iterations = 0;
+  std::string solver;
 };
 
 struct RunReport {

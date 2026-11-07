@@ -11,7 +11,7 @@ namespace femorax::io {
 // milestone (schema v0 covers 1a and 1b).
 struct Capabilities {
   std::vector<ElementType> elements = {ElementType::StdBrick, ElementType::SSPbrick};
-  bool implicit = false;  // Newmark, Newton, load_const: milestone 1b
+  bool implicit = true;  // Newmark, LoadControl, Newton, ModifiedNewton, load_const (1b)
 };
 
 // Throws UnsupportedComponent naming the first thing the build cannot run, or ModelError

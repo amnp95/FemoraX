@@ -432,13 +432,21 @@ element matrices, for small reference models.
 
 ## Time integration and algorithms
 
-- First: explicit central difference (needs no linear solver; see the next section).
-- Then: implicit Newmark with full Newton, matching the Femora examples.
-- Later: ModifiedNewton, KrylovNewton, ExplicitDifference.
-- The Newton loop stays on the device; only the norm comes back to the host.
+- Explicit: ExplicitDifference and CentralDifference (lumped mass), no solver.
+- Implicit (`src/exec/implicit_stage.cpp`): Newmark (form D) for Transient stages and
+  LoadControl for Static ones, each with the Linear, Newton or ModifiedNewton algorithm
+  and the NormUnbalance, NormDispIncr or EnergyIncr test, as OpenSees runs them. Every
+  linear solve is matrix-free (CG or GMRES from the declared tangent symmetry, Jacobi).
+  Solver settings are automatic unless the model sets them (schema 0.3): relative
+  tolerance 1e-12 for Linear and 1e-10 for Newton-type algorithms, at most min(n, 10000)
+  iterations (at least 200), the Jacobi preconditioner; each solve starts from the
+  previous increment.
+- Later: KrylovNewton, Femora's retry and substep recovery (a failed step stops the run
+  today), Newmark forms V and A.
+- The Newton loop stays on the device; only norms come back to the host.
   Kokkos::Graph can capture the iteration later to cut launch overhead.
 - Staged analysis: the material stage (elastic/plastic) is a flag in `Params`; element
-  activation uses masks. Rebuild the pattern only when it really changes.
+  activation uses masks.
 
 ## Explicit analysis
 

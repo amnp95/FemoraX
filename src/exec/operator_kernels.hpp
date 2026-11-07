@@ -49,10 +49,13 @@ KOKKOS_INLINE_FUNCTION void material_tangent(const typename Elem::Params& p, con
 }
 
 // One element: gather, operator or diagonal, emit. Diagonal = true writes diag(K_eff).
+// unit_dir >= 0 replaces x by the rigid unit translation in that direction at every element
+// DOF, fixed ones included (y = K_eff r: the UniformExcitation load -ag M r, which couples
+// the free DOFs to the moving base through a consistent mass).
 template <class Elem, bool Cached, int SourceI, bool Diagonal>
 void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const Vec& coords, Index N,
                      const OperatorCoefficients& k, const Vec& u, const Vec& x, const Vec& y,
-                     const Vec& slots, Out out, Index begin, Index end, bool by_color) {
+                     const Vec& slots, Out out, Index begin, Index end, bool by_color, int unit_dir = -1) {
   static_assert(MatrixFreeElement<Elem>, "the matrix-free operator needs a MatrixFreeElement");
   using Mat = typename Elem::Material;
   constexpr int NNODE = Elem::NNODE, NDOF = Elem::NDOF, NDM = Elem::NDM, NS = Mat::NSTRAIN;
@@ -73,7 +76,8 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
         for (int a = 0; a < NDOF; ++a) {
           const Index q = eq(a * P + e);
           eqe[a] = q;
-          xe_e[a] = (!Diagonal && q >= 0) ? x(q) : 0.0;
+          if (unit_dir >= 0) xe_e[a] = (a % Elem::NODE_NDF[0]) == unit_dir ? 1.0 : 0.0;
+          else xe_e[a] = (!Diagonal && q >= 0) ? x(q) : 0.0;
           ue[a] = (SourceI == static_cast<int>(Source::Recomputed) && q >= 0) ? u(q) : 0.0;
         }
         double xel[NNODE][NDM], xl[3][8] = {};

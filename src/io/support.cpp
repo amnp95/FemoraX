@@ -72,7 +72,7 @@ void check_supported(const Model& m, const Capabilities& caps) {
         if (r.betaK != 0.0 || r.betaKinit != 0.0 || r.betaKcomm != 0.0) {
           unsupported("CentralDifference (" + where + ") with stiffness-proportional damping in "
                       "/damping/rayleigh/" + r.id + ": OpenSees solves a non-diagonal system "
-                      "here, which needs the linear solver of milestone 1b; use "
+                      "here, which FemoraX does not solve yet; use "
                       "ExplicitDifference, or mass-proportional damping only");
         }
       }

@@ -493,18 +493,15 @@ CASES = [
      m_consistent),
     ("central_difference_betak", "explicit", "unsupported", "stiffness-proportional damping",
      m_central_betak),
-    ("implicit_newmark", "implicit", "unsupported", "Newmark (/process/000000) is available "
-     "from milestone 1b", None),
-    # Read correctly (0.3), then refused by this build until the implicit stages land.
-    ("static_load_control", "implicit", "unsupported", "LoadControl (/process/000000) is available "
-     "from milestone 1b", m_static(extra={"num_iter": np.int32(2), "min_increment": np.float64(0.05),
-                                          "max_increment": np.float64(0.2)})),
-    ("modified_newton", "implicit", "unsupported", "available from milestone 1b",
+    ("implicit_newmark", "implicit", "valid", "", None),
+    ("static_load_control", "implicit", "valid", "",
+     m_static(extra={"num_iter": np.int32(2), "min_increment": np.float64(0.05),
+                     "max_increment": np.float64(0.2)})),
+    ("modified_newton", "implicit", "valid", "",
      m_attrs({"algorithm": "ModifiedNewton", "modified_newton_factor_once": np.uint8(1),
               "solver_tolerance": np.float64(1e-10), "solver_max_iterations": np.int32(500),
               "preconditioner": "jacobi"})),
-    ("preconditioner_auto", "implicit", "unsupported", "available from milestone 1b",
-     m_attrs({"preconditioner": "auto"})),
+    ("preconditioner_auto", "implicit", "valid", "", m_attrs({"preconditioner": "auto"})),
     ("unknown_preconditioner", "implicit", "unsupported", 'preconditioner "ilu"',
      m_attrs({"preconditioner": "ilu"})),
 ]

@@ -104,6 +104,11 @@ class InternalForce {
                       const Kokkos::View<const double*, Space>& x, const Vec& y);
   void operator_diagonal(const OperatorCoefficients& k, const OperatorSettings& s, const Vec& u,
                          const Vec& d);
+  // y = M r_d for the rigid unit translation r_d in direction d (0-based) of every element
+  // DOF, the moving base's fixed DOFs included, plus the nodal masses: the UniformExcitation
+  // load is -ag M r_d (Brick::addInertiaLoadToUnbalance). With a consistent mass the free
+  // DOFs next to the base are loaded through their coupling to it.
+  void mass_times_ground(int direction, const OperatorSettings& s, const Vec& u, const Vec& y);
   // Allocates the per-point tangent storage (setup; packed for declared-symmetric tangents).
   void enable_stored_tangents();
   bool has_stored_tangents() const { return stored_bytes_ > 0; }
@@ -128,6 +133,7 @@ class InternalForce {
   std::int64_t cache_bytes_ = 0, stored_bytes_ = 0;
   Vec coords_;
   Vec nodal_mass_;
+  Kokkos::View<std::int8_t*, Space> eq_dof_;
   SlotGather gather_;
   std::vector<std::unique_ptr<Batch>> batches_;
 };

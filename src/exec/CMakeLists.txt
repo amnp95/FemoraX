@@ -4,6 +4,7 @@ add_library(femorax_exec
   device_memory.cpp
   explicit_analysis.cpp
   ground_motion.cpp
+  implicit_stage.cpp
   recorders.cpp
   force_settings.cpp
   internal_force.cpp
