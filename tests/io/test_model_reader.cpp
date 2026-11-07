@@ -59,7 +59,7 @@ class ReaderFixtures : public ::testing::Test {
 TEST_F(ReaderFixtures, ReadsExplicitSoilColumn) {
   const Model m = read_model(path("explicit.femorax.h5"));
   EXPECT_EQ(m.version.major, 0);
-  EXPECT_EQ(m.version.minor, 3);
+  EXPECT_EQ(m.version.minor, 4);
   EXPECT_EQ(m.ndm, 3);
   EXPECT_EQ(m.model_name, "layered_elastic_soil_column_explicit");
   EXPECT_TRUE(m.warnings.empty());
@@ -193,6 +193,100 @@ TEST_F(ReaderFixtures, VtkhdfElementList) {
   const auto& v = std::get<VtkhdfRecorder>(m.recorders[0].data);  // "site" sorts first
   EXPECT_EQ(v.elements, (std::vector<std::int32_t>{1, 2, 25}));
   EXPECT_EQ(v.responses, (std::vector<std::string>{"accel", "disp", "vel"}));
+}
+
+// ---------------------------------------------------------------------------
+// Schema 0.4: the multi-yield soil materials, material stages, element responses
+// ---------------------------------------------------------------------------
+Capabilities milestone2() {
+  Capabilities c;
+  c.soil_materials = c.material_stages = c.vtkhdf_element_responses = true;
+  return c;
+}
+
+TEST_F(ReaderFixtures, ReadsPressureDependMultiYield) {
+  const Model m = read_model(path("pdmy.femorax.h5"));
+  const auto& d = std::get<PressureDependMultiYieldData>(m.materials[0].data);
+  EXPECT_EQ(d.nd, 3);
+  EXPECT_DOUBLE_EQ(d.rho, 2.0285);
+  EXPECT_DOUBLE_EQ(d.refShearModul, 145000.0);
+  EXPECT_DOUBLE_EQ(d.refBulkModul, 314166.7);
+  EXPECT_DOUBLE_EQ(d.frictionAng, 40.0);
+  EXPECT_DOUBLE_EQ(d.peakShearStra, 0.1);
+  EXPECT_DOUBLE_EQ(d.refPress, 80.0);
+  EXPECT_DOUBLE_EQ(d.pressDependCoe, 0.5);
+  EXPECT_DOUBLE_EQ(d.PTAng, 27.0);
+  EXPECT_DOUBLE_EQ(d.contrac, 0.03);
+  EXPECT_DOUBLE_EQ(d.dilat1, 0.8);
+  EXPECT_DOUBLE_EQ(d.dilat2, 5.0);
+  EXPECT_EQ(d.noYieldSurf, 20);
+  EXPECT_TRUE(d.pairs.empty());
+  EXPECT_DOUBLE_EQ(d.e, 0.45);
+  EXPECT_TRUE(has_material_stage(m.materials[0]));
+  EXPECT_STREQ(material_type_name(m.materials[0]), "PressureDependMultiYield");
+  EXPECT_NO_THROW(check_supported(m, milestone2()));
+  EXPECT_THROW(check_supported(m, Capabilities{}), UnsupportedComponent);
+
+  // Absent optional items take OpenSees' Tcl-parser defaults.
+  const Model mo = read_model(path("pdmy_defaults.femorax.h5"));
+  const auto& o = std::get<PressureDependMultiYieldData>(mo.materials[0].data);
+  EXPECT_EQ(o.noYieldSurf, 20);
+  EXPECT_DOUBLE_EQ(o.e, 0.6);
+  EXPECT_DOUBLE_EQ(o.cs1, 0.9);
+  EXPECT_DOUBLE_EQ(o.cs2, 0.02);
+  EXPECT_DOUBLE_EQ(o.cs3, 0.7);
+  EXPECT_DOUBLE_EQ(o.pa, 101.0);
+  EXPECT_DOUBLE_EQ(o.c, 0.3);
+
+  // A user backbone: negative noYieldSurf, the pairs row-major.
+  const Model mb = read_model(path("pdmy_pairs.femorax.h5"));
+  const auto& b = std::get<PressureDependMultiYieldData>(mb.materials[0].data);
+  EXPECT_EQ(b.noYieldSurf, -5);
+  ASSERT_EQ(b.pairs.size(), 10u);
+  EXPECT_DOUBLE_EQ(b.pairs[0], 1e-4);
+  EXPECT_DOUBLE_EQ(b.pairs[1], 0.95);
+  EXPECT_DOUBLE_EQ(b.pairs[9], 0.2);
+
+  // PTAng above the friction angle: OpenSees resets it; the reader says so.
+  const Model w = read_model(path("pdmy_pt_above_friction.femorax.h5"));
+  ASSERT_EQ(w.warnings.size(), 1u);
+  EXPECT_NE(w.warnings[0].find("the phase transformation angle is set to the friction angle"), std::string::npos);
+}
+
+TEST_F(ReaderFixtures, ReadsPressureIndependMultiYield) {
+  const Model m = read_model(path("pimy.femorax.h5"));
+  const auto& d = std::get<PressureIndependMultiYieldData>(m.materials[0].data);
+  EXPECT_DOUBLE_EQ(d.rho, 1.8);
+  EXPECT_DOUBLE_EQ(d.refShearModul, 6.0e4);
+  EXPECT_DOUBLE_EQ(d.refBulkModul, 3.0e5);
+  EXPECT_DOUBLE_EQ(d.cohesi, 37.0);
+  EXPECT_DOUBLE_EQ(d.peakShearStra, 0.1);
+  EXPECT_DOUBLE_EQ(d.frictionAng, 0.0);
+  EXPECT_DOUBLE_EQ(d.refPress, 100.0);
+  EXPECT_DOUBLE_EQ(d.pressDependCoe, 0.0);
+  EXPECT_EQ(d.noYieldSurf, 20);
+  EXPECT_NO_THROW(check_supported(m, milestone2()));
+  const Model mb = read_model(path("pimy_pairs.femorax.h5"));
+  const auto& b = std::get<PressureIndependMultiYieldData>(mb.materials[0].data);
+  EXPECT_EQ(b.noYieldSurf, -5);
+  EXPECT_EQ(b.pairs.size(), 10u);
+}
+
+TEST_F(ReaderFixtures, ReadsMaterialStageActionAndElementResponses) {
+  const Model m = read_model(path("stage_action.femorax.h5"));
+  const auto& u = std::get<UpdateMaterialStageStep>(m.process.back().step);
+  EXPECT_EQ(u.stage, 1);
+  ASSERT_EQ(u.materials.size(), 1u);
+  EXPECT_EQ(u.materials[0], 1);
+  EXPECT_NO_THROW(check_supported(m, milestone2()));
+
+  const Model v = read_model(path("vtkhdf_stress.femorax.h5"));
+  const VtkhdfRecorder* r = nullptr;
+  for (const auto& rec : v.recorders)
+    if (rec.name == "site") r = &std::get<VtkhdfRecorder>(rec.data);
+  ASSERT_NE(r, nullptr);
+  EXPECT_EQ(r->responses, (std::vector<std::string>{"disp", "stress3D6", "strain3D6"}));
+  EXPECT_NO_THROW(check_supported(v, milestone2()));
 }
 
 TEST_F(ReaderFixtures, UnsupportedIsAlsoAModelError) {

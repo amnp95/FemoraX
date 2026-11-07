@@ -31,6 +31,20 @@ void check_supported(const Model& m, const Capabilities& caps) {
       unsupported("Node recorder " + r.name + " with -timeSeries (absolute response) is not available yet");
     }
   }
+  for (const auto& mat : m.materials) {
+    if (has_material_stage(mat) && !caps.soil_materials) {
+      unsupported(std::string("nD material ") + material_type_name(mat) + " (/materials/nd/" +
+                  std::to_string(mat.tag) + ") is not available yet (milestone 2)");
+    }
+  }
+  for (const auto& r : m.recorders) {
+    if (const auto* v = std::get_if<VtkhdfRecorder>(&r.data); v && !caps.vtkhdf_element_responses) {
+      for (const auto& resp : v->responses)
+        if (resp == "stress3D6" || resp == "strain3D6") {
+          unsupported("VTKHDF response \"" + resp + "\" (/recorders/" + r.name + ") is not available yet (milestone 2)");
+        }
+    }
+  }
   for (const auto& g : m.elements) {
     if (std::find(caps.elements.begin(), caps.elements.end(), g.type) == caps.elements.end()) {
       unsupported(std::string("element type \"") + to_string(g.type) + "\" (/elements/" + g.id +
@@ -40,6 +54,9 @@ void check_supported(const Model& m, const Capabilities& caps) {
 
   for (const auto& s : m.process) {
     const std::string where = "/process/" + s.id;
+    if (std::holds_alternative<UpdateMaterialStageStep>(s.step) && !caps.material_stages) {
+      unsupported("update_material_stage (" + where + ") is not available yet (milestone 2)");
+    }
     if (std::holds_alternative<LoadConstStep>(s.step) && !caps.implicit) {
       unsupported("load_const (" + where + ") is available from milestone 1b");
     }

@@ -20,7 +20,7 @@ struct SchemaVersion {
 
 // The schema version this reader implements. It reads files of the same major version
 // with a minor version up to this one.
-inline constexpr SchemaVersion reader_schema_version{0, 3};
+inline constexpr SchemaVersion reader_schema_version{0, 4};
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
 struct Metadata {
@@ -40,11 +40,37 @@ struct ElasticIsotropicData {
   double E = 0.0, nu = 0.0, rho = 0.0;
 };
 
+// nDMaterial PressureDependMultiYield (schema 0.4), Femora's / OpenSees' Tcl names. Defaults
+// of the optional items are those of OpenSees' Tcl parser (OPS_PressureDependMultiYield).
+struct PressureDependMultiYieldData {
+  std::int32_t nd = 3;
+  double rho = 0.0, refShearModul = 0.0, refBulkModul = 0.0, frictionAng = 0.0,
+         peakShearStra = 0.0, refPress = 0.0, pressDependCoe = 0.0, PTAng = 0.0, contrac = 0.0,
+         dilat1 = 0.0, dilat2 = 0.0, liquefac1 = 0.0, liquefac2 = 0.0, liquefac3 = 0.0;
+  std::int32_t noYieldSurf = 20;  // < 0: |noYieldSurf| user (gamma, G/Gmax) pairs
+  std::vector<double> pairs;      // [|noYieldSurf| * 2], row-major (gamma, G/Gmax)
+  double e = 0.6, cs1 = 0.9, cs2 = 0.02, cs3 = 0.7, pa = 101.0, c = 0.3;
+};
+
+// nDMaterial PressureIndependMultiYield (schema 0.4). OpenSees' parser requires every item
+// but the pairs.
+struct PressureIndependMultiYieldData {
+  std::int32_t nd = 3;
+  double rho = 0.0, refShearModul = 0.0, refBulkModul = 0.0, cohesi = 0.0, peakShearStra = 0.0,
+         frictionAng = 0.0, refPress = 100.0, pressDependCoe = 0.0;
+  std::int32_t noYieldSurf = 20;
+  std::vector<double> pairs;
+};
+
 struct NDMaterial {
   std::int32_t tag = 0;
-  std::variant<ElasticIsotropicData> data;
+  std::variant<ElasticIsotropicData, PressureDependMultiYieldData, PressureIndependMultiYieldData> data;
   Metadata meta;
 };
+
+const char* material_type_name(const NDMaterial& m);
+// Whether the material has stages (updateMaterialStage): the multi-yield soil materials.
+bool has_material_stage(const NDMaterial& m);
 
 // ---------------------------------------------------------------------------
 enum class ElementType { StdBrick, SSPbrick };
@@ -128,7 +154,9 @@ struct VtkhdfRecorder {
   std::string file;
   std::optional<double> dT;
   std::optional<double> rTolDt;
-  std::vector<std::string> responses;  // subset of disp vel accel, in file order
+  // subset of disp vel accel (node data) and, since 0.4, stress3D6 strain3D6 (element data:
+  // the average over the element's integration points), in file order
+  std::vector<std::string> responses;
   std::optional<std::int32_t> region;  // always rejected (schema 0.1)
   std::vector<std::int32_t> elements;  // since 0.1; empty = whole model
 };
@@ -186,12 +214,18 @@ struct RecorderStep { std::string name; };
 struct SetTimeStep { double time = 0.0; };
 struct LoadConstStep { std::optional<double> time; };
 struct WipeAnalysisStep {};
+// updateMaterialStage -material <tag> -stage <stage>, for each listed material (schema 0.4;
+// Femora's update_material_stage_to_elastic / _to_plastic actions).
+struct UpdateMaterialStageStep {
+  std::vector<std::int32_t> materials;
+  std::int32_t stage = 0;  // 0 elastic, 1 plastic
+};
 
 struct ProcessStep {
   std::string id;     // group name in /process (order)
   std::string label;  // Femora's description, may be empty
   std::variant<AnalysisStep, PatternStep, RecorderStep, SetTimeStep, LoadConstStep,
-               WipeAnalysisStep>
+               WipeAnalysisStep, UpdateMaterialStageStep>
       step;
 };
 

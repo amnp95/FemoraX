@@ -367,6 +367,122 @@ def m_attrs(values, version=None):
     return m
 
 
+# --- schema 0.4: the multi-yield soil materials, material stages, element responses ---
+PDMY = {  # Femora's dense_ottawa in its nonlinear layered soil column example (kN, m, s)
+    "nd": np.int32(3), "rho": np.float64(2.0285), "refShearModul": np.float64(145000.0),
+    "refBulkModul": np.float64(314166.7), "frictionAng": np.float64(40.0),
+    "peakShearStra": np.float64(0.1), "refPress": np.float64(80.0), "pressDependCoe": np.float64(0.5),
+    "PTAng": np.float64(27.0), "contrac": np.float64(0.03), "dilat1": np.float64(0.8),
+    "dilat2": np.float64(5.0), "liquefac1": np.float64(0.0), "liquefac2": np.float64(0.0),
+    "liquefac3": np.float64(0.0), "noYieldSurf": np.int32(20), "e": np.float64(0.45),
+    "cs1": np.float64(0.9), "cs2": np.float64(0.02), "cs3": np.float64(0.7), "pa": np.float64(101.0),
+    "c": np.float64(0.3)}
+PIMY = {"nd": np.int32(3), "rho": np.float64(1.8), "refShearModul": np.float64(6.0e4),
+        "refBulkModul": np.float64(3.0e5), "cohesi": np.float64(37.0), "peakShearStra": np.float64(0.1),
+        "frictionAng": np.float64(0.0), "refPress": np.float64(100.0), "pressDependCoe": np.float64(0.0),
+        "noYieldSurf": np.int32(20)}
+PAIRS = [[1e-4, 0.95], [3e-4, 0.85], [1e-3, 0.65], [3e-3, 0.4], [1e-2, 0.2]]
+
+
+def m_soil(kind, overrides=None, drop=(), pairs=None, version=None, tag="1"):
+    """Replace /materials/nd/<tag> by a PressureDependMultiYield (or ...Independ...) group."""
+    def m(f):
+        nd = f["materials"]["nd"]
+        del nd[tag]
+        g = nd.create_group(tag)
+        g.attrs["type"] = kind
+        for k, v in (PDMY if kind == "PressureDependMultiYield" else PIMY).items():
+            if k not in drop:
+                g.attrs[k] = v
+        for k, v in (overrides or {}).items():
+            g.attrs[k] = v
+        if pairs is not None:
+            g.create_dataset("pairs", data=np.array(pairs, dtype=np.float64))
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
+
+
+def m_stage(materials, stage, version=None, soil=True):
+    def m(f):
+        if soil:
+            m_soil("PressureDependMultiYield")(f)
+        names = sorted(f["process"])
+        g = f["process"].create_group(f"{len(names):0{len(names[0])}d}")
+        g.attrs["kind"] = "update_material_stage"
+        g.attrs["stage"] = np.int32(stage)
+        g.create_dataset("materials", data=np.array(materials, dtype=np.int32))
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
+
+
+def m_responses(text, version=None):
+    def m(f):
+        f["recorders"]["site"].attrs["responses"] = text
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
+
+
+SOIL_CASES = [
+    # Read correctly (test_model_reader checks the values), then refused by this build until
+    # the material, the stage action and the element responses are available.
+    ("pdmy", "explicit", "unsupported", "nD material PressureDependMultiYield (/materials/nd/1) is not "
+     "available yet", m_soil("PressureDependMultiYield")),
+    ("pdmy_defaults", "explicit", "unsupported", "is not available yet",
+     m_soil("PressureDependMultiYield", drop=("noYieldSurf", "e", "cs1", "cs2", "cs3", "pa", "c"))),
+    ("pdmy_pairs", "explicit", "unsupported", "is not available yet",
+     m_soil("PressureDependMultiYield", {"noYieldSurf": np.int32(-5)}, pairs=PAIRS)),
+    ("pdmy_pt_above_friction", "explicit", "unsupported", "is not available yet",
+     m_soil("PressureDependMultiYield", {"PTAng": np.float64(45.0)})),
+    ("pimy", "explicit", "unsupported", "nD material PressureIndependMultiYield", m_soil("PressureIndependMultiYield")),
+    ("pimy_pairs", "explicit", "unsupported", "is not available yet",
+     m_soil("PressureIndependMultiYield", {"noYieldSurf": np.int32(-5)}, pairs=PAIRS)),
+    ("stage_action", "explicit", "unsupported", "nD material PressureDependMultiYield", m_stage([1], 1)),
+    ("vtkhdf_stress", "explicit", "unsupported", 'VTKHDF response "stress3D6" (/recorders/site) is not available',
+     m_responses("disp stress3D6 strain3D6")),
+    # invalid
+    ("pdmy_in_0_3_file", "explicit", "invalid", "was added in schema 0.4",
+     m_soil("PressureDependMultiYield", version=[0, 3])),
+    ("pdmy_missing_attribute", "explicit", "invalid", "attribute 'PTAng'",
+     m_soil("PressureDependMultiYield", drop=("PTAng",))),
+    ("pdmy_friction_range", "explicit", "invalid", "must be in (0, 90) degrees",
+     m_soil("PressureDependMultiYield", {"frictionAng": np.float64(90.0)})),
+    ("pdmy_negative_modulus", "explicit", "invalid", "refShearModul' must be positive",
+     m_soil("PressureDependMultiYield", {"refShearModul": np.float64(-1.0)})),
+    ("pdmy_surfaces_zero", "explicit", "invalid", "must be non-zero and less than 40 in magnitude",
+     m_soil("PressureDependMultiYield", {"noYieldSurf": np.int32(0)})),
+    ("pdmy_surfaces_40", "explicit", "invalid", "must be non-zero and less than 40 in magnitude",
+     m_soil("PressureDependMultiYield", {"noYieldSurf": np.int32(40)})),
+    ("pdmy_pairs_missing", "explicit", "invalid", "noYieldSurf < 0 needs the dataset 'pairs'",
+     m_soil("PressureDependMultiYield", {"noYieldSurf": np.int32(-5)})),
+    ("pdmy_pairs_rows", "explicit", "invalid", "must have 4 rows (|noYieldSurf|), found 5",
+     m_soil("PressureDependMultiYield", {"noYieldSurf": np.int32(-4)}, pairs=PAIRS)),
+    ("pdmy_pairs_with_positive", "explicit", "invalid", "allowed only with a negative noYieldSurf",
+     m_soil("PressureDependMultiYield", pairs=PAIRS)),
+    ("pdmy_pairs_ratio", "explicit", "invalid", "every G/Gmax must be in (0, 1]",
+     m_soil("PressureDependMultiYield", {"noYieldSurf": np.int32(-5)},
+            pairs=[[1e-4, 0.95], [3e-4, 0.85], [1e-3, 1.5], [3e-3, 0.4], [1e-2, 0.2]])),
+    ("pdmy_nd_4", "explicit", "invalid", "must be 2 or 3, found 4", m_soil("PressureDependMultiYield", {"nd": np.int32(4)})),
+    ("pimy_no_strength", "explicit", "invalid", "must be positive when frictionAng is 0",
+     m_soil("PressureIndependMultiYield", {"cohesi": np.float64(0.0)})),
+    ("pimy_missing_surfaces", "explicit", "invalid", "missing attribute 'noYieldSurf'",
+     m_soil("PressureIndependMultiYield", drop=("noYieldSurf",))),
+    ("stage_in_0_3_file", "explicit", "invalid", "was added in schema 0.4",
+     m_stage([1], 0, version=[0, 3], soil=False)),
+    ("stage_value", "explicit", "invalid", "must be 0 (elastic) or 1 (plastic), found 2", m_stage([1], 2)),
+    ("stage_missing_material", "explicit", "invalid", "material 9 does not exist", m_stage([9], 0)),
+    ("stage_elastic_material", "explicit", "invalid", "has no material stage", m_stage([2], 0)),
+    ("stage_duplicate", "explicit", "invalid", "appears more than once", m_stage([1, 1], 0)),
+    ("vtkhdf_stress_in_0_3", "explicit", "invalid", "was added in schema 0.4",
+     m_responses("disp stress3D6", version=[0, 3])),
+    # unsupported
+    ("pdmy_plane_strain", "explicit", "unsupported", "= 2 (plane strain)",
+     m_soil("PressureDependMultiYield", {"nd": np.int32(2)})),
+    ("vtkhdf_other_response", "explicit", "unsupported", 'VTKHDF response "stress2D3"', m_responses("disp stress2D3")),
+]
+
 S = "/process/{explicit}"  # placeholder resolved below
 
 CASES = [
@@ -383,7 +499,7 @@ CASES = [
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 0.x files", m_version(1, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 4)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 5)),
     # --- schema 0.3: Static / LoadControl, ModifiedNewton, solver attributes ---------
     ("static_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
      m_static(version=[0, 2])),
@@ -471,8 +587,8 @@ CASES = [
     # --- unsupported -----------------------------------------------------------------
     ("element_type", "explicit", "unsupported", 'element type "SSPquad"',
      m_set_attr("elements/000000", "type", "SSPquad")),
-    ("material_type", "explicit", "unsupported", 'nD material type "PressureDependMultiYield"',
-     m_set_attr("materials/nd/1", "type", "PressureDependMultiYield")),
+    ("material_type", "explicit", "unsupported", 'nD material type "DruckerPrager"',
+     m_set_attr("materials/nd/1", "type", "DruckerPrager")),
     ("material_kind", "explicit", "unsupported", 'material kind "uniaxial"', m_uniaxial),
     ("ndm_2", "explicit", "unsupported", "ndm = 2", m_set_attr("/", "ndm", np.int32(2))),
     ("sections_group", "explicit", "unsupported", "unsupported component: /sections",
@@ -514,7 +630,7 @@ def main() -> int:
     out = Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
     rows = []
-    for name, base, expect, text, mutate in CASES:
+    for name, base, expect, text, mutate in CASES + SOIL_CASES:
         path = out / f"{name}.femorax.h5"
         if base is None:
             path.write_text("this is not an HDF5 file\n")

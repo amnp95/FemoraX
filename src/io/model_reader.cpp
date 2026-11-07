@@ -22,6 +22,17 @@ const char* to_string(ElementType t) {
   return "?";
 }
 
+const char* material_type_name(const NDMaterial& m) {
+  if (std::holds_alternative<ElasticIsotropicData>(m.data)) return "ElasticIsotropic";
+  if (std::holds_alternative<PressureDependMultiYieldData>(m.data)) return "PressureDependMultiYield";
+  return "PressureIndependMultiYield";
+}
+
+bool has_material_stage(const NDMaterial& m) {
+  return std::holds_alternative<PressureDependMultiYieldData>(m.data) ||
+         std::holds_alternative<PressureIndependMultiYieldData>(m.data);
+}
+
 int node_count(ElementType t) {
   switch (t) {
     case ElementType::StdBrick:
@@ -162,6 +173,128 @@ void read_nodes(Group& root, Model& m) {
   m.nodes.ndf = std::move(ndf.data);
 }
 
+// --- Multi-yield soil materials (schema 0.4) -------------------------------------------
+// Rules: Femora's checks (femora/components/material/nd/pressure_*_multi_yield.py) and the
+// conditions OpenSees' constructors treat as fatal; values OpenSees silently resets are
+// rejected too, except where Femora allows them (handled by the material, docs/deviations.md).
+double finite_attr(Group& g, const char* name) {
+  const double v = g.attr_double(name);
+  require_finite(v, g.attr_item(name));
+  return v;
+}
+
+double finite_attr_or(Group& g, const char* name, double fallback) {
+  const auto v = g.opt_attr_double(name);
+  if (v) require_finite(*v, g.attr_item(name));
+  return v.value_or(fallback);
+}
+
+void require(bool ok, Group& g, const char* name, const std::string& rule) {
+  if (!ok) invalid(g.attr_item(name) + " " + rule);
+}
+
+std::int32_t read_nd(Group& g) {
+  const std::int32_t nd = g.attr_int("nd");
+  if (nd == 2) unsupported(g.attr_item("nd") + " = 2 (plane strain) in " + g.path(), "nd = 3");
+  if (nd != 3) invalid(g.attr_item("nd") + " must be 2 or 3, found " + std::to_string(nd));
+  return nd;
+}
+
+// noYieldSurf and the optional pairs dataset: positive N, automatic surfaces and no pairs;
+// negative N, |N| rows of (gamma, G/Gmax) with gamma > 0 and 0 < G/Gmax <= 1.
+void read_surfaces(Group& g, std::int32_t& n, std::vector<double>& pairs, std::int32_t fallback) {
+  n = g.opt_attr_int("noYieldSurf").value_or(fallback);
+  if (n == 0 || n <= -40 || n >= 40) {
+    invalid(g.attr_item("noYieldSurf") + " must be non-zero and less than 40 in magnitude, found " +
+            std::to_string(n));
+  }
+  if (n > 0) {
+    if (g.has_child("pairs")) invalid(g.item("pairs") + " is allowed only with a negative noYieldSurf");
+    return;
+  }
+  if (!g.has_child("pairs")) invalid(g.path() + ": noYieldSurf < 0 needs the dataset 'pairs'");
+  auto a = g.dataset_double("pairs", 2);
+  if (a.rows() != static_cast<std::int64_t>(-n)) {
+    invalid(g.item("pairs") + " must have " + std::to_string(-n) + " rows (|noYieldSurf|), found " +
+            std::to_string(a.rows()));
+  }
+  require_finite(a.data, g.item("pairs"));
+  for (std::size_t i = 0; i < a.data.size() / 2; ++i) {
+    if (!(a.data[2 * i] > 0.0)) invalid(g.item("pairs") + ": every gamma must be positive");
+    if (!(a.data[2 * i + 1] > 0.0 && a.data[2 * i + 1] <= 1.0)) {
+      invalid(g.item("pairs") + ": every G/Gmax must be in (0, 1]");
+    }
+  }
+  pairs = std::move(a.data);
+}
+
+PressureDependMultiYieldData read_pdmy(Group& g) {
+  PressureDependMultiYieldData d;
+  d.nd = read_nd(g);
+  d.rho = finite_attr(g, "rho");
+  d.refShearModul = finite_attr(g, "refShearModul");
+  d.refBulkModul = finite_attr(g, "refBulkModul");
+  d.frictionAng = finite_attr(g, "frictionAng");
+  d.peakShearStra = finite_attr(g, "peakShearStra");
+  d.refPress = finite_attr(g, "refPress");
+  d.pressDependCoe = finite_attr(g, "pressDependCoe");
+  d.PTAng = finite_attr(g, "PTAng");
+  d.contrac = finite_attr(g, "contrac");
+  d.dilat1 = finite_attr(g, "dilat1");
+  d.dilat2 = finite_attr(g, "dilat2");
+  d.liquefac1 = finite_attr(g, "liquefac1");
+  d.liquefac2 = finite_attr(g, "liquefac2");
+  d.liquefac3 = finite_attr(g, "liquefac3");
+  read_surfaces(g, d.noYieldSurf, d.pairs, 20);
+  d.e = finite_attr_or(g, "e", 0.6);
+  d.cs1 = finite_attr_or(g, "cs1", 0.9);
+  d.cs2 = finite_attr_or(g, "cs2", 0.02);
+  d.cs3 = finite_attr_or(g, "cs3", 0.7);
+  d.pa = finite_attr_or(g, "pa", 101.0);
+  d.c = finite_attr_or(g, "c", 0.3);
+  require(d.rho >= 0.0, g, "rho", "must not be negative");
+  require(d.refShearModul > 0.0, g, "refShearModul", "must be positive");
+  require(d.refBulkModul > 0.0, g, "refBulkModul", "must be positive");
+  require(d.frictionAng > 0.0 && d.frictionAng < 90.0, g, "frictionAng", "must be in (0, 90) degrees");
+  require(d.PTAng > 0.0 && d.PTAng <= 90.0, g, "PTAng", "must be in (0, 90] degrees");
+  require(d.peakShearStra > 0.0, g, "peakShearStra", "must be positive");
+  require(d.refPress > 0.0, g, "refPress", "must be positive");
+  require(d.pressDependCoe >= 0.0, g, "pressDependCoe", "must not be negative");
+  require(d.e >= 0.0, g, "e", "must not be negative");
+  require(d.cs1 >= 0.0, g, "cs1", "must not be negative");
+  require(d.cs2 >= 0.0, g, "cs2", "must not be negative");
+  require(d.cs3 >= 0.0, g, "cs3", "must not be negative");
+  require(d.pa > 0.0, g, "pa", "must be positive");
+  require(d.c >= 0.0, g, "c", "must not be negative");
+  return d;
+}
+
+PressureIndependMultiYieldData read_pimy(Group& g) {
+  PressureIndependMultiYieldData d;
+  d.nd = read_nd(g);
+  d.rho = finite_attr(g, "rho");
+  d.refShearModul = finite_attr(g, "refShearModul");
+  d.refBulkModul = finite_attr(g, "refBulkModul");
+  d.cohesi = finite_attr(g, "cohesi");
+  d.peakShearStra = finite_attr(g, "peakShearStra");
+  d.frictionAng = finite_attr(g, "frictionAng");
+  d.refPress = finite_attr(g, "refPress");
+  d.pressDependCoe = finite_attr(g, "pressDependCoe");
+  if (!g.has_attr("noYieldSurf")) invalid(g.path() + ": missing attribute 'noYieldSurf'");
+  read_surfaces(g, d.noYieldSurf, d.pairs, 20);
+  require(d.rho >= 0.0, g, "rho", "must not be negative");
+  require(d.refShearModul > 0.0, g, "refShearModul", "must be positive");
+  require(d.refBulkModul > 0.0, g, "refBulkModul", "must be positive");
+  require(d.cohesi >= 0.0, g, "cohesi", "must not be negative");
+  require(d.peakShearStra > 0.0, g, "peakShearStra", "must be positive");
+  require(d.frictionAng >= 0.0 && d.frictionAng < 90.0, g, "frictionAng", "must be in [0, 90) degrees");
+  require(d.frictionAng > 0.0 || d.cohesi > 0.0, g, "cohesi",
+          "must be positive when frictionAng is 0 (no strength otherwise)");
+  require(d.refPress > 0.0, g, "refPress", "must be positive");
+  require(d.pressDependCoe >= 0.0, g, "pressDependCoe", "must not be negative");
+  return d;
+}
+
 void read_materials(Group& root, Model& m) {
   Group mats = root.group("materials");
   for (const auto& kind : mats.children()) {
@@ -183,8 +316,21 @@ void read_materials(Group& root, Model& m) {
       require_finite(d.nu, g.attr_item("nu"));
       require_finite(d.rho, g.attr_item("rho"));
       mat.data = d;
+    } else if (type == "PressureDependMultiYield") {
+      require_minor(m, 4, g.path() + " (type \"PressureDependMultiYield\")");
+      const auto d = read_pdmy(g);
+      if (d.noYieldSurf > 0 && d.PTAng > d.frictionAng) {
+        m.warnings.push_back(g.path() + ": PTAng " + std::to_string(d.PTAng) + " > frictionAng " +
+                             std::to_string(d.frictionAng) + "; the phase transformation angle is set to "
+                             "the friction angle, as OpenSees does");
+      }
+      mat.data = d;
+    } else if (type == "PressureIndependMultiYield") {
+      require_minor(m, 4, g.path() + " (type \"PressureIndependMultiYield\")");
+      mat.data = read_pimy(g);
     } else {
-      unsupported("nD material type " + quoted(type) + " in " + g.path(), "ElasticIsotropic");
+      unsupported("nD material type " + quoted(type) + " in " + g.path(),
+                  "ElasticIsotropic, PressureDependMultiYield, PressureIndependMultiYield");
     }
     mat.meta = read_meta(g);
     g.finish();
@@ -443,9 +589,12 @@ void read_recorders(Group& root, Model& m) {
       r.rTolDt = g.opt_attr_double("rTolDt");
       std::istringstream words(g.attr_string("responses"));
       for (std::string w; words >> w;) {
-        if (w != "disp" && w != "vel" && w != "accel") {
-          unsupported("VTKHDF response " + quoted(w) + " in " + g.path(), "disp, vel, accel");
+        const bool element_response = w == "stress3D6" || w == "strain3D6";
+        if (w != "disp" && w != "vel" && w != "accel" && !element_response) {
+          unsupported("VTKHDF response " + quoted(w) + " in " + g.path(),
+                      "disp, vel, accel, stress3D6, strain3D6");
         }
+        if (element_response) require_minor(m, 4, g.attr_item("responses") + " " + quoted(w));
         if (std::find(r.responses.begin(), r.responses.end(), w) != r.responses.end()) {
           invalid(g.attr_item("responses") + " lists " + quoted(w) + " twice");
         }
@@ -620,8 +769,17 @@ void read_process(Group& root, Model& m) {
       s.step = SetTimeStep{t};
     } else if (kind == "load_const") s.step = LoadConstStep{g.opt_attr_double("time")};
     else if (kind == "wipe_analysis") s.step = WipeAnalysisStep{};
-    else unsupported("process step " + quoted(kind) + " in " + g.path(),
-                     "analysis, pattern, recorder, set_time, load_const, wipe_analysis");
+    else if (kind == "update_material_stage") {
+      require_minor(m, 4, g.path() + " (kind \"update_material_stage\")");
+      UpdateMaterialStageStep u;
+      u.stage = g.attr_int("stage");
+      if (u.stage != 0 && u.stage != 1) {
+        invalid(g.attr_item("stage") + " must be 0 (elastic) or 1 (plastic), found " + std::to_string(u.stage));
+      }
+      u.materials = g.dataset_int("materials").data;
+      s.step = std::move(u);
+    } else unsupported("process step " + quoted(kind) + " in " + g.path(),
+                     "analysis, pattern, recorder, set_time, load_const, wipe_analysis, update_material_stage");
     g.finish();
     m.process.push_back(std::move(s));
   }
@@ -821,6 +979,18 @@ void validate(Model& m) {
       if (!recorders.count(r->name)) invalid(where + ": recorder " + quoted(r->name) + " does not exist");
       if (!active_recorders.insert(r->name).second) {
         invalid(where + ": recorder " + quoted(r->name) + " is activated twice");
+      }
+    } else if (const auto* u = std::get_if<UpdateMaterialStageStep>(&s.step)) {
+      std::unordered_set<std::int32_t> seen;
+      for (const auto tag : u->materials) {
+        const auto it = std::find_if(m.materials.begin(), m.materials.end(),
+                                     [&](const NDMaterial& x) { return x.tag == tag; });
+        if (it == m.materials.end()) invalid(where + "/materials: material " + std::to_string(tag) + " does not exist");
+        if (!has_material_stage(*it)) {
+          invalid(where + "/materials: material " + std::to_string(tag) + " (" + material_type_name(*it) +
+                  ") has no material stage (updateMaterialStage applies to the multi-yield soil materials)");
+        }
+        if (!seen.insert(tag).second) invalid(dup_message(where + "/materials: material", tag));
       }
     }
   }

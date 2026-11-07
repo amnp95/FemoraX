@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 0.3
+# FemoraX model file, schema version 0.4
 
-Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -14,6 +14,11 @@ Scope: what milestone 1 needs to run Femora's layered elastic soil column
   Linear and Newton algorithms, convergence tests, and `loadConst`/`setTime` actions.
   The schema describes these now so 1b needs no format change; the 1a reader rejects them
   with "available in milestone 1b".
+- **2, nonlinear soil column (0.4):** the PressureDependMultiYield and
+  PressureIndependMultiYield materials, the `update_material_stage` action, and the VTKHDF
+  element responses `stress3D6` and `strain3D6`. The reader accepts them; a build runs
+  them once each is ported and verified (milestone 2), and until then refuses them as
+  "not available yet".
 
 Everything else stops the reader with a message that names the component and suggests the
 OpenSees backend (see "Unsupported components").
@@ -41,6 +46,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.0 | first version |
 | 0.1 | VTKHDF recorder: optional `elements` dataset (the element tags to record); `region` stays rejected |
 | 0.2 | equalDOF: optional `command` dataset (which `equalDOF` command each row comes from) |
+| 0.4 | nD materials `PressureDependMultiYield` and `PressureIndependMultiYield` (with the optional `pairs` dataset); process step `update_material_stage`; VTKHDF responses `stress3D6`, `strain3D6` |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
@@ -97,7 +103,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `schema_version` | `[2]` int32 | `[0, 3]` (a reader of 0.3 also reads 0.0, 0.1 and 0.2) |
+| `schema_version` | `[2]` int32 | `[0, 4]` (a reader of 0.4 also reads 0.0 to 0.3) |
 | `ndm` | int32 | spatial dimension; must be `3` in v0 |
 | `generator` | string | e.g. `"femora 0.9.1"`; informational |
 | `model_name` | string | Femora `model_name`; informational |
@@ -122,8 +128,45 @@ element groups reference). `femora_name` metadata may hold Femora's `user_name`.
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `type` | string | `"ElasticIsotropic"` |
+| `type` | string | `"ElasticIsotropic"`, `"PressureDependMultiYield"` *(since 0.4)* or `"PressureIndependMultiYield"` *(since 0.4)* |
 | `E`, `nu`, `rho` | float64 | `nDMaterial ElasticIsotropic <tag> E nu rho` |
+
+**PressureDependMultiYield** *(since 0.4)*: `nDMaterial PressureDependMultiYield <tag> nd rho
+refShearModul refBulkModul frictionAng peakShearStra refPress pressDependCoe PTAng contrac
+dilat1 dilat2 liquefac1 liquefac2 liquefac3 [noYieldSurf [gamma Gs ...] e cs1 cs2 cs3 pa c]`,
+as Femora's `pressure_depend_multi_yield` writes it (`liquefac3` is OpenSees'
+`liquefactionParam4`). Attribute names are Femora's and OpenSees' Tcl names. Not in the
+schema: OpenSees' `hv` and `pv` (Femora never writes them; OpenSees' defaults 0 and 1, the
+volumetric-plasticity branch off).
+
+| Item | Type | Meaning |
+|---|---|---|
+| attr `nd` | int32 | `3` (`2`, plane strain, is unsupported: no plane elements) |
+| attrs `rho`, `refShearModul`, `refBulkModul`, `frictionAng`, `peakShearStra`, `refPress`, `pressDependCoe`, `PTAng`, `contrac`, `dilat1`, `dilat2`, `liquefac1`, `liquefac2`, `liquefac3` | float64 | as in the Tcl command (`refPress` positive; FemoraX applies OpenSees' sign convention internally) |
+| attr `noYieldSurf` | int32 *(optional)* | number of yield surfaces, default 20; negative: `abs(noYieldSurf)` user-defined surfaces from `pairs` |
+| `pairs` | `[K, 2]` float64 *(only with noYieldSurf < 0)* | `K = abs(noYieldSurf)` rows of (shear strain gamma > 0, G/Gmax in (0, 1]) |
+| attrs `e`, `cs1`, `cs2`, `cs3`, `pa`, `c` | float64 *(optional)* | defaults of OpenSees' Tcl parser: 0.6, 0.9, 0.02, 0.7, 101, 0.3 (Femora writes the same defaults) |
+
+Rules (invalid otherwise): every value finite; `rho >= 0`; `refShearModul`, `refBulkModul`,
+`peakShearStra`, `refPress`, `pa` positive; `0 < frictionAng < 90`; `0 < PTAng <= 90`;
+`pressDependCoe`, `e`, `cs1`, `cs2`, `cs3`, `c` not negative; `noYieldSurf` non-zero with
+`abs(noYieldSurf) < 40` (Femora's rule). `PTAng > frictionAng` with automatic surfaces is
+accepted with a warning: OpenSees sets `PTAng = frictionAng`, and so does FemoraX.
+
+**PressureIndependMultiYield** *(since 0.4)*: `nDMaterial PressureIndependMultiYield <tag> nd rho
+refShearModul refBulkModul cohesi peakShearStra frictionAng refPress pressDependCoe
+noYieldSurf [gamma Gs ...]`, as Femora's `pressure_independ_multi_yield` writes it (OpenSees'
+parser requires all of them).
+
+| Item | Type | Meaning |
+|---|---|---|
+| attr `nd` | int32 | `3` |
+| attrs `rho`, `refShearModul`, `refBulkModul`, `cohesi`, `peakShearStra`, `frictionAng`, `refPress`, `pressDependCoe` | float64 | as in the Tcl command |
+| attr `noYieldSurf` | int32 | number of yield surfaces; negative: user-defined surfaces from `pairs` |
+| `pairs` | `[K, 2]` float64 *(only with noYieldSurf < 0)* | as for PressureDependMultiYield |
+
+Rules: as above, with `cohesi >= 0`, `0 <= frictionAng < 90`, and `cohesi > 0` when
+`frictionAng = 0` (OpenSees: fatal).
 
 ### 3.4 `/elements/<id>`
 
@@ -277,7 +320,7 @@ it. `<name>` is any unique string chosen by the exporter.
 | attr `file` | string | file name as Femora writes it (with `$pid`) |
 | attr `dT` | float64 *(optional)* | `-dT` |
 | attr `rTolDt` | float64 *(optional)* | `-rTolDt` |
-| attr `responses` | string | space-separated; v0: any of `disp vel accel` |
+| attr `responses` | string | space-separated; any of `disp vel accel` (node data) and, since 0.4, `stress3D6 strain3D6` (element data: each element's stress or strain averaged over its integration points, as OpenSees' `stress3D6` / `strain3D6` element responses) |
 | `elements` | `[M]` int32 *(optional, since 0.1)* | record only these elements (and their nodes); the exporter expands Femora's `-region` into its element tags. Absent: the whole model |
 | attr `region` | int32 *(optional)* | not supported: the file has no region tags to refer to (element groups and damping regions are exporter-named). The reader rejects it; use `elements` |
 
@@ -297,6 +340,7 @@ step has attrs `kind` (string) and `label` (string, *optional*, Femora's descrip
 | `set_time` | `time` float64 | `setTime` |
 | `load_const` | `time` float64 *(optional)* | `loadConst [-time t]` (1b) |
 | `wipe_analysis` | | `wipeAnalysis` (no effect on state) |
+| `update_material_stage` *(since 0.4)* | `stage` int32 (0 elastic, 1 plastic); dataset `materials` `[K]` int32 | `updateMaterialStage -material <tag> -stage <stage>` for each listed material, in order (Femora's `update_material_stage_to_elastic` / `_to_plastic` actions list every stage-capable material). Each tag must name a PressureDependMultiYield or PressureIndependMultiYield material, at most once |
 
 `analysis` step attributes:
 
@@ -349,18 +393,19 @@ Rules for explicit stages (decided for milestone 1a):
 The reader stops on these, naming the component and suggesting the OpenSees backend:
 
 - any element type other than `stdBrick` and `SSPbrick`, any material other than
-  `ElasticIsotropic`, any section or transformation;
+  `ElasticIsotropic`, `PressureDependMultiYield` and `PressureIndependMultiYield` (and those
+  two with `nd = 2`), any section or transformation;
 - `ndm != 3`;
 - other time series (`Linear`, `Constant`, `Trig`, ...), patterns (`Plain`, `MultipleSupport`,
   `H5DRM`), loads (`load`, `eleLoad`, `sp` in patterns);
 - MP constraints other than equalDOF (`rigidDiaphragm`, `rigidLink`, ...), node regions,
   global `rayleigh`, other damping types;
 - recorders other than Node and VTKHDF, Node recorder output other than `-file`
-  (`-xml`, `-binary`, `-tcp`), VTKHDF responses other than `disp vel accel`;
+  (`-xml`, `-binary`, `-tcp`), VTKHDF responses other than `disp vel accel stress3D6 strain3D6`;
 - analyses other than `Transient` and `Static` (`VariableTransient`, ramped `dt_min`/`dt_max`),
   static integrators other than `LoadControl` (`DisplacementControl`, ...), other
   integrators, algorithms, handlers;
-- other process actions (`remove recorders`, `remove loadPattern`, `updateMaterialStage`,
+- other process actions (`remove recorders`, `remove loadPattern`, `updateParameter`,
   arbitrary Tcl from `model.actions.tcl`);
 - partitioned models (`num_partitions > 1`); v0 runs one partition.
 
