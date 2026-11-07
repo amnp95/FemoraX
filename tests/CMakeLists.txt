@@ -23,6 +23,7 @@ add_executable(femorax_unit_tests
   unit/test_sparsity.cpp
   unit/test_reference_assembly.cpp
   unit/test_matrix_free_operator.cpp
+  unit/test_cg.cpp
   unit/test_runtime.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest
                       Eigen3::Eigen)

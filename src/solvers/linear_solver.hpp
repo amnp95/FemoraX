@@ -88,6 +88,9 @@ struct SolveResult {
   double rhs_norm = 0.0;           // ||b||
   double initial_residual = 0.0;   // ||b - A x0||
   double final_residual = 0.0;     // ||b - A x|| as the method tracks it
+  // CG met p^T A p <= 0: the operator is not positive definite (or a declaration was too
+  // optimistic); the caller falls back to a non-symmetric solver.
+  bool indefinite = false;
 };
 
 class LinearSolver {

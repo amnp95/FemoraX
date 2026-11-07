@@ -9,11 +9,15 @@
 // and pair lists.
 
 #include <memory>
+#include <utility>
 #include <string>
 
 #include "../tests/common/synthetic_models.hpp"
 #include "compile/batches.hpp"
 #include "exec/internal_force.hpp"
+#include "exec/matrix_free_operator.hpp"
+#include "solvers/cg.hpp"
+#include "solvers/jacobi.hpp"
 #include "exec/runtime.hpp"
 #include "harness.hpp"
 
@@ -58,6 +62,36 @@ void register_operator(Registry& registry, const Options& options) {
                       // The default (what the solvers run) is gated; the variants decide it.
                       .gated = name == def});
       }
+
+  // 20 iterations of CG with Jacobi on a Newmark step (dt = 1e-3) with the default operator:
+  // the implicit solver's cost per solve. One iteration is one operator apply, three dot
+  // products and three axpy-like updates.
+  struct Cg {
+    exec::MatrixFreeOperator a;
+    solvers::Jacobi jacobi;
+    std::unique_ptr<solvers::ConjugateGradient> cg;
+    exec::Vec b, xs;
+  };
+  const double dt = 1e-3;
+  auto cg = std::make_shared<Cg>(Cg{exec::MatrixFreeOperator(*k, *u, {1.0, 0.5 / (0.25 * dt), 1.0 / (0.25 * dt * dt)}),
+                                    {}, nullptr, exec::Vec("b", static_cast<std::size_t>(neq)),
+                                    exec::Vec("xs", static_cast<std::size_t>(neq))});
+  cg->jacobi.setup(cg->a);
+  solvers::SolveOptions o;
+  o.relative_tolerance = 0.0;  // run exactly max_iterations
+  o.max_iterations = 20;
+  cg->cg = std::make_unique<solvers::ConjugateGradient>(o, simd_width());
+  cg->cg->setup(cg->a, &cg->jacobi);
+  Kokkos::deep_copy(cg->b, 1.0);
+  registry.add({.name = "solvers/cg20/" + std::to_string(s.nx) + "^3",
+                .unit = "call",
+                .bytes = 0,
+                .flops = 0.0,
+                .items = 20,
+                .run = [k, cg] {
+                  Kokkos::deep_copy(cg->xs, 0.0);
+                  cg->cg->solve(cg->b, cg->xs);
+                }});
 }
 
 }  // namespace femorax::bench
