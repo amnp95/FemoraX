@@ -11,7 +11,7 @@ this file.
 | GoogleTest | 1.17.0 | `github.com/google/googletest/releases/download/v1.17.0/googletest-1.17.0.tar.gz` (FetchContent) | `65fab701d9829d38cb77c14acdc431d2108bfdbf8979e40eb8ae567edf10b27c` | tests only |
 | HDF5 | system (`libhdf5-dev`, 1.10.10 here) | apt | n/a | model reader, VTKHDF recorder |
 | HDF5 (reference build only) | 1.14.6 | `github.com/HDFGroup/hdf5/releases/download/hdf5_1.14.6/hdf5-1.14.6.tar.gz` (`tests/reference/build_hdf5.sh`) | `e4defbac30f50d64e1556374aa49e574417c9e72c6b1de7a4ff88c4b1bea6e9b` | OpenSees' VTKHDF recorder, which OpenSees compiles only with HDF5 >= 1.12 |
-| Eigen | to be pinned in milestone 1b | | | CPU direct solver (`SimplicialLDLT`) |
+| Eigen | 3.4.0 (system `libeigen3-dev`) | apt | n/a | tests only: reference solutions (`SimplicialLDLT`, `SparseLU`) on host-assembled matrices (`tests/common/reference_assembly.hpp`); never linked into FemoraX |
 
 ### Kokkos 5.1.0 and CUDA 13
 

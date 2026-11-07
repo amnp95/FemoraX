@@ -496,8 +496,7 @@ compile step's equation numbering.
   `solve(b, x)` with `x` holding the initial guess; returns converged, iterations and the
   residual norms. Options: relative and absolute tolerance, maximum iterations.
 
-Non-symmetric operators (another Krylov method behind the same interface) and block
-structure need no change for callers.
+Non-symmetric operators and block structure need no change for callers.
 
 ### The matrix-free operator
 
@@ -522,6 +521,25 @@ pieces are composable kernel parts (`point_strain`, the material tangent product
 provides the pointwise functions gets the operator, its diagonal and the preconditioners
 without new kernel code.
 
+### Symmetry of the tangent, and the solver choice
+
+Plastic soil models with non-associative flow, frictional contact and u-p elements give
+non-symmetric or indefinite tangents; CG needs a symmetric positive definite operator.
+So symmetry is declared, not assumed:
+
+- Every material declares its tangent: `TANGENT = SymmetricPositiveDefinite`,
+  `Symmetric` (possibly indefinite) or `General`; every element declares what its own
+  terms add (u-p coupling, contact). The concepts in `contracts.hpp` require it. Elastic
+  ElasticIsotropic is `SymmetricPositiveDefinite`.
+- The stage's operator takes the weakest declaration over all element-material pairs in
+  it (and over the constraints, which never break symmetry under DOF elimination).
+- The solver follows automatically; users never choose:
+  `SymmetricPositiveDefinite` → CG; `Symmetric` or `General` → GMRES. If CG detects a
+  non-positive curvature (`p^T A p <= 0`), it stops and the solve is repeated with GMRES,
+  with a warning naming the stage (a declaration was too optimistic).
+- Tangent storage follows the declaration too: the packed 21-value form only when the
+  material declares a symmetric tangent, the full 36 values otherwise.
+
 ### Preconditioners (all matrix-free)
 
 1. **Jacobi** (first): the diagonal of `K_eff`, gathered element by element like a force
@@ -534,12 +552,26 @@ without new kernel code.
 
 ### Solvers
 
-- **CG** (our own, in Kokkos, all backends): the default for implicit stages. Each solve
+- **CG** (our own, in Kokkos, all backends): for symmetric positive definite stages. Each solve
   starts from the previous solution. Dot products use a fixed-chunk two-stage reduction,
   so results are bit-identical for any thread count on a backend
   (`src/solvers/vector_ops.hpp`). Implicit dynamics suits it: at practical steps `K_eff`
   is dominated by `M/dt^2`, so its condition number stays bounded as the mesh grows.
-- **Eigen `SimplicialLDLT`**: in tests only, as the reference solution on small models,
+- **GMRES(m)** (our own, in Kokkos, all backends): for symmetric indefinite and
+  non-symmetric stages. Restarted GMRES with right preconditioning in its flexible form
+  (FGMRES), so preconditioners that change between iterations (Chebyshev, later
+  multigrid) are allowed. Orthogonalization by classical Gram-Schmidt with one
+  re-orthogonalization (CGS2): all dot products of one iteration are fused into one
+  deterministic multi-dot reduction, so an iteration needs two global reductions instead
+  of k, which matters at scale (and across GPUs). Restart length m = 30 by default
+  (memory: about 2m vectors); the residual norm never increases, and it stays robust for
+  indefinite and strongly non-normal tangents. Chosen over BiCGStab, whose memory is
+  fixed (about 7 vectors) and which needs no restart, but whose residual is irregular and
+  which can break down or stagnate on indefinite and non-normal systems (plasticity,
+  contact), exactly the cases it would be there for; BiCGStab can be added behind the same
+  interface if memory ever forces it.
+- **Eigen `SimplicialLDLT`**, and `SparseLU` for non-symmetric cases: in tests only, as the
+  reference solution on small models,
   with the global matrix assembled on the host from element matrices
   (`compile/sparsity.hpp` gives the pattern).
 
@@ -633,6 +665,31 @@ Correctness is checked against physics first and OpenSees second.
    - **1b, implicit:** the same model with Newmark + Newton, matrix-free operator and our
      CG with Jacobi behind `LinearSolver` (Eigen only as the test reference); gravity
      stages.
+   Milestone 1b plan (approved 2026-11-06; one commit per step):
+   1. `LinearSolver` interface, deterministic vector kernels (done).
+   2. Sparsity pattern and CSR operator, for tests and as the reference (done).
+   3. Reference assembly for tests: global K, M, C on the host from element matrices;
+      Eigen `SimplicialLDLT` / `SparseLU` (test-only dependency).
+   4. Matrix-free operator `K_eff v` with its Jacobi diagonal: state determination that
+      can store the Gauss-point tangent (packed only when declared symmetric), stored and
+      recomputed modes, gather / atomic / colored scatter; tangent-symmetry traits on
+      materials and elements. Tests against step 3, bit-identity across variants;
+      benchmarks.
+   5. CG with Jacobi; tests against Eigen on the soil column (static and dynamic).
+   6. GMRES(m) (FGMRES, CGS2) with Jacobi and the automatic choice from the operator's
+      symmetry (with CG's fall-back on non-positive curvature); tests against Eigen
+      `SparseLU` on an artificial non-symmetric operator, and the same answer as CG on the
+      symmetric soil column.
+   7. Schema 0.3: Static analysis with LoadControl, ModifiedNewton, optional solver
+      attributes (tolerance, maximum iterations, preconditioner).
+   8. Newmark (OpenSees form D), Newton, ModifiedNewton, Linear, the convergence tests,
+      Static with LoadControl; true lumped mass when lumped is requested.
+   9. System tests against OpenSees: implicit-dynamic gravity, static gravity, shaking;
+      consistent mass; CPU and GPU.
+   10. Krylov iteration study (static, and dynamic at 0.5-16x the explicit stable step, on
+       three column sizes).
+   11. Chebyshev with Jacobi.
+   Later milestone: matrix-free geometric multigrid (plan first).
 2. **Nonlinear layered soil column**: CUDA build, GPU solvers, PressureDependMultiYield,
    material stages.
 3. **Laterally loaded pile**: beams, sections, embedded interfaces.
@@ -644,7 +701,8 @@ Correctness is checked against physics first and OpenSees second.
 
 - Test framework (GoogleTest or Catch2).
 - Python bindings (nanobind or pybind11).
-- Solver: decided ("Linear solvers"): matrix-free operator, own CG with Jacobi, then
+- Solver: decided ("Linear solvers"): matrix-free operator, own CG (symmetric positive
+  definite) and GMRES (otherwise), chosen from the declared tangent symmetry; Jacobi, then
   Chebyshev and matrix-free multigrid; Eigen in tests only; hypre optional; no Trilinos.
 - Details of the HDF5 schema v0.
 - FemoraX license. Code ported from OpenSees is a derivative work, and the OpenSees license

@@ -1,5 +1,8 @@
 include(GoogleTest)
 
+# Eigen: test-only reference solver (docs/design.md, "Linear solvers"; docs/dependencies.md).
+find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+
 # ---------------------------------------------------------------------------
 # Unit tests: one executable, run by CTest per test case and, in addition, as a whole
 # with 1 and 8 OpenMP threads so thread-count dependence shows up.
@@ -18,8 +21,10 @@ add_executable(femorax_unit_tests
   unit/test_ground_motion.cpp
   unit/test_vector_ops.cpp
   unit/test_sparsity.cpp
+  unit/test_reference_assembly.cpp
   unit/test_runtime.cpp)
-target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest)
+target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest
+                      Eigen3::Eigen)
 target_compile_definitions(femorax_unit_tests PRIVATE
   FEMORAX_REFERENCE_DATA="${PROJECT_SOURCE_DIR}/tests/reference/data")
 femorax_set_warnings(femorax_unit_tests)
