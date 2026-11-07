@@ -50,12 +50,25 @@ std::string host_name() {
   return buf;
 }
 
+// The filter is a comma-separated list of substrings; a benchmark runs if any matches.
+bool selected(const std::string& name, const std::string& filter) {
+  if (filter.empty()) return true;
+  std::size_t start = 0;
+  while (start <= filter.size()) {
+    const std::size_t end = std::min(filter.find(',', start), filter.size());
+    const std::string part = filter.substr(start, end - start);
+    if (!part.empty() && name.find(part) != std::string::npos) return true;
+    start = end + 1;
+  }
+  return false;
+}
+
 }  // namespace
 
 std::vector<Result> run_all(const Registry& registry, const Options& options) {
   std::vector<Result> results;
   for (const auto& b : registry.all()) {
-    if (!options.filter.empty() && b.name.find(options.filter) == std::string::npos) continue;
+    if (!selected(b.name, options.filter)) continue;
     for (int i = 0; i < options.warmup; ++i) b.run();
     fence();
     std::vector<double> t(static_cast<std::size_t>(options.reps));

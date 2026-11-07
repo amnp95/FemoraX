@@ -200,9 +200,9 @@ regression.
 - Python tools and tests use the virtual environment in `.venv/` (numpy, h5py; later
   `../Femora` installed editable for the system tests). Create it with
   `python3 -m venv .venv && .venv/bin/pip install numpy h5py`.
-- Solvers (milestone 1b, docs/design.md "Linear solvers"): our own CG in Kokkos with Jacobi;
-  hypre BoomerAMG later; Eigen `SimplicialLDLT` in tests only. No Trilinos, no GPL solver
-  libraries.
+- Solvers (milestone 1b, docs/design.md "Linear solvers"): the implicit path is matrix-free
+  (element-by-element operator, our own CG with matrix-free preconditioners). Assembled
+  matrices and Eigen `SimplicialLDLT` only in tests. No Trilinos, no GPL solver libraries.
 
 ## Workflow
 

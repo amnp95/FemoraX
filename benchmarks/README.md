@@ -11,15 +11,28 @@ python3 benchmarks/check.py               # builds femorax_bench, runs it, compa
 ```
 
 `check.py` exits 0 when no gated benchmark is slower than the baseline by more than the
-tolerance (default 10% on the minimum time over 20 runs), and 1 on a regression. Gated cases
-are the paths that run: each backend's default layout, the deterministic (colored) form of
-it, and the STREAM reference. Other layout variants are measured and reported, marked
+tolerance (default 10% on the minimum time over 20 runs), relative to the machine's state,
+and 1 on a regression.
+
+**Machine state.** The FP64 peak (`peak/fp64_fma`) and STREAM triad (`stream/triad`)
+references are run before and after the benchmarks, and their mean time against the
+baseline is the machine's state (printed as "machine state: ... +x% against the
+baseline"). Each benchmark's time is divided by the slowdown of its bounding reference:
+the peak for compute-bound cases, the triad for memory-bound ones, chosen by the roofline
+of the baseline machine (flops per compulsory byte against peak / triad). The report shows
+the raw change and the change relative to the reference ("vs ref"); the gate uses the
+latter. Thermal throttling, a battery or a power mode slow the references as much as the
+kernels and no longer fail the gate; a code slowdown still does. The references
+themselves are not gated.
+
+Gated cases are the paths that run: each backend's default layout and its deterministic
+form. Other layout variants are measured and reported, marked
 "not gated", because they decide `src/exec/force_settings.cpp` but do not run in
 production (on CPU the team-layout times vary by 40-60% between runs). A regressed case is
 re-run once and the faster result kept, so a single noisy run does not fail the check. It
 refuses Debug builds. Results of the last run are in `build/<preset>/bench/last.json`.
 
-Useful options: `--filter <text>`, `--reps N`, `--tolerance 0.05`, `--no-build`,
+Useful options: `--filter <text>[,<text>...]` (any substring matches), `--reps N`, `--tolerance 0.05`, `--no-build`,
 `--baseline <file>`, `--update-baseline`.
 
 Threads are pinned (`OMP_PROC_BIND=spread`, `OMP_PLACES=threads`) unless already set.

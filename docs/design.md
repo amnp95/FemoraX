@@ -22,14 +22,15 @@ Host side, once per analysis stage:
    per node, and element-owned DOFs (see "DOF numbering").
 3. Group elements into batches by (element type, material type).
 4. Renumber nodes and elements for memory locality (RCM or a space-filling curve).
-5. Build the sparsity pattern and the per-element assembly maps.
+5. Build the per-element equation maps (no global sparsity pattern: matrix-free).
 6. Allocate device memory for all state.
 
 Device side, every Newton iteration:
 
-1. State determination: one kernel per batch computes stress, tangent, internal force.
-2. Assemble the effective stiffness and the residual.
-3. Linear solve.
+1. State determination: one kernel per batch computes stress, internal force and the
+   residual (and stores the Gauss-point tangent when the operator uses stored tangents).
+2. Linear solve with the matrix-free operator: each CG iteration applies `K_eff v`
+   element by element (no global matrix).
 4. Update displacements; compute the convergence norm (one scalar returns to the host).
 5. On convergence: commit state (swap buffers), copy recorder data asynchronously.
 
@@ -320,11 +321,7 @@ stays in the code, the tests and the benchmarks.
 
 ### Later
 
-- **Matrix-free operator** (with the implicit iterative solvers): store the material
-  tangent at each Gauss point (symmetric, 21 values for 3D; once per material when it is
-  constant, as for elastic materials) and apply `K*v = sum over points of B^T D B v`
-  without a global matrix. For iterative solvers and low GPU memory. The assembled path
-  stays for direct solvers and AMG.
+- **Matrix-free operator:** now the implicit path itself ("Linear solvers").
 - **libCEED comparison:** implement elastic stdBrick in libCEED as a speed benchmark for
   our kernels (benchmark code only, never a dependency of FemoraX).
 
@@ -425,16 +422,13 @@ Femora already partitions models with METIS. FemoraX will run one subdomain per 
 
 ## Assembly
 
-- The sparsity pattern is fixed within an analysis stage, so maps from each element's local
-  entries to positions in the global value array are built once.
-- Maps are stored per node block (block CSR) to cut index memory.
-- Three scatter paths, as for the force kernels: gather (deterministic, the default),
-  atomic add (non-deterministic summation order) and graph coloring (deterministic).
-  Details in "Linear solvers", "Assembly".
-- Constraints use DOF elimination (transformation), not penalty, because penalty ruins
-  iterative-solver convergence.
-- Newmark and Rayleigh coefficients are folded into one scalar so the effective stiffness
-  is assembled in a single pass.
+There is no production assembly of global matrices: the implicit path is matrix-free
+("Linear solvers"). Global vectors (internal force, the operator's product, its diagonal)
+are added into equations through the force kernels' scatter (gather by default,
+deterministic; atomic; colored), which handles any merged equations from the constraints.
+Constraints use DOF elimination (transformation), not penalty, because penalty ruins
+iterative-solver convergence. Assembled matrices are built only in tests, on the host from
+element matrices, for small reference models.
 
 ## Time integration and algorithms
 
@@ -478,97 +472,93 @@ GPU gains most, because almost all the work is element state determination.
 
 ## Linear solvers
 
-Decided for milestone 1b (2026-11-06). Goals: every CPU and GPU (NVIDIA, AMD, Intel), very
-large models, few dependencies. No direct solver in production: a sparse factorization's
-memory grows about as n^(4/3) and its work as n^2 on 3D meshes, which rules it out at the
-target scale (billions of elements). No Trilinos: it would pin our Kokkos version and is too
-heavy a dependency.
+Decided for milestone 1b (2026-11-06): **the implicit path is matrix-free.** Goals: every
+CPU and GPU (NVIDIA, AMD, Intel), very large models (billions of elements), few
+dependencies, and any element, material (elastic or plastic) and constraint (laminar
+boundary, rigid diaphragm, equalDOF, embedded nodes, contact), with the tangent changing
+every Newton iteration. A global matrix would be rebuilt every iteration and would not fit
+at the target scale; a direct solver (memory ~ n^(4/3), work ~ n^2 on 3D meshes) is out.
+No Trilinos (it would pin our Kokkos version and is too heavy).
 
 ### The interface
 
 Everything outside `src/solvers/` sees only `femorax::LinearSolver` and the operator and
-preconditioner types beside it; no solver-library type appears anywhere else (CLAUDE.md
-rule 6). Vectors are device-resident views of FP64 values, in the equation numbering of the
-compile step.
+preconditioner types beside it (`src/solvers/linear_solver.hpp`); no solver-library type
+appears anywhere else (CLAUDE.md rule 6). Vectors are device-resident FP64 views in the
+compile step's equation numbering.
 
 - `LinearOperator`: `apply(x, y)` (y = A x) and `diagonal(d)`, plus a description:
-  symmetry (`SymmetricPositiveDefinite`, `Symmetric`, `General`) and a block structure
-  (the fields and their equation ranges, for coupled problems such as u-p). Two kinds
-  share the interface:
-  - **assembled**: values in a fixed sparsity pattern (CSR, 32-bit column indices, 64-bit
-    row offsets), which also exposes its device arrays to preconditioners that need them
-    (AMG);
-  - **matrix-free**: `apply` runs the element kernels (the sum over points of
-    `B^T D B v` plus the mass and damping terms), with no global matrix.
+  symmetry (`SymmetricPositiveDefinite`, `Symmetric`, `General`) and fields (equation
+  ranges, for coupled problems such as u-p). Matrix-free in production; an assembled
+  operator (`CsrOperator`) exists for tests and exposes its CSR arrays.
 - `Preconditioner`: `setup(operator)`, `apply(r, z)`.
-- `LinearSolver`: `setup(operator, preconditioner)` when the operator's values change,
-  `solve(b, x)` with `x` holding the initial guess on entry; returns converged, iteration
-  count, initial and final residual norms. Options: relative and absolute tolerance,
-  maximum iterations.
+- `LinearSolver`: `setup(operator, preconditioner)` when the operator changes,
+  `solve(b, x)` with `x` holding the initial guess; returns converged, iterations and the
+  residual norms. Options: relative and absolute tolerance, maximum iterations.
 
-Implemented first: the symmetric positive definite assembled operator, Jacobi, and CG. The
-interface already admits non-symmetric operators (a Krylov method such as GMRES or BiCGStab
-behind the same `LinearSolver`), block structure, and matrix-free operators, so adding them
-changes no caller.
+Non-symmetric operators (another Krylov method behind the same interface) and block
+structure need no change for callers.
 
-### Assembly
+### The matrix-free operator
 
-The tangent (or the effective stiffness `c1 K + c2 C + c3 M` of an implicit step, the
-Newmark and Rayleigh factors folded into the element computation) is assembled into the
-fixed pattern of the stage. Elements compute 3x3 node-pair blocks (`point_block_tangent`,
-never a full element matrix in one thread; CLAUDE.md performance rule 3a) and scatter them
-through precomputed maps. The deterministic gather scatter is the default, as for the force
-kernels: each block entry goes to its own slot, and each nonzero adds its slots in a fixed
-order. A symmetric operator computes only the blocks with J <= K and writes the mirrored
-entry from the same value, so both triangles are bit-identical.
+`K_eff v = c1 K_t v + c2 C v + c3 M v` (the Newmark and Rayleigh factors of the step) is
+computed element by element, in the same kernel shape as the internal force:
 
-The gather's slots would cost one value per element block entry (324 per brick with the
-J <= K symmetry, more than the matrix itself), so it works in **chunks**: elements are
-assembled a fixed number at a time into one reused workspace of fixed size, and after each
-chunk the nonzeros add that chunk's slots in a fixed order. Chunks are processed in a fixed
-order, so the sum order, and the bits, do not depend on the chunk size's thread mapping;
-the extra memory is the workspace, whatever the model size. Atomic and colored scatter stay
-available; memory and time of all three are benchmarked and reported before any default
-changes.
+- at each Gauss point, the tangent times the strain of `v`: `B^T D_t (B v) dvol` (the
+  stiffness-proportional damping terms use `D_t`, `D_0` and the committed `D_c` the same
+  way, as the explicit damping force already does); the mass term is
+  `rho N_j N_k dvol v_k` per point (consistent) or the node's lumped mass times `v`;
+- each element's result is added into the equations with the existing deterministic
+  force gather (or atomic or colored scatter), so merged equations from any constraint
+  are handled the way the force already is.
+
+The material tangent `D_t` comes from the state determination of the current Newton
+iterate. Two modes, benchmarked against each other per element-material pair:
+**stored** (each state determination writes `D_t` per Gauss point, 21 values when the
+tangent is symmetric, 36 otherwise; elastic materials need one copy per material) and
+**recomputed** (`apply` calls the material's tangent again from the trial state). The
+pieces are composable kernel parts (`point_strain`, the material tangent product,
+`point_node_force`, the mass and damping terms), so every element and material that
+provides the pointwise functions gets the operator, its diagonal and the preconditioners
+without new kernel code.
+
+### Preconditioners (all matrix-free)
+
+1. **Jacobi** (first): the diagonal of `K_eff`, gathered element by element like a force
+   vector (each element's diagonal entries, through the same scatter).
+2. **Chebyshev with Jacobi** (next, after the CG iteration study): a fixed polynomial in
+   the Jacobi-scaled operator; needs only `apply` and an eigenvalue estimate.
+3. **Matrix-free geometric multigrid** (a later milestone; plan only): for static gravity
+   and big models. Smoothing by Chebyshev-Jacobi on every level, transfers between
+   levels, and only the small coarsest level stored and solved directly.
 
 ### Solvers
 
-- **CG with Jacobi** (our own, in Kokkos, all backends): the default for implicit dynamic
-  stages. Each solve starts from the previous solution. Dot products use a fixed-chunk
-  two-stage reduction, so results are bit-identical for any thread count on a backend.
-  Implicit dynamics is well suited: the effective stiffness is dominated by `M/dt^2` at
-  practical steps, so its condition number stays bounded as the mesh grows, and CG with
-  Jacobi converges in a number of iterations that does not grow with the model.
-- **hypre BoomerAMG as the CG preconditioner** (later, same interface): for static gravity
-  and any stage whose CG iteration counts grow too large. Data is handed over from Kokkos
-  memory on the device (details and the open points in "hypre notes" below).
-- **Matrix-free operator** (later): the same CG on the element kernels, for memory and for
-  nonlinear materials whose tangent changes every iteration.
-- **Eigen `SimplicialLDLT`**: in tests only, as the reference solution on small models.
+- **CG** (our own, in Kokkos, all backends): the default for implicit stages. Each solve
+  starts from the previous solution. Dot products use a fixed-chunk two-stage reduction,
+  so results are bit-identical for any thread count on a backend
+  (`src/solvers/vector_ops.hpp`). Implicit dynamics suits it: at practical steps `K_eff`
+  is dominated by `M/dt^2`, so its condition number stays bounded as the mesh grows.
+- **Eigen `SimplicialLDLT`**: in tests only, as the reference solution on small models,
+  with the global matrix assembled on the host from element matrices
+  (`compile/sparsity.hpp` gives the pattern).
 
-### hypre notes (checked 2026-11-06 from the hypre documentation and changelog)
+### Optional for the future: hypre BoomerAMG
 
-- Current release 3.2.1 (2026-11-02). GPU backends: CUDA, HIP and SYCL, one per build.
-  ROCm 7.0 support from 3.1.0. CUDA 13: no changelog entry names it; the 2.x tags do not
-  build with CUDA 13, and downstream projects (PETSc) build hypre 3.x with CUDA 13.x, so
-  use 3.x and verify with our own build.
-- BoomerAMG options that run on the GPU (without unified memory): PMIS coarsening (8);
-  interpolation direct (3), BAMG-direct (15), extended (14), extended+i (6),
-  extended+e (18); aggressive coarsening with multipass (4, 8) or two-stage extended
-  (5, 6, 7) interpolation; smoothers Jacobi (7), l1-Jacobi (18), hybrid Gauss-Seidel/SSOR
-  (3, 4, 6), two-stage Gauss-Seidel (11, 12), Chebyshev (16).
-- Elasticity options: systems AMG (`SetNumFunctions`, `SetDofFunc`), nodal coarsening
-  (`SetNodal`) and interpolation vectors for rigid-body modes (`SetInterpVectors`,
-  `SetInterpVecVariant`) exist, but the documentation does not list any of them as
-  GPU-supported. To be verified by a test build before we rely on them; the unknown-based
-  approach (each displacement component on its own) runs on the GPU.
-- Memory: device memory by default in GPU builds (`HYPRE_SetMemoryLocation`); the IJ
-  assembly interface copies the values into hypre's own storage (device to device). Using
-  our arrays without any copy needs hypre's internal ParCSR structures (as MFEM does);
-  decide when we plan the integration.
-- Integers: full 64-bit (`bigint`) is not supported on the GPU; mixed 32/64-bit
-  (`mixedint`) carries no GPU restriction in the documentation. Models with more than
-  2^31 equations need `mixedint`, to be verified on the GPU.
+Not on the main path. hypre's BoomerAMG would be an optional preconditioner for an
+assembled matrix, should a stage ever need one. Notes from the hypre documentation and
+changelog (checked 2026-11-06):
+
+- Current release 3.2.1 (2026-11-02); GPU backends CUDA, HIP and SYCL, one per build;
+  ROCm 7.0 from 3.1.0. CUDA 13: no changelog entry names it; 2.x tags do not build with
+  it, and PETSc builds hypre 3.x with CUDA 13.x.
+- GPU-supported BoomerAMG options: PMIS coarsening; interpolation direct, BAMG-direct,
+  extended, extended+i, extended+e; aggressive coarsening; smoothers Jacobi, l1-Jacobi,
+  hybrid Gauss-Seidel/SSOR, two-stage Gauss-Seidel, Chebyshev. Systems AMG, nodal
+  coarsening and rigid-body interpolation vectors are not listed as GPU-supported.
+- The IJ interface copies values into hypre's storage; zero-copy needs hypre's internal
+  ParCSR structures. Full 64-bit integers are not supported on the GPU; mixed 32/64-bit
+  carries no documented GPU restriction.
 
 ## Precision and hardware
 
@@ -640,8 +630,9 @@ Correctness is checked against physics first and OpenSees second.
    - **1a, explicit:** stdBrick and SSPbrick, ElasticIsotropic, fix, laminar boundary,
      Rayleigh damping, UniformExcitation, CentralDifference, node and VTKHDF recorders.
      Needs no solver, so the whole pipeline runs end to end early.
-   - **1b, implicit:** the same model with Newmark + Newton, assembled tangent and our CG
-     with Jacobi behind `LinearSolver` (Eigen only as the test reference); gravity stages.
+   - **1b, implicit:** the same model with Newmark + Newton, matrix-free operator and our
+     CG with Jacobi behind `LinearSolver` (Eigen only as the test reference); gravity
+     stages.
 2. **Nonlinear layered soil column**: CUDA build, GPU solvers, PressureDependMultiYield,
    material stages.
 3. **Laterally loaded pile**: beams, sections, embedded interfaces.
@@ -653,8 +644,8 @@ Correctness is checked against physics first and OpenSees second.
 
 - Test framework (GoogleTest or Catch2).
 - Python bindings (nanobind or pybind11).
-- Solver: decided ("Linear solvers"): own CG with Jacobi, hypre BoomerAMG later, Eigen in
-  tests only, no Trilinos.
+- Solver: decided ("Linear solvers"): matrix-free operator, own CG with Jacobi, then
+  Chebyshev and matrix-free multigrid; Eigen in tests only; hypre optional; no Trilinos.
 - Details of the HDF5 schema v0.
 - FemoraX license. Code ported from OpenSees is a derivative work, and the OpenSees license
   covers educational, research and non-profit use; settle this before the first public release.
