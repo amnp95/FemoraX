@@ -24,6 +24,8 @@ struct ElasticIsotropic {
   static constexpr MaterialKind KIND = MaterialKind::NDMaterial3D;
   static constexpr int NSTRAIN = 6;
   static constexpr int NSTATE = 0;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
+  static constexpr bool CONSTANT_TANGENT = true;
 
   struct Params {
     double E;    // Young's modulus

@@ -50,6 +50,7 @@ int main(int argc, char* argv[]) {
     femorax::bench::register_peak(registry, options);
     femorax::bench::register_explicit(registry, options);
     femorax::bench::register_solvers(registry, options);
+    femorax::bench::register_operator(registry, options);
 
     const auto results = femorax::bench::run_all(registry, options);
     if (results.empty()) {

@@ -65,5 +65,6 @@ void register_stream(Registry& registry, const Options& options);
 void register_peak(Registry& registry, const Options& options);
 void register_explicit(Registry& registry, const Options& options);
 void register_solvers(Registry& registry, const Options& options);
+void register_operator(Registry& registry, const Options& options);
 
 }  // namespace femorax::bench

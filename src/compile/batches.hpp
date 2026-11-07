@@ -76,6 +76,7 @@ struct Compiled {
   // [num_equations]: sum over elements of alphaM_e * lumped mass (mass-proportional
   // damping coefficient per equation, for CentralDifference's diagonal system).
   std::vector<double> lumped_alpha_mass;
+  std::vector<double> nodal_mass;  // [num_equations]: the nodal masses alone (matrix-free M)
   std::vector<std::string> warnings;
 };
 

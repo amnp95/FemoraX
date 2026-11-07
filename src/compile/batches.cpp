@@ -104,6 +104,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
 
   c.lumped_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
   c.lumped_alpha_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
+  c.nodal_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
   for (const auto& [pair, list] : members) {
     registry::for_each_pair([&]<class E, class M>(int index) {
       if (index != pair) return;
@@ -179,7 +180,10 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   // Nodal masses (no Rayleigh damping: node regions are not supported).
   for (std::size_t r = 0; r < m.mass.node.size(); ++r) {
     const std::int32_t q = n.equation(internal_of_tag.at(m.mass.node[r]), m.mass.dof[r] - 1);
-    if (q >= 0) c.lumped_mass[q] += m.mass.value[r];
+    if (q >= 0) {
+      c.lumped_mass[q] += m.mass.value[r];
+      c.nodal_mass[q] += m.mass.value[r];
+    }
   }
   return c;
 }

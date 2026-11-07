@@ -91,6 +91,9 @@ Current:
 - `solvers/spmv/<n>^3`: CSR y = A x on the n x n x n soil column's pattern (one thread
   per row), judged by %triad. Not gated: assembled operators exist only in tests; it is
   the reference for the matrix-free operator.
+- `operator/<n>^3/<scatter>_<geometry>_<tangent>`: the matrix-free implicit operator
+  y = K_eff x (stiffness, Rayleigh damping, consistent mass) in every scatter, geometry and
+  tangent-source variant; the default is gated. Compare with `solvers/spmv/<n>^3`.
 - `explicit_force/<n>^3/<layout>_<scatter>[_ept<k>]`: stdBrick + ElasticIsotropic internal
   and Rayleigh damping force on an n x n x n Femora-style soil column (renumbering on), in
   every layout and scatter mode; team variants for each elements-per-team that fits the

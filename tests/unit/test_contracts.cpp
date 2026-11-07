@@ -16,12 +16,15 @@ using femorax::ExplicitScheme;
 using femorax::MassType;
 using femorax::MaterialKind;
 using femorax::Rayleigh;
+using femorax::TangentSymmetry;
 
 // ---------------------------------------------------------------------------
 // Mock materials and elements (signatures only matter here)
 // ---------------------------------------------------------------------------
 struct Mat3D {
   static constexpr MaterialKind KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
+  static constexpr bool CONSTANT_TANGENT = true;
   static constexpr int NSTRAIN = 6;
   static constexpr int NSTATE = 0;
   struct Params { double E, nu, rho; };
@@ -35,6 +38,8 @@ struct Mat3D {
 
 struct MatUniaxial {
   static constexpr MaterialKind KIND = MaterialKind::Uniaxial;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::General;
+  static constexpr bool CONSTANT_TANGENT = false;
   static constexpr int NSTRAIN = 1;
   static constexpr int NSTATE = 2;
   struct Params { double E; };
@@ -73,6 +78,7 @@ struct Brick : MockFunctions<3, 8, 24> {
   static constexpr bool EXPLICIT = true;
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
 };
 
 // u-p style: 4 DOFs at the 8 corner nodes, 3 at the 12 mid-side nodes (20-node brick).
@@ -84,6 +90,7 @@ struct BrickUP20 : MockFunctions<3, 20, 8 * 4 + 12 * 3> {
   static constexpr bool EXPLICIT = false;
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
 };
 
 // 3D beam: 2 nodes with 6 DOFs.
@@ -94,6 +101,7 @@ struct Beam3D : MockFunctions<3, 2, 12> {
   static constexpr bool EXPLICIT = true;
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::Uniaxial;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
 };
 
 // Element that owns 3 DOFs of its own besides its nodes' DOFs.
@@ -104,6 +112,7 @@ struct WithExtra : MockFunctions<3, 8, 8 * 3 + 3> {
   static constexpr bool EXPLICIT = true;
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
 };
 
 // --- Broken elements: each one breaks exactly one rule ---------------------
@@ -114,6 +123,7 @@ struct WrongNDOF : MockFunctions<3, 8, 25> {  // 8*3 != 25
   static constexpr bool EXPLICIT = true;
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
 };
 
 struct WrongNodeNdfLength : MockFunctions<3, 8, 21> {  // NODE_NDF has 7 entries, NNODE 8
@@ -123,6 +133,7 @@ struct WrongNodeNdfLength : MockFunctions<3, 8, 21> {  // NODE_NDF has 7 entries
   static constexpr bool EXPLICIT = true;
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
 };
 
 struct ZeroNdfNode : MockFunctions<3, 2, 3> {  // a node with 0 DOFs
@@ -132,6 +143,7 @@ struct ZeroNdfNode : MockFunctions<3, 2, 3> {  // a node with 0 DOFs
   static constexpr bool EXPLICIT = true;
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
 };
 
 struct NoCriticalDt {  // missing critical_dt and max_omega_sq
@@ -141,6 +153,7 @@ struct NoCriticalDt {  // missing critical_dt and max_omega_sq
   static constexpr bool EXPLICIT = true;
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
   struct Params { double dummy; };
   template <bool WantK>
   static void compute(const Params&, const Rayleigh&, const double (*)[3], const double*,
@@ -159,6 +172,7 @@ struct NoCacheableTrait {  // every trait but GEOMETRY_CACHEABLE
   static constexpr MassType MASS = MassType::Lumped;
   static constexpr bool EXPLICIT = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
   using F = MockFunctions<3, 1, 3>;
   using Params = F::Params;
   template <bool WantK>
@@ -175,6 +189,23 @@ struct NoCacheableTrait {  // every trait but GEOMETRY_CACHEABLE
                             femorax::PointArray<const double> c) {
     return F::critical_dt(p, d, s, x, c);
   }
+};
+
+struct NoTangentTrait {  // every trait but TANGENT
+  static constexpr int NDM = 3, NNODE = 1, NEXTRA = 0, NDOF = 3, NGP = 1, NSTATE = 0;
+  static constexpr std::array<int, NNODE> NODE_NDF = {3};
+  static constexpr MassType MASS = MassType::Lumped;
+  static constexpr bool EXPLICIT = false;
+  static constexpr bool GEOMETRY_CACHEABLE = true;
+  static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  struct Params {};
+};
+
+struct MatNoTangent {  // a material without its tangent declarations
+  static constexpr MaterialKind KIND = MaterialKind::NDMaterial3D;
+  static constexpr int NSTRAIN = 6;
+  static constexpr int NSTATE = 0;
+  struct Params {};
 };
 
 struct RuntimeExplicitFlag : Brick {  // EXPLICIT is not a compile-time constant
@@ -203,6 +234,13 @@ static_assert(!femorax::Element<NoCriticalDt>);
 static_assert(!femorax::Element<RuntimeNdof>);
 static_assert(!femorax::Element<RuntimeExplicitFlag>);
 static_assert(!femorax::Element<NoCacheableTrait>);
+static_assert(!femorax::Element<NoTangentTrait>);
+static_assert(!femorax::Material<MatNoTangent>);
+static_assert(femorax::weakest(femorax::TangentSymmetry::SymmetricPositiveDefinite,
+                               femorax::TangentSymmetry::General) == femorax::TangentSymmetry::General);
+static_assert(femorax::weakest(femorax::TangentSymmetry::Symmetric,
+                               femorax::TangentSymmetry::SymmetricPositiveDefinite) ==
+              femorax::TangentSymmetry::Symmetric);
 static_assert(!femorax::ExplicitElement<RuntimeExplicitFlag>);
 
 static_assert(!femorax::ExplicitElement<Brick>);   // mock has no lumped_mass

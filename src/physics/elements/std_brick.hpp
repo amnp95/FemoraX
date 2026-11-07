@@ -172,6 +172,8 @@ struct StdBrick {
   // Small strain: the reference geometry never changes, so it may be cached.
   static constexpr bool GEOMETRY_CACHEABLE = true;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::NDMaterial3D;
+  // No element terms of its own: the stiffness is B^T D B.
+  static constexpr TangentSymmetry TANGENT = Mat::TANGENT;
 
   struct Params {
     typename Mat::Params mat;
@@ -339,6 +341,33 @@ struct StdBrick {
         for (int r = 0; r < NSTRESS; r++) sum += BJtranD[p][r] * BK[r][q];
         stiffJK[p][q] = sum;
       }
+  }
+
+  // Point s's share of (M v) at node j (Brick::formInertiaTerms' mass, without forming it):
+  // consistent: rho dvol N_j sum_k N_k v_k; lumped: rho dvol N_j v_j. Summed over the
+  // points, this is mass() times v.
+  FEMORAX_HD static void point_mass_apply(const Params& p, const PointShape& s, const double* v,
+                                          int j, double* out) {
+    const double temp = s.shp[3][j] * s.dvol * Mat::density(p.mat);
+    for (int q = 0; q < 3; q++) {
+      double vq;
+      if (p.massType == 0) {
+        vq = 0.0;
+        for (int k = 0; k < NNODE; k++) vq += s.shp[3][k] * v[3 * k + q];
+      } else {
+        vq = v[3 * j + q];
+      }
+      out[q] = temp * vq;
+    }
+  }
+
+  // Point s's share of the mass entry between nodes j and k (the same component; the mass
+  // couples no components): rho dvol N_j N_k (consistent) or rho dvol N_j for j == k, 0
+  // otherwise (lumped).
+  FEMORAX_HD static double point_mass_entry(const Params& p, const PointShape& s, int j, int k) {
+    const double temp = s.shp[3][j] * s.dvol * Mat::density(p.mat);
+    if (p.massType == 0) return temp * s.shp[3][k];
+    return j == k ? temp : 0.0;
   }
 
   // Everything one Gauss point contributes, before it is spread to the nodes.

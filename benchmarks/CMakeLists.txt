@@ -15,6 +15,7 @@ add_executable(femorax_bench
   bench_stream.cpp
   bench_explicit.cpp
   bench_solvers.cpp
+  bench_operator.cpp
   flop_count.cpp)
 target_link_libraries(femorax_bench PRIVATE femorax::exec femorax::solvers femorax::compile femorax_bench_kernels)
 target_compile_definitions(femorax_bench PRIVATE FEMORAX_BUILD_TYPE="${CMAKE_BUILD_TYPE}")

@@ -32,6 +32,8 @@ struct ToyHistory {
   static constexpr femorax::MaterialKind KIND = femorax::MaterialKind::NDMaterial3D;
   static constexpr int NSTRAIN = 6;
   static constexpr int NSTATE = 3;
+  static constexpr femorax::TangentSymmetry TANGENT = femorax::TangentSymmetry::SymmetricPositiveDefinite;
+  static constexpr bool CONSTANT_TANGENT = false;
   struct Params { double E, rho; };
   static void update(const Params& p, Strided<const double> c, Strided<double> t,
                      const double* eps, double* sig, double (*D)[NSTRAIN]) {

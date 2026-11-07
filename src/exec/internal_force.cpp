@@ -7,6 +7,7 @@
 #include "compile/registry.hpp"
 #include "exec/device_memory.hpp"
 #include "exec/element_kernels.hpp"
+#include "exec/operator_kernels.hpp"
 #include "exec/runtime.hpp"
 
 namespace femorax::exec {
@@ -53,6 +54,20 @@ bool parse_settings(const std::string& text, ForceSettings& out) {
   return true;
 }
 
+const char* to_string(TangentSource t) {
+  switch (t) {
+    case TangentSource::Auto: return "auto";
+    case TangentSource::Constant: return "constant";
+    case TangentSource::Stored: return "stored";
+    case TangentSource::Recomputed: break;
+  }
+  return "recomputed";
+}
+
+std::string to_string(const OperatorSettings& s) {
+  return std::string(to_string(s.scatter)) + "_" + to_string(s.geometry) + "_" + to_string(s.tangent);
+}
+
 using Index = std::int32_t;
 
 namespace {
@@ -77,6 +92,14 @@ struct InternalForce::Batch {
   virtual std::int64_t device_bytes() const = 0;
   virtual int max_elements_per_team() const = 0;
   virtual double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const = 0;
+  // Matrix-free operator (resolved settings): y (or the diagonal) through `out`.
+  virtual void run_operator(const OperatorSettings& s, bool diagonal, const OperatorCoefficients& k, Out out,
+                            const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
+                            const Vec& slots) = 0;
+  virtual void store_tangents(const OperatorSettings& s, const Vec& coords, Index N, const Vec& u) = 0;
+  virtual std::int64_t enable_stored_tangents() = 0;  // returns the bytes allocated
+  virtual TangentSymmetry tangent_symmetry() const = 0;
+  virtual bool constant_tangent() const = 0;
 };
 
 namespace {
@@ -84,6 +107,7 @@ namespace {
 template <class Elem>
 struct TypedBatch final : InternalForce::Batch {
   kernels::DevBatch<Elem> b;
+  kernels::DevTangents<Elem> t;
 
   TypedBatch(const compile::Batch& hb, std::int64_t slot_offset, bool cache, const Vec& coords,
              Index N) {
@@ -98,6 +122,18 @@ struct TypedBatch final : InternalForce::Batch {
     std::vector<kernels::DevParams<Elem>> ps;
     for (const auto& p : hb.params) ps.push_back({p.template params<Elem>(), p.damping});
     b.params = upload("batch_params", ps);
+    using Mat = typename Elem::Material;
+    if constexpr (Mat::CONSTANT_TANGENT) {
+      constexpr int NS = Mat::NSTRAIN;
+      std::vector<double> d(ps.size() * NS * NS);
+      for (std::size_t i = 0; i < ps.size(); ++i) {
+        double D[NS][NS];
+        Mat::initial_tangent(ps[i].p.mat, D);
+        for (int a = 0; a < NS; ++a)
+          for (int c = 0; c < NS; ++c) d[(i * NS + a) * NS + c] = D[a][c];
+      }
+      t.constant = upload("batch_constant_tangent", d);
+    }
     if (cache) {
       b.geometry = Vec("batch_geometry", static_cast<std::size_t>(Elem::NGEOM) * Elem::NGP * b.padded);
       kernels::fill_geometry<Elem>(b, coords, N);
@@ -134,11 +170,72 @@ struct TypedBatch final : InternalForce::Batch {
     return static_cast<std::int64_t>(b.node.extent(0) + b.eq.extent(0) + b.param.extent(0) +
                                      b.color_elements.extent(0)) * 4 +
            static_cast<std::int64_t>(b.params.extent(0) * sizeof(kernels::DevParams<Elem>)) +
-           static_cast<std::int64_t>(b.geometry.extent(0)) * 8;
+           static_cast<std::int64_t>(b.geometry.extent(0) + t.constant.extent(0) + t.stored.extent(0)) * 8;
   }
   double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const override {
     return kernels::min_critical_dt<Elem>(b, coords, N, s);
   }
+  void run_operator(const OperatorSettings& s, bool diagonal, const OperatorCoefficients& k, Out out,
+                    const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
+                    const Vec& slots) override {
+    if constexpr (MatrixFreeElement<Elem>) {
+      const bool cached = s.geometry == Geometry::Cached;
+      const int src = s.tangent == TangentSource::Constant ? 0 : s.tangent == TangentSource::Stored ? 1 : 2;
+      auto launch = [&](Index begin, Index end, bool by_color) {
+        dispatch(cached, src, diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color);
+      };
+      if (s.scatter == Scatter::Colored) {
+        for (std::size_t col = 0; col + 1 < b.color_start.size(); ++col)
+          launch(b.color_start[col], b.color_start[col + 1], true);
+      } else {
+        launch(0, b.count, false);
+      }
+    } else {
+      Kokkos::abort("InternalForce: this element has no matrix-free operator (MatrixFreeElement)");
+    }
+  }
+
+  // The template instantiations: geometry x source x diagonal.
+  template <bool C, int S, bool D>
+  void go(const OperatorCoefficients& k, const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
+          const Vec& slots, Out out, Index begin, Index end, bool by_color) {
+    kernels::launch_operator<Elem, C, S, D>(b, t, coords, N, k, u, x, y, slots, out, begin, end, by_color);
+  }
+  template <bool C, int S>
+  void go2(bool diagonal, const OperatorCoefficients& k, const Vec& coords, Index N, const Vec& u,
+           const Vec& x, const Vec& y, const Vec& slots, Out out, Index begin, Index end, bool by_color) {
+    if (diagonal) go<C, S, true>(k, coords, N, u, x, y, slots, out, begin, end, by_color);
+    else go<C, S, false>(k, coords, N, u, x, y, slots, out, begin, end, by_color);
+  }
+  template <bool C>
+  void go1(int src, bool diagonal, const OperatorCoefficients& k, const Vec& coords, Index N, const Vec& u,
+           const Vec& x, const Vec& y, const Vec& slots, Out out, Index begin, Index end, bool by_color) {
+    if (src == 0) go2<C, 0>(diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color);
+    else if (src == 1) go2<C, 1>(diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color);
+    else go2<C, 2>(diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color);
+  }
+  void dispatch(bool cached, int src, bool diagonal, const OperatorCoefficients& k, const Vec& coords, Index N,
+                const Vec& u, const Vec& x, const Vec& y, const Vec& slots, Out out, Index begin, Index end,
+                bool by_color) {
+    if (cached) go1<true>(src, diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color);
+    else go1<false>(src, diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color);
+  }
+
+  void store_tangents(const OperatorSettings& s, const Vec& coords, Index N, const Vec& u) override {
+    if constexpr (MatrixFreeElement<Elem>) {
+      if (s.geometry == Geometry::Cached) kernels::launch_store_tangents<Elem, true>(b, t, coords, N, u);
+      else kernels::launch_store_tangents<Elem, false>(b, t, coords, N, u);
+    }
+  }
+  std::int64_t enable_stored_tangents() override {
+    if (t.stored.extent(0) > 0) return 0;
+    const auto n = static_cast<std::size_t>(kernels::Storage<Elem>::SIZE) * Elem::NGP * b.padded;
+    t.stored = Vec("batch_stored_tangent", n);
+    return static_cast<std::int64_t>(n) * 8;
+  }
+  TangentSymmetry tangent_symmetry() const override { return Elem::TANGENT; }
+  bool constant_tangent() const override { return Elem::Material::CONSTANT_TANGENT; }
+
   int max_elements_per_team() const override {
     const auto max_bytes = Kokkos::TeamPolicy<Space>::scratch_size_max(0);
     return std::max(1, static_cast<int>(max_bytes / (kernels::TeamScratch<Elem>::PER_ELEMENT * sizeof(double))));
@@ -154,6 +251,8 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
       neq_(c.dofs.num_equations),
       nnodes_(c.dofs.num_nodes()) {
   coords_ = upload("coords", c.coords);
+  nodal_mass_ = upload("nodal_mass", c.nodal_mass.empty() ? std::vector<double>(static_cast<std::size_t>(neq_), 0.0)
+                                                          : c.nodal_mass);
 
   // Gather pairs: each equation's slots in (batch, element, DOF) order.
   std::vector<std::pair<Index, std::int64_t>> pairs;
@@ -213,7 +312,7 @@ std::int64_t InternalForce::num_elements() const {
 }
 
 std::int64_t InternalForce::device_bytes() const {
-  std::int64_t n = static_cast<std::int64_t>(3 * neq_ + coords_.extent(0)) * 8 + gather_.bytes();
+  std::int64_t n = static_cast<std::int64_t>(4 * neq_ + coords_.extent(0)) * 8 + gather_.bytes();
   for (const auto& b : batches_) n += b->device_bytes();
   return n;
 }
@@ -255,6 +354,80 @@ void InternalForce::compute(const ForceSettings& settings) {
   if (out != Out::Slots) Kokkos::deep_copy(f, 0.0);
   for (auto& b : batches_) b->run(s, out, coords_, nnodes_, u, v, f, gather_.slots());
   if (out == Out::Slots) gather_.gather(f);
+}
+
+// --- Matrix-free operator ---------------------------------------------------------------
+
+namespace {
+
+void add_nodal_mass(double c, const Vec& m, const Kokkos::View<const double*, Space>& x, const Vec& y,
+                    bool diagonal) {
+  if (c == 0.0) return;
+  Kokkos::parallel_for(
+      "operator_nodal_mass", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, static_cast<Index>(y.extent(0))),
+      KOKKOS_LAMBDA(const Index q) { y(q) += c * m(q) * (diagonal ? 1.0 : x(q)); });
+}
+
+}  // namespace
+
+TangentSymmetry InternalForce::tangent_symmetry() const {
+  TangentSymmetry t = TangentSymmetry::SymmetricPositiveDefinite;
+  for (const auto& b : batches_) t = weakest(t, b->tangent_symmetry());
+  return t;
+}
+
+bool InternalForce::constant_tangents() const {
+  for (const auto& b : batches_)
+    if (!b->constant_tangent()) return false;
+  return true;
+}
+
+OperatorSettings InternalForce::resolve(const OperatorSettings& s) const {
+  OperatorSettings r = s;
+  if (r.geometry == Geometry::Cached && !has_cache_) r.geometry = Geometry::Recompute;
+  if (r.tangent == TangentSource::Auto) r.tangent = constant_tangents() ? TangentSource::Constant : TangentSource::Stored;
+  if (r.tangent == TangentSource::Constant && !constant_tangents()) r.tangent = TangentSource::Stored;
+  return r;
+}
+
+void InternalForce::enable_stored_tangents() {
+  for (auto& b : batches_) stored_bytes_ += b->enable_stored_tangents();
+}
+
+void InternalForce::store_tangents(const Vec& u_at, const OperatorSettings& settings) {
+  const OperatorSettings s = resolve(settings);
+  if (!has_stored_tangents()) Kokkos::abort("InternalForce::store_tangents: call enable_stored_tangents() first");
+  for (auto& b : batches_) b->store_tangents(s, coords_, nnodes_, u_at);
+}
+
+void InternalForce::apply_operator(const OperatorCoefficients& k, const OperatorSettings& settings, const Vec& u_at,
+                                   const Kokkos::View<const double*, Space>& x, const Vec& y) {
+  const OperatorSettings s = resolve(settings);
+  if (s.tangent == TangentSource::Stored && !has_stored_tangents())
+    Kokkos::abort("InternalForce: stored tangents requested without enable_stored_tangents()");
+  if (s.scatter == Scatter::Colored && !has_coloring_)
+    Kokkos::abort("InternalForce: colored scatter needs CompileOptions::build_coloring");
+  const Out out = s.scatter == Scatter::Gather ? Out::Slots : s.scatter == Scatter::Atomic ? Out::Atomic : Out::Plain;
+  if (out != Out::Slots) Kokkos::deep_copy(y, 0.0);
+  // The kernels read x through a non-const view type; they never write it.
+  const Vec xv(const_cast<double*>(x.data()), x.extent(0));
+  for (auto& b : batches_) b->run_operator(s, false, k, out, coords_, nnodes_, u_at, xv, y, gather_.slots());
+  if (out == Out::Slots) gather_.gather(y);
+  add_nodal_mass(k.mass, nodal_mass_, x, y, false);
+}
+
+void InternalForce::operator_diagonal(const OperatorCoefficients& k, const OperatorSettings& settings,
+                                      const Vec& u_at, const Vec& d) {
+  const OperatorSettings s = resolve(settings);
+  if (s.tangent == TangentSource::Stored && !has_stored_tangents())
+    Kokkos::abort("InternalForce: stored tangents requested without enable_stored_tangents()");
+  if (s.scatter == Scatter::Colored && !has_coloring_)
+    Kokkos::abort("InternalForce: colored scatter needs CompileOptions::build_coloring");
+  const Out out = s.scatter == Scatter::Gather ? Out::Slots : s.scatter == Scatter::Atomic ? Out::Atomic : Out::Plain;
+  if (out != Out::Slots) Kokkos::deep_copy(d, 0.0);
+  for (auto& b : batches_) b->run_operator(s, true, k, out, coords_, nnodes_, u_at, d, d, gather_.slots());
+  if (out == Out::Slots) gather_.gather(d);
+  add_nodal_mass(k.mass, nodal_mass_, d, d, true);
 }
 
 }  // namespace femorax::exec

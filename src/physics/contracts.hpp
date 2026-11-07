@@ -23,6 +23,19 @@ enum class MaterialKind : int {
 
 enum class ExplicitScheme : int { CentralDifference = 0, ExplicitDifference = 1 };
 
+// What a tangent is known to be (docs/design.md, "Symmetry of the tangent, and the solver
+// choice"). Materials declare it for D, elements for their stiffness (their own terms plus
+// the material's). The implicit solver follows from the weakest declaration in a stage:
+// CG for SymmetricPositiveDefinite, GMRES otherwise. Tangent storage is packed (21 values
+// for 6 strains) only when the tangent is declared symmetric.
+enum class TangentSymmetry : int { SymmetricPositiveDefinite = 0, Symmetric = 1, General = 2 };
+
+FEMORAX_HD constexpr TangentSymmetry weakest(TangentSymmetry a, TangentSymmetry b) {
+  return static_cast<int>(a) > static_cast<int>(b) ? a : b;
+}
+
+FEMORAX_HD constexpr bool is_symmetric(TangentSymmetry t) { return t != TangentSymmetry::General; }
+
 // Rayleigh damping coefficients of one element (Femora assigns them per region):
 //   C = alphaM*M + betaK*K_current + betaKinit*K_initial + betaKcomm*K_committed
 struct Rayleigh {
@@ -66,6 +79,10 @@ concept Material = requires {
   requires detail::is_constexpr_int<decltype(M::NSTRAIN)>;
   requires detail::is_constexpr_int<decltype(M::NSTATE)>;
   requires M::NSTRAIN > 0 && M::NSTATE >= 0;
+  // The tangent D: its symmetry, and whether it is constant (independent of strain and
+  // state, as for elastic materials, so one copy per parameter set serves every point).
+  requires std::is_same_v<decltype(M::TANGENT), const TangentSymmetry>;
+  requires std::is_same_v<decltype(M::CONSTANT_TANGENT), const bool>;
 } && requires(const typename M::Params& p, Strided<const double> committed,
               Strided<double> trial, const double* eps, double* sig,
               double (*D)[M::NSTRAIN]) {
@@ -99,6 +116,8 @@ concept Element = requires {
   // recompute or update it (docs/design.md, "Element kernels").
   requires std::is_same_v<decltype(E::GEOMETRY_CACHEABLE), const bool>;
   requires std::is_same_v<decltype(E::MATERIAL_KIND), const MaterialKind>;
+  // The stiffness's symmetry: the element's own terms combined with its material's D.
+  requires std::is_same_v<decltype(E::TANGENT), const TangentSymmetry>;
   // Consistency of the sizes.
   requires E::NDM >= 1 && E::NDM <= 3;
   requires E::NNODE >= 1 && E::NEXTRA >= 0 && E::NGP >= 0 && E::NSTATE >= 0;
@@ -142,6 +161,24 @@ concept PointwiseElement =
       { E::point_node_force(cs, stress, gp, fI) } -> std::same_as<void>;
       { E::point_body_force(p, cs, gp, gp) } -> std::same_as<double>;
       { E::point_block_tangent(cs, dd, gp, gp, KIJ) } -> std::same_as<void>;
+    };
+
+// A pointwise element that also gives its mass per point, so the matrix-free operator
+// (physics/operators/element_operator.hpp) and its diagonal apply M without forming it:
+//   point_mass_apply:    (M v) at node j from point s, all components (out[ndf of j])
+//   point_mass_entry:    the entry of M between nodes j and k from point s, for the same
+//                        component (M couples no components)
+template <class E>
+concept MatrixFreeElement =
+    PointwiseElement<E> &&
+    requires {
+      typename E::RecomputedGeometry;  // shape(gp, s) from local coordinates
+      typename E::CachedGeometry;      // shape(gp, s) from the geometry cache
+    } &&
+    requires(const typename E::Params& p, const typename E::PointShape& cs, const double* v,
+             int j, double* out) {
+      { E::point_mass_apply(p, cs, v, j, out) } -> std::same_as<void>;
+      { E::point_mass_entry(p, cs, j, j) } -> std::same_as<double>;
     };
 
 // An (element, material) pair that can be instantiated as a batch.
