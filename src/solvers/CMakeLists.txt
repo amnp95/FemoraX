@@ -2,9 +2,12 @@
 # allowed here and in src/exec/ only (CLAUDE.md rule 3); solver-library types never leave
 # this directory (rule 6).
 add_library(femorax_solvers
+  block_ops.cpp
   cg.cpp
   csr_operator.cpp
+  gmres.cpp
   jacobi.cpp
+  krylov.cpp
   vector_ops.cpp)
 add_library(femorax::solvers ALIAS femorax_solvers)
 target_include_directories(femorax_solvers PUBLIC "${PROJECT_SOURCE_DIR}/src")

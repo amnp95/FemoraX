@@ -17,6 +17,7 @@
 #include "exec/internal_force.hpp"
 #include "exec/matrix_free_operator.hpp"
 #include "solvers/cg.hpp"
+#include "solvers/gmres.hpp"
 #include "solvers/jacobi.hpp"
 #include "exec/runtime.hpp"
 #include "harness.hpp"
@@ -25,7 +26,7 @@ namespace femorax::bench {
 
 void register_operator(Registry& registry, const Options& options) {
   testing::ColumnSpec s;
-  s.nx = s.ny = s.nz = options.quick ? 6 : 40;
+  s.nx = s.ny = s.nz = options.side();
   s.lumped = false;
   const auto model = testing::soil_column(s);
   compile::CompileOptions co;
@@ -60,7 +61,8 @@ void register_operator(Registry& registry, const Options& options) {
                       .items = nel,
                       .run = [k, v, coef, x, y, u] { k->apply_operator(coef, v, *u, *x, *y); },
                       // The default (what the solvers run) is gated; the variants decide it.
-                      .gated = name == def});
+                      .gated = name == def,
+                      .bound = "compute"});
       }
 
   // 20 iterations of CG with Jacobi on a Newmark step (dt = 1e-3) with the default operator:
@@ -91,7 +93,27 @@ void register_operator(Registry& registry, const Options& options) {
                 .run = [k, cg] {
                   Kokkos::deep_copy(cg->xs, 0.0);
                   cg->cg->solve(cg->b, cg->xs);
-                }});
+                },
+                .bound = "compute"});
+
+  // The same 20 iterations with GMRES(30) (CGS2: two fused block dot products, two block
+  // updates and a norm per iteration besides the apply): the price of a non-symmetric stage.
+  struct Gm {
+    std::unique_ptr<solvers::Gmres> gmres;
+  };
+  auto gm = std::make_shared<Gm>();
+  gm->gmres = std::make_unique<solvers::Gmres>(o, simd_width(), 30);
+  gm->gmres->setup(cg->a, &cg->jacobi);
+  registry.add({.name = "solvers/gmres20/" + std::to_string(s.nx) + "^3",
+                .unit = "call",
+                .bytes = 0,
+                .flops = 0.0,
+                .items = 20,
+                .run = [k, cg, gm] {
+                  Kokkos::deep_copy(cg->xs, 0.0);
+                  gm->gmres->solve(cg->b, cg->xs);
+                },
+                .bound = "compute"});
 }
 
 }  // namespace femorax::bench
