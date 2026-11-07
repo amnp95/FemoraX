@@ -19,7 +19,8 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
 | ElasticIsotropic | **supported** | `ThreeDimensional` form; bit-identical to OpenSees `955ceb0` on 76,650 stress/tangent values (`test_elastic_isotropic_reference`) |
-| DruckerPrager, J2CyclicBoundingSurface, LinearElasticGGmax, PressureDependMultiYield, PressureIndependMultiYield | planned | |
+| PressureDependMultiYield | in progress (milestone 2): material verified | 3D port of OpenSees `955ceb0` (`physics/materials/pressure_depend_multi_yield.hpp`); bit-identical to OpenSees on 208,152 stress and tangent values along 32 strain paths (Femora's three soils and a user backbone; stage switches, discarded trials; `test_pdmy_reference`). Next: state in the kernels, the stage action, single elements, the system test. `pa` per material (docs/deviations.md) |
+| DruckerPrager, J2CyclicBoundingSurface, LinearElasticGGmax, PressureIndependMultiYield | planned | PressureIndependMultiYield next in milestone 2 |
 
 ## Uniaxial materials and sections
 

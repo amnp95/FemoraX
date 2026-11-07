@@ -8,6 +8,10 @@ solvers::Symmetry operator_symmetry(TangentSymmetry tangent, const OperatorCoeff
                         (k.stiffness > 0.0 || k.mass > 0.0);
   if (tangent == TangentSymmetry::SymmetricPositiveDefinite && positive)
     return solvers::Symmetry::SymmetricPositiveDefinite;
+  // A semi-definite tangent (singular where a plastic modulus vanishes) is made definite
+  // by the mass term of an implicit-dynamic step.
+  if (tangent == TangentSymmetry::SymmetricPositiveSemidefinite && positive && k.mass > 0.0)
+    return solvers::Symmetry::SymmetricPositiveDefinite;
   return solvers::Symmetry::Symmetric;
 }
 

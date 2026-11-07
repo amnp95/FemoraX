@@ -34,6 +34,7 @@ system HDF5 1.10 `recorder vtkhdf` is "not found".
 
 ```
 build/reference/drivers/nd_material tests/reference/data/nd
+build/reference/drivers/soil_material tests/reference/data/nd
 build/reference/drivers/brick_element tests/reference/data/element
 .venv/bin/python tests/reference/make_constraint_cases.py tests/reference/data/constraints/cases
 for f in tests/reference/data/constraints/cases/*.txt; do
@@ -65,5 +66,6 @@ produced it; a port's tests check that it matches the pinned commit.
 | Driver | Covers | Output |
 |---|---|---|
 | `nd_material` | nD materials along strain paths (monotonic, cyclic, volumetric load/unload, random reversals), with commit and revert | `data/nd/<Material>_<case>_<path>.txt` |
+| `soil_material` | PressureDependMultiYield (the copy an element gets) along strain paths at the Gauss-point level: elastic-stage consolidation, the switch to the plastic stage (`updateParameter`, as `updateMaterialStage` does), then monotonic and cyclic constant-volume shear at several amplitudes and confinements, random reversals, confinement changes, extension, a switch with sheared stress, switching back and forth; every 7th step a discarded trial; Femora's three soils and a user G/Gmax backbone. Columns: stage, the discarded trial, strain, stress, tangent | `data/nd/PressureDependMultiYield_<case>_<path>.txt` |
 | `dof_numbering` | OpenSees `TransformationConstraintHandler` + `PlainNumberer` on node/fix/equalDOF cases (`make_constraint_cases.py`): each nodal DOF's equation through the transformation matrix | `data/constraints/<case>.txt` |
 | `brick_element` | OpenSees `Brick` (stdBrick) and `SSPbrick` in a real Domain: internal force with body force, tangent, initial tangent, mass (consistent and lumped for Brick), Rayleigh damping forces (all four terms) for 4 geometries x 2 materials x 4 fields. `getRayleighDampingForces` is protected in OpenSees, so the driver re-exports it from subclasses (`BrickProbe`, `SSPbrickProbe`) | `data/element/Brick_<geometry>_<material>_{state,mass}.txt`, `data/element/SSPbrick_<geometry>_<material>_{state,mass}.txt` |

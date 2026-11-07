@@ -2,7 +2,7 @@
 
 Issues 1-4: OpenSees TransformationConstraintHandler, four silently wrong constraint
 patterns. Issue 5: Newmark with stdBrick `-lumped`. Issue 6: SSPbrick's mass and body force
-on distorted elements (both below the table).
+on distorted elements. Issue 7: PressureDependMultiYield's global pAtm (all below the table).
 
 Standalone examples for the OpenSees developers. Each is a few nodes in 2D, every free
 node held by unit springs (`zeroLength`) to its own fixed ground node, one unit load, and
@@ -46,6 +46,16 @@ moved by up to 13% of the edge, 2.1% at 26%. Suggested fix: integrate `N_i det J
 row sums of the consistent mass), or use `J[0] + (...)/3 + ...` with the bracket's terms
 scaled to the same units.
 
+### 7. PressureDependMultiYield: one global pAtm
+
+`7_pdmy_global_patm.tcl` (one SSPbrick driven through its nodes). PressureDependMultiYield
+keeps the atmospheric pressure (`pa`) in one static member that every constructor
+overwrites; the surfaces are set up with each material's own value, but `isCriticalState`
+reads the static at run time, so every material uses the `pa` of the last one defined.
+Defining a second, unused material with another `pa` changes the first one's stress (here
+by 4%, from -304.8 to -317.0 in sigma_11). Suggested fix: make `pAtm` a per-material array
+like the other parameters (`pAtmx[matN]`).
+
 `0_control_correct_patterns.tcl` shows the related patterns the handler resolves correctly
 (a full chain in ascending tag order; a fixed retained node with a tied node).
 
@@ -54,6 +64,13 @@ retained node before building the DOF groups; for 4, either apply the fix to the
 node's group or reject it.
 
 ## Output at commit 955ceb0
+
+### 7_pdmy_global_patm.tcl
+```
+material 1 alone: stress -304.80030848130763843074 -130.99253030734038816263 -486.75302182207281020965 -0.00000000000000490936 0.00000000000002706776 230.08027709342954381100 0.99999999999999988898
+material 1, then unused 2: stress -317.02970607269543279472 -132.69059083074753857545 -503.79262723562737846805 0.00000000000000368351 0.00000000000000105038 236.47607368920722592520 1.00000000000000022204
+WRONG: defining an unused PressureDependMultiYield material with another pa changed the stress of the first
+```
 
 ### 6_sspbrick_distorted_mass.tcl
 ```

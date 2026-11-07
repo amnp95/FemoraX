@@ -28,7 +28,15 @@ enum class ExplicitScheme : int { CentralDifference = 0, ExplicitDifference = 1 
 // the material's). The implicit solver follows from the weakest declaration in a stage:
 // CG for SymmetricPositiveDefinite, GMRES otherwise. Tangent storage is packed (21 values
 // for 6 strains) only when the tangent is declared symmetric.
-enum class TangentSymmetry : int { SymmetricPositiveDefinite = 0, Symmetric = 1, General = 2 };
+// SymmetricPositiveSemidefinite: symmetric, never indefinite, but possibly singular (an
+// elastoplastic tangent at a surface with zero plastic modulus): the operator is positive
+// definite when it has a mass term (implicit dynamics), otherwise treated as Symmetric.
+enum class TangentSymmetry : int {
+  SymmetricPositiveDefinite = 0,
+  SymmetricPositiveSemidefinite = 1,
+  Symmetric = 2,
+  General = 3
+};
 
 FEMORAX_HD constexpr TangentSymmetry weakest(TangentSymmetry a, TangentSymmetry b) {
   return static_cast<int>(a) > static_cast<int>(b) ? a : b;

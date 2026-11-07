@@ -122,6 +122,49 @@ Default tolerances (until a component states otherwise):
 - Test: `tests/unit/test_std_brick_reference.cpp` (gate: relative 1e-12, the element
   default).
 
+### PressureDependMultiYield — per-material pAtm, and the port's structure
+- OpenSees: `SRC/material/nD/soil/PressureDependMultiYield.cpp` (with `T2Vector.cpp`,
+  `MultiYieldSurface.cpp`), commit 955ceb0
+- Difference:
+  - `pAtm` (Femora's `pa`): OpenSees keeps one static `pAtm`, set by each constructor, so
+    at run time every PressureDependMultiYield material uses the last constructed one's
+    (`isCriticalState`, lines 2047-2051; the surfaces are set up with each material's own).
+    FemoraX uses each material's own `pa` everywhere. Femora's example gives every soil
+    the same `pa`, so it makes no difference there.
+  - The per-material static arrays are Params and the static workspaces are locals; every
+    workspace was checked to be written before it is read within one call, so none carries
+    a value between calls or between points (OpenSees' would carry it between points if
+    any function read one first; none does).
+  - `elast2Plast` (the switch to the plastic stage) changes the committed state on the
+    first `getStress`/`getTangent` after the switch, and a revert does not undo it. FemoraX
+    runs it inside the update on a copy of the committed state, and the result becomes
+    committed at the commit. Being a pure function of the committed state, it gives the
+    same values, and a reverted step that is redone sees the same input.
+  - Recursion (`stressCorrection`, `deviatorScaling`) is a loop; OpenSees' `exit()` on
+    impossible states (`secondOrderEqn`'s complex or negative roots, "error in surface
+    motion") makes the stress NaN instead, so the step fails and the analysis can retry.
+    A conversion of an out-of-range double to int in `setSubStrainRate` (undefined in C++;
+    only at zero confinement) is clamped. `strainPTOcta` starts at 0 (OpenSees leaves it
+    unset if no pair of surfaces brackets the phase-transformation ratio).
+  - Load stage 2 (elastic with the initial pressure, for u-p elements) is not ported:
+    schema 0.4 has stages 0 and 1.
+- Why: correctness (`pa`), GPU kernels without static or global state (CLAUDE.md rule 2),
+  and a failed step instead of a stopped program.
+- Effect on results: none on the verification data: 208,152 of 208,152 stress and tangent
+  values bit-identical to OpenSees along 32 strain paths (Femora's dense Ottawa, loose
+  Ottawa and dense Monterey, and a user G/Gmax backbone; consolidation in the elastic
+  stage, the switch, monotonic and cyclic shear from 1e-5 to 1e-2, reversals, confinement
+  changes, extension, switching back and forth, discarded trials). Different `pa` values
+  across materials change the critical-state terms. On the GPU (nvcc fuses multiply-adds;
+  CUDA's pow, exp and log are not glibc's) the same paths agree with the host to 2.3e-11
+  or better in 31 of 32 files; in one (loose Ottawa, random reversals near liquefaction) a
+  different plastic branch is taken and the result differs by 3.2e-6 of the largest value
+  (`PressureDependMultiYieldReference.DeviceBackend` reports both).
+- Test: `tests/unit/test_pdmy_reference.cpp` (gate: relative 1e-14, the material default;
+  observed: bit-identical), `tests/unit/test_pdmy.cpp`; the standalone OpenSees example
+  `tests/reference/opensees_issues/7_pdmy_global_patm.tcl` (an unused second material with
+  another `pa` changes the first one's stress by 4%).
+
 ### SSPbrick — Kstab applied matrix-free, damping summed term by term
 - OpenSees: `SRC/element/UWelements/SSPbrick.cpp` with `SRC/element/Element.cpp`
   (`getRayleighDampingForces`), commit 955ceb0

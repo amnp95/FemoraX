@@ -797,6 +797,17 @@ Correctness is checked against physics first and OpenSees second.
       kept for TACC benchmarks; the state size per point reported. `pa` per material (a
       deviation: OpenSees keeps one global `pAtm`, the last constructed material's), with
       a standalone OpenSees issue example.
+      Done so far: schema 0.4 (reader, fixtures; the build refuses the new items until each
+      runs); the PressureDependMultiYield material (`physics/materials/pressure_depend_multi_yield.hpp`,
+      bit-identical to OpenSees along 32 strain paths; state 89 + 6 NS doubles per buffer,
+      3.3 KiB per Gauss point for NS = 20 with both buffers, 5.1 KiB for NS = 40; Params
+      544 / 864 bytes per parameter set). Its surface loops are written with `inner_for`,
+      but later code reads surfaces another index wrote (the copy of the committed surfaces,
+      `updateInnerSurface`), which needs a lane barrier the `VectorLanes` context does not
+      have: until the lane-parallel corrector is designed and benchmarked, the material
+      runs one thread per point. Next: material state in the kernels (committed and trial
+      buffers, commit as a swap), the stage action, the fused and compacted-corrector
+      kernels, single-element tests, then PressureIndependMultiYield.
    3. Verification against OpenSees: strain paths at the Gauss-point level (the OpenSees
       material called directly, no domain), then single elements, then the system test.
    4. System test: Femora's nonlinear layered soil column (its own 1x1x25 column, staged
