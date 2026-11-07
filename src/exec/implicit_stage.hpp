@@ -26,9 +26,11 @@
 //     as OpenSees' analysis without one: NormUnbalance 1e-6, 25 iterations.
 //
 // Solver settings, automatic unless the model sets them (schema 0.3): relative tolerance
-// 1e-12 for the Linear algorithm (one solve per step must be accurate), 1e-10 for Newton
-// and ModifiedNewton (the outer test governs); maximum iterations min(number of equations,
-// 10000), at least 200; preconditioner Jacobi.
+// 1e-12 (Newton-type algorithms accept a solve that stopped at the iteration limit after
+// reducing the residual by six orders; the outer test governs); maximum iterations
+// min(number of equations, 10000), at least 200; preconditioner Jacobi. A looser automatic
+// tolerance for Newton (1e-10) made results differ from OpenSees' direct solves by 4.5e-8
+// relative on the soil column, within the Newton test but more than necessary.
 
 #include <cstdint>
 #include <memory>

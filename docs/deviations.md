@@ -18,6 +18,13 @@ Default tolerances (until a component states otherwise):
   (`tests/system/soil_column`, 10x10x40 column, 4000 steps) shows 4.8e-13 at most
   (acceleration; 1.8e-15 on displacement), with renumbering off or on, on the CPU and the
   GPU.
+- Implicit system tests (Newmark, LoadControl): relative 1e-8, for the same reason plus the
+  iterative solves (FemoraX's Krylov solves stop at a relative residual of 1e-12, OpenSees
+  solves directly; the acceleration, c3 dU with c3 = 1/(beta dt^2), amplifies the
+  difference most). Observed: 2x2x10 column, all four gravity/algorithm variants, 6.5e-10;
+  10x10x40 column (9840 equations, 500 steps): implicit-dynamic gravity and Linear,
+  4.2e-9 (acceleration; 8e-12 displacement), CPU and GPU, renumbering off and on; static
+  gravity and Newton, 5.6e-9 (acceleration; 8.8e-12 displacement), CPU and GPU.
 
 ## Entry format
 

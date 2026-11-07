@@ -438,9 +438,9 @@ element matrices, for small reference models.
   and the NormUnbalance, NormDispIncr or EnergyIncr test, as OpenSees runs them. Every
   linear solve is matrix-free (CG or GMRES from the declared tangent symmetry, Jacobi).
   Solver settings are automatic unless the model sets them (schema 0.3): relative
-  tolerance 1e-12 for Linear and 1e-10 for Newton-type algorithms, at most min(n, 10000)
-  iterations (at least 200), the Jacobi preconditioner; each solve starts from the
-  previous increment.
+  tolerance 1e-12 (Newton-type algorithms accept a solve that hit the iteration limit
+  after reducing the residual by six orders), at most min(n, 10000) iterations (at least
+  200), the Jacobi preconditioner; each solve starts from the previous increment.
 - Later: KrylovNewton, Femora's retry and substep recovery (a failed step stops the run
   today), Newmark forms V and A.
 - The Newton loop stays on the device; only norms come back to the host.

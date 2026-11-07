@@ -137,7 +137,7 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
 
   // Solver: automatic unless the model sets it.
   solvers::SolveOptions so;
-  so.relative_tolerance = an.solver_tolerance.value_or(an.algorithm == io::Algorithm::Linear ? 1e-12 : 1e-10);
+  so.relative_tolerance = an.solver_tolerance.value_or(1e-12);
   so.max_iterations = an.solver_max_iterations.value_or(
       static_cast<int>(std::max<std::int64_t>(200, std::min<std::int64_t>(s.n, 10000))));
   MatrixFreeOperator op(force, u, k, s.os);
@@ -173,7 +173,11 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     const auto r = solver.solve(s.b, s.du);  // initial guess: the previous increment
     rep.krylov_iterations += r.iterations;
     if (solver.fell_back()) rep.fell_back = true;
-    if (!r.converged) {
+    // Linear takes the solve as the step's answer, so it must converge. Newton-type
+    // algorithms accept an inexact increment (the outer test governs) once the solve has
+    // reduced the residual by six orders.
+    const bool good_enough = an.algorithm != io::Algorithm::Linear && r.final_residual <= 1e-6 * r.rhs_norm;
+    if (!r.converged && !good_enough) {
       throw io::ModelError("stage \"" + an.name + "\": the " + solver.name() + " solve did not converge in " +
                            std::to_string(r.iterations) + " iterations (residual " + std::to_string(r.final_residual) +
                            " of " + std::to_string(r.rhs_norm) + ")");

@@ -324,7 +324,7 @@ step has attrs `kind` (string) and `label` (string, *optional*, Femora's descrip
 | `max_retries`, `num_sublevels`, `num_substeps` | int32 *(optional)* | Femora's retry and substep recovery (1b; an explicit step with the Linear algorithm never fails, so 1a ignores them) |
 | `initialize` | uint8 *(optional)* | `initialize` after `analysis` |
 | `allow_unstable_dt` | uint8 *(optional)* | FemoraX only: warn instead of stop when `dt` exceeds the stable step |
-| `solver_tolerance` | float64 *(optional, since 0.3)* | FemoraX only: relative tolerance of each Krylov solve, in (0, 1). Absent: FemoraX chooses (1e-12 with the Linear algorithm, 1e-10 with Newton and ModifiedNewton) |
+| `solver_tolerance` | float64 *(optional, since 0.3)* | FemoraX only: relative tolerance of each Krylov solve, in (0, 1). Absent: FemoraX chooses (1e-12) |
 | `solver_max_iterations` | int32 *(optional, since 0.3)* | FemoraX only: maximum Krylov iterations per solve. Absent: FemoraX chooses (the number of equations, between 200 and 10000) |
 | `preconditioner` | string *(optional, since 0.3)* | FemoraX only: `"auto"` (default: FemoraX chooses; Jacobi today) or `"jacobi"`. The solver itself (CG or GMRES) follows from the declared tangent symmetry and is never chosen in the file |
 

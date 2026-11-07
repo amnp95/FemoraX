@@ -150,4 +150,10 @@ if(EXISTS "${FEMORAX_OPENSEES}" AND EXISTS "${FEMORAX_VENV_PYTHON}")
                    $<TARGET_FILE:femorax> ${FEMORAX_OPENSEES} ${FEMORAX_VENV_PYTHON}
                    ${CMAKE_CURRENT_BINARY_DIR}/system_vtkhdf)
   set_tests_properties(system.vtkhdf_vs_opensees PROPERTIES TIMEOUT 300)
+  # Implicit stages (consistent mass; dynamic and static gravity; Linear and Newton).
+  add_test(NAME system.implicit_vs_opensees
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/implicit_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_OPENSEES} ${FEMORAX_VENV_PYTHON}
+                   ${CMAKE_CURRENT_BINARY_DIR}/system_implicit)
+  set_tests_properties(system.implicit_vs_opensees PROPERTIES TIMEOUT 600)
 endif()
