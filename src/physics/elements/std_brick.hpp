@@ -258,6 +258,15 @@ struct StdBrick {
     PointArray<const double> g;
     FEMORAX_HD void shape(int gp, PointShape& s) const { point_load_geometry(gp, g.point(gp), s); }
   };
+  // Factories (MatrixFreeElement): stdBrick has no element constants, so p and c are unused.
+  FEMORAX_HD static RecomputedGeometry recomputed_geometry(const double (*xl)[8], const Params& p) {
+    (void)p;
+    return {xl};
+  }
+  FEMORAX_HD static CachedGeometry cached_geometry(PointArray<const double> g, Strided<const double> c) {
+    (void)c;
+    return {g};
+  }
 
   // Brick::update: strain (11 22 33 12 23 31, engineering shear) from nodal values u.
   // The same operator gives the strain rate from nodal velocities.

@@ -8,7 +8,9 @@
 //
 //   K_t  tangent at the given displacement (Element::compute<true>, OpenSees
 //        getTangentStiff; bit-identical to OpenSees for stdBrick)
-//   K_0  B^T D_0 B (Material::initial_tangent), K_c  B^T D_c B (committed_tangent)
+//   K_0  B^T D_0 B (Material::initial_tangent), K_c  B^T D_c B (committed_tangent), each
+//        plus the element's own term K_el (SSPbrick's Kstab); K_0 = K_t for elements whose
+//        initial stiffness is their tangent (SSPbrick)
 //   M    Element::mass (consistent or lumped per element) plus nodal masses
 //   C    per element alphaM M + betaK K_t + betaKinit K_0 + betaKcomm K_c, with the
 //        element's damping region
@@ -110,6 +112,22 @@ void assemble_batch(const compile::Compiled& c, const compile::Batch& b, const s
               Kc[3 * J + x][3 * K + y] += bc[x][y];
             }
         }
+    }
+    // An element-level stiffness term is part of every stiffness; an element whose initial
+    // stiffness is its tangent (SSPbrick) uses K_t for betaKinit.
+    if constexpr (ElementTermElement<Elem>) {
+      double cst[Elem::NCONST];
+      Elem::element_constants(p, xl, Strided<double>{cst, 1});
+      for (int a = 0; a < NDOF; ++a)
+        for (int k = 0; k < NDOF; ++k) {
+          const double kel = Elem::element_term_entry(p, Strided<const double>{cst, 1}, a, k);
+          K0[a][k] += kel;
+          Kc[a][k] += kel;
+        }
+    }
+    if constexpr (initial_stiffness_is_tangent<Elem>()) {
+      for (int a = 0; a < NDOF; ++a)
+        for (int k = 0; k < NDOF; ++k) K0[a][k] = Kt[a][k];
     }
     Elem::mass(p, xe, Me);
     const Rayleigh& d = ps.damping;

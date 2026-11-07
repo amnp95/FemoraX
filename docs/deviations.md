@@ -17,14 +17,18 @@ Default tolerances (until a component states otherwise):
   differences then grow through the time steps. The first system test
   (`tests/system/soil_column`, 10x10x40 column, 4000 steps) shows 4.8e-13 at most
   (acceleration; 1.8e-15 on displacement), with renumbering off or on, on the CPU and the
-  GPU.
+  GPU. The same column with SSPbrick: 5.8e-13 (acceleration; 1.8e-14 displacement), CPU
+  with renumbering off and on, GPU.
 - Implicit system tests (Newmark, LoadControl): relative 1e-8, for the same reason plus the
   iterative solves (FemoraX's Krylov solves stop at a relative residual of 1e-12, OpenSees
   solves directly; the acceleration, c3 dU with c3 = 1/(beta dt^2), amplifies the
   difference most). Observed: 2x2x10 column, all four gravity/algorithm variants, 6.5e-10;
   10x10x40 column (9840 equations, 500 steps): implicit-dynamic gravity and Linear,
   4.2e-9 (acceleration; 8e-12 displacement), CPU and GPU, renumbering off and on; static
-  gravity and Newton, 5.6e-9 (acceleration; 8.8e-12 displacement), CPU and GPU.
+  gravity and Newton, 5.6e-9 (acceleration; 8.8e-12 displacement), CPU and GPU. With
+  SSPbrick (lumped mass): 2x2x10, all four variants, 1.4e-10; 10x10x40, dynamic gravity
+  and Linear 2.5e-10, static gravity and Newton 2.9e-10 (acceleration; 4.4e-12
+  displacement), CPU (renumbering off and on) and GPU.
 
 ## Entry format
 
@@ -117,6 +121,49 @@ Default tolerances (until a component states otherwise):
   matrices are bit-identical (47,119 of 48,384 values in total).
 - Test: `tests/unit/test_std_brick_reference.cpp` (gate: relative 1e-12, the element
   default).
+
+### SSPbrick — Kstab applied matrix-free, damping summed term by term
+- OpenSees: `SRC/element/UWelements/SSPbrick.cpp` with `SRC/element/Element.cpp`
+  (`getRayleighDampingForces`), commit 955ceb0
+- Difference: OpenSees forms the 24 x 24 stabilization `Kstab = Mben^T interior Mben` once
+  and multiplies it by the displacements; FemoraX stores the hourglass vectors and the
+  upper triangle of the 12 x 12 `interior` (element constants) and applies
+  `Mben^T (interior (Mben v))`, so `Kstab` is exactly symmetric (OpenSees' product
+  `KuT FeCFe^-1 FeCFhg` is symmetric to rounding only). The 3 x 3 and 9 x 9 inverses are
+  an LU with partial pivoting (OpenSees: LAPACK). Damping forces are summed term by term,
+  as for stdBrick: `(betaK + betaK0) Dt + betaKc Dc` through the point (OpenSees'
+  `getInitialStiff` returns the tangent, so `betaK0` uses `Dt`, kept), `(betaK + betaK0 +
+  betaKc) Kstab v`, and `alphaM` times the lumped mass. As for stdBrick, there is no
+  `eleLoad` body-force path (`applyLoad`, `appliedB`; schema v0 has no `eleLoad`).
+- Why: performance rule 3a (no full element matrix in one thread; the explicit path forms
+  no matrices) and the matrix-free implicit operator.
+- Effect on results: rounding only. Against OpenSees on 4 geometries x 2 materials x 4
+  fields: mass bit-identical; tangent and initial tangent within 9.0e-15 of the largest
+  entry, force within 1.2e-14, damping within 3.2e-14; 49,060 of 81,408 values
+  bit-identical.
+- Test: `tests/unit/test_ssp_brick_reference.cpp` (gate: relative 1e-12, the element
+  default); the system tests above.
+
+### SSPbrick — OpenSees' mass and body force of distorted elements (ported as is)
+- OpenSees: `SRC/element/UWelements/SSPbrick.cpp` (`getMass`, `getResistingForce`),
+  commit 955ceb0
+- Difference: none; FemoraX reproduces it (`ssp_detail::poly_bracket`). Recorded because
+  it is wrong for some meshes: node i's mass and body-force weight are `J[0] * (1 +
+  (... + J[7] + J[8] + J[9])/3 + (...)/9 + (...)/27)`, which adds 1 to terms with units of
+  volume. It is exact when `J[4..19]` vanish, i.e. for parallelepipeds (every Femora grid),
+  and wrong otherwise: the element's total mass and body force differ from `rho V` and
+  `b V` (`V`, SSPbrick's own volume, equals stdBrick's): 3.6e-3 relative with nodes moved
+  by up to 15% of the edge, 0.46% / 2.1% in the OpenSees example at 13% / 26%; the nodal
+  split differs from the consistent-mass row sums by up to 20%. The stable step uses the
+  same masses.
+- Why kept: matching OpenSees until it is decided; it changes nothing for Femora's
+  structured grids. A fix (integrating `N_i det J`, as stdBrick's lumped mass does) is a
+  one-function change in the element.
+- Effect on results: none for parallelepiped elements; for distorted ones, the mass and
+  gravity load errors above, as in OpenSees.
+- Test: `SSPbrick.MassIsDiagonalAndExactForParallelepipeds` (exact for boxes and sheared
+  parallelepipeds; reports the distorted case); the standalone OpenSees example
+  `tests/reference/opensees_issues/6_sspbrick_distorted_mass.tcl`.
 
 ### stdBrick — features not ported
 - OpenSees: `SRC/element/brick/Brick.cpp`, commit 955ceb0

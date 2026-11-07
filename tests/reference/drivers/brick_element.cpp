@@ -1,4 +1,5 @@
-// Reference driver for OpenSees Brick (stdBrick): single elements in a real Domain.
+// Reference driver for OpenSees Brick (stdBrick) and SSPbrick: single elements in a real
+// Domain.
 //
 //   brick_element <out_dir>
 //
@@ -12,7 +13,11 @@
 //   dl  getRayleighDampingForces()   lumped-mass element
 // and, once per geometry x material, both mass matrices (getMass()).
 //
-// Output: <out_dir>/Brick_<geometry>_<material>_state.txt and ..._mass.txt
+// For SSPbrick (always lumped mass) one element on the same nodes, recording f, K, K0 and
+// d (getRayleighDampingForces), and its mass matrix.
+//
+// Output: <out_dir>/Brick_<geometry>_<material>_state.txt and ..._mass.txt,
+// <out_dir>/SSPbrick_<geometry>_<material>_state.txt and ..._mass.txt
 // (format: driver_common.hpp; vectors and matrices flattened row-major).
 
 #include "driver_common.hpp"
@@ -22,6 +27,7 @@
 #include <ElasticIsotropicMaterial.h>
 #include <Matrix.h>
 #include <Node.h>
+#include <SSPbrick.h>
 #include <Vector.h>
 
 #include <array>
@@ -37,6 +43,12 @@ namespace {
 class BrickProbe : public Brick {
  public:
   using Brick::Brick;
+  using Element::getRayleighDampingForces;
+};
+
+class SSPbrickProbe : public SSPbrick {
+ public:
+  using SSPbrick::SSPbrick;
   using Element::getRayleighDampingForces;
 };
 
@@ -211,6 +223,52 @@ int main(int argc, char** argv) {
         append(row, cons->getRayleighDampingForces());
         append(row, lump->getRayleighDampingForces());
         w.row(row);
+      }
+      files += 2;
+
+      // SSPbrick on the same nodes, in its own domain (GetStab runs in setDomain).
+      Domain sdomain;
+      for (int n = 0; n < 8; ++n) sdomain.addNode(new Node(n + 1, 3, g.x[n][0], g.x[n][1], g.x[n][2]));
+      auto* ssp = new SSPbrickProbe(1, 1, 2, 3, 4, 5, 6, 7, 8, mat, b[0], b[1], b[2]);
+      sdomain.addElement(ssp);
+      ssp->setRayleighDampingFactors(damping[0], damping[1], damping[2], damping[3]);
+      std::vector<std::string> sheader = header;
+      sheader[0] = "element SSPbrick";
+      const std::string sbase = out + "/SSPbrick_" + g.name + "_" + m.name;
+      {
+        refdrv::Writer sw(sbase + "_mass.txt", sheader, names("M", 576));
+        std::vector<double> row;
+        append(row, ssp->getMass());
+        sw.row(row);
+      }
+      std::vector<std::string> scols = {"field"};
+      for (const char* p : {"u", "v", "f"})
+        for (const auto& c : names(p, 24)) scols.push_back(c);
+      for (const auto& c : names("K", 576)) scols.push_back(c);
+      for (const auto& c : names("K0_", 576)) scols.push_back(c);
+      for (const auto& c : names("d", 24)) scols.push_back(c);
+      refdrv::Writer sw(sbase + "_state.txt", sheader, scols);
+      int ks = 0;
+      for (const auto& [fname, uv] : fields(g.x)) {
+        for (int n = 0; n < 8; ++n) {
+          Vector u(3), v(3);
+          for (int i = 0; i < 3; ++i) {
+            u(i) = uv[0][3 * n + i];
+            v(i) = uv[1][3 * n + i];
+          }
+          Node* node = sdomain.getNode(n + 1);
+          node->setTrialDisp(u);
+          node->setTrialVel(v);
+        }
+        ssp->update();
+        std::vector<double> row = {static_cast<double>(ks++)};
+        for (double x : uv[0]) row.push_back(x);
+        for (double x : uv[1]) row.push_back(x);
+        append(row, ssp->getResistingForce());
+        append(row, ssp->getTangentStiff());
+        append(row, ssp->getInitialStiff());
+        append(row, ssp->getRayleighDampingForces());
+        sw.row(row);
       }
       files += 2;
     }

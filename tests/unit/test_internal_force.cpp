@@ -3,6 +3,7 @@
 // runs the same physics element by element.
 
 #include "compile/batches.hpp"
+#include "compile/registry.hpp"
 #include "exec/internal_force.hpp"
 #include "exec/force_settings.hpp"
 #include "physics/elements/std_brick.hpp"
@@ -38,28 +39,39 @@ std::vector<double> random_vector(std::size_t n, double amp, std::uint64_t seed)
   return v;
 }
 
+// Element e of batch b: its force fe at (u, v), through the registered element type.
+void element_force(const Compiled& c, const femorax::compile::Batch& b, std::int32_t e, const std::vector<double>& u,
+                   const std::vector<double>& v, double* fe) {
+  const std::int32_t N = c.dofs.num_nodes();
+  const auto P = static_cast<std::size_t>(b.padded);
+  femorax::registry::for_each_pair([&]<class E, class M>(int index) {
+    if (index != b.pair) return;
+    using Elem = typename E::template Element<typename M::Material>;
+    double xe[Elem::NNODE][3], ue[Elem::NDOF], ve[Elem::NDOF];
+    for (int a = 0; a < Elem::NNODE; ++a)
+      for (int d = 0; d < 3; ++d) xe[a][d] = c.coords[d * N + b.node[a * P + e]];
+    for (int k = 0; k < Elem::NDOF; ++k) {
+      const auto q = b.eq[k * P + e];
+      ue[k] = q >= 0 ? u[q] : 0.0;
+      ve[k] = q >= 0 ? v[q] : 0.0;
+    }
+    const auto& ps = b.params[b.param[e]];
+    Elem::template compute<false>(ps.params<Elem>(), ps.damping, xe, ue, ve, {}, {}, fe, nullptr);
+  });
+}
+
 // Host reference: same physics per element, scattered in color order (the colored
 // kernels' order), or element order when by_color is false.
 std::vector<double> reference_force(const Compiled& c, const std::vector<double>& u,
                                     const std::vector<double>& v) {
   std::vector<double> f(static_cast<std::size_t>(c.dofs.num_equations), 0.0);
-  const std::int32_t N = c.dofs.num_nodes();
   for (const auto& b : c.batches) {
     const auto P = static_cast<std::size_t>(b.padded);
     for (std::int32_t col = 0; col < b.num_colors(); ++col)
       for (std::int32_t i = b.color_start[col]; i < b.color_start[col + 1]; ++i) {
         const std::int32_t e = b.color_elements[i];
-        double xe[8][3], ue[24], ve[24], fe[24];
-        for (int a = 0; a < 8; ++a)
-          for (int d = 0; d < 3; ++d) xe[a][d] = c.coords[d * N + b.node[a * P + e]];
-        for (int k = 0; k < 24; ++k) {
-          const auto q = b.eq[k * P + e];
-          ue[k] = q >= 0 ? u[q] : 0.0;
-          ve[k] = q >= 0 ? v[q] : 0.0;
-        }
-        const auto& ps = b.params[b.param[e]];
-        const Brick::Params p = ps.params<Brick>();
-        Brick::compute<false>(p, ps.damping, xe, ue, ve, {}, {}, fe, nullptr);
+        double fe[24];
+        element_force(c, b, e, u, v, fe);
         for (int k = 0; k < 24; ++k) {
           const auto q = b.eq[k * P + e];
           if (q >= 0) f[q] += fe[k];
@@ -74,21 +86,11 @@ std::vector<double> reference_force(const Compiled& c, const std::vector<double>
 std::vector<double> reference_force_gather(const Compiled& c, const std::vector<double>& u,
                                            const std::vector<double>& v) {
   std::vector<std::vector<double>> parts(static_cast<std::size_t>(c.dofs.num_equations));
-  const std::int32_t N = c.dofs.num_nodes();
   for (const auto& b : c.batches) {
     const auto P = static_cast<std::size_t>(b.padded);
     for (std::int32_t e = 0; e < b.count; ++e) {
-      double xe[8][3], ue[24], ve[24], fe[24];
-      for (int a = 0; a < 8; ++a)
-        for (int d = 0; d < 3; ++d) xe[a][d] = c.coords[d * N + b.node[a * P + e]];
-      for (int k = 0; k < 24; ++k) {
-        const auto q = b.eq[k * P + e];
-        ue[k] = q >= 0 ? u[q] : 0.0;
-        ve[k] = q >= 0 ? v[q] : 0.0;
-      }
-      const auto& ps = b.params[b.param[e]];
-      const Brick::Params p = ps.params<Brick>();
-      Brick::compute<false>(p, ps.damping, xe, ue, ve, {}, {}, fe, nullptr);
+      double fe[24];
+      element_force(c, b, e, u, v, fe);
       for (int k = 0; k < 24; ++k) {
         const auto q = b.eq[k * P + e];
         if (q >= 0) parts[q].push_back(fe[k]);
@@ -125,13 +127,17 @@ std::vector<double> run(InternalForce& k, const std::vector<double>& u, const st
   return std::vector<double>(hf.data(), hf.data() + hf.extent(0));
 }
 
-femorax::io::Model column() {
+femorax::io::Model column(femorax::io::ElementType type = femorax::io::ElementType::StdBrick) {
   femorax::testing::ColumnSpec s;
   s.nx = 3;
   s.ny = 2;
   s.nz = 10;
+  s.element = type;
   return femorax::testing::soil_column(s);
 }
+
+const femorax::io::ElementType kElementTypes[] = {femorax::io::ElementType::StdBrick,
+                                                  femorax::io::ElementType::SSPbrick};
 
 TEST(Compile, BatchesMapsAndColors) {
   const auto m = column();
@@ -189,7 +195,9 @@ TEST(Compile, LumpedMassCollectsTiedAndDropsFixedDofs) {
 }
 
 TEST(InternalForce, EveryLayoutAndScatterMatchesTheHostReference) {
-  const auto m = column();
+ for (const auto type : kElementTypes) {
+  SCOPED_TRACE(femorax::io::to_string(type));
+  const auto m = column(type);
   for (Renumbering r : {Renumbering::Off, Renumbering::RCM}) {
     SCOPED_TRACE(r == Renumbering::Off ? "renumbering off" : "renumbering on");
     const Compiled c = compile_model(m, CompileOptions{r, 1, true});
@@ -249,10 +257,13 @@ TEST(InternalForce, EveryLayoutAndScatterMatchesTheHostReference) {
       }
     }
   }
+ }
 }
 
 TEST(InternalForce, PaddingIsInert) {
-  const auto m = column();
+ for (const auto type : kElementTypes) {
+  SCOPED_TRACE(femorax::io::to_string(type));
+  const auto m = column(type);
   const Compiled c1 = compile_model(m, CompileOptions{Renumbering::RCM, 1, true});
   const Compiled c32 = compile_model(m, CompileOptions{Renumbering::RCM, 32, true});
   EXPECT_EQ(c32.batches[0].padded % 32, 0);
@@ -266,6 +277,7 @@ TEST(InternalForce, PaddingIsInert) {
       EXPECT_EQ(std::memcmp(a.data(), b.data(), a.size() * sizeof(double)), 0);
     }
   }
+ }
 }
 
 TEST(InternalForce, RenumberingChangesOnlyTheRounding) {
@@ -317,7 +329,9 @@ TEST(InternalForce, RenumberingChangesOnlyTheRounding) {
 
 TEST(ForceSettings, EveryTunableVariantGivesIdenticalResults) {
   // The auto-tune may pick any of these, so none may change an answer: bit for bit.
-  const Compiled c = compile_model(column(), CompileOptions{});
+ for (const auto type : kElementTypes) {
+  SCOPED_TRACE(femorax::io::to_string(type));
+  const Compiled c = compile_model(column(type), CompileOptions{});
   InternalForce k(c, femorax::exec::GeometryCache::On);
   const auto u = random_vector(static_cast<std::size_t>(k.num_equations()), 1e-3, 5);
   const auto v = random_vector(static_cast<std::size_t>(k.num_equations()), 1e-2, 6);
@@ -347,6 +361,7 @@ TEST(ForceSettings, EveryTunableVariantGivesIdenticalResults) {
   EXPECT_EQ(d.geometry, femorax::exec::Geometry::Recompute);
   const auto fd = run(none, u, v, d.layout, d.scatter, d.elements_per_team, d.geometry);
   EXPECT_EQ(std::memcmp(fd.data(), first.data(), fd.size() * sizeof(double)), 0);
+ }
 }
 
 TEST(ForceSettings, AutotuneTimesEveryVariantAndPicksTheFastest) {

@@ -14,6 +14,8 @@ add_executable(femorax_unit_tests
   unit/test_elastic_isotropic_reference.cpp
   unit/test_std_brick.cpp
   unit/test_std_brick_reference.cpp
+  unit/test_ssp_brick.cpp
+  unit/test_ssp_brick_reference.cpp
   unit/test_memory_contract.cpp
   unit/test_dof_numbering.cpp
   unit/test_renumber.cpp

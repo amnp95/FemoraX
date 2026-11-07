@@ -1,7 +1,7 @@
 #pragma once
 
 // Synthetic models built in memory, the way Femora builds a layered soil column: a grid of
-// stdBrick elements, two materials (lower and upper half), body force, fixed base, laminar
+// stdBrick (or SSPbrick) elements, two materials (lower and upper half), body force, fixed base, laminar
 // boundary as equalDOF stars at each elevation above the base (side nodes tied to the first
 // one in DOFs 1 2 3), one Rayleigh region over everything and a second over the top layer
 // (later region wins, as in OpenSees). Used by tests and benchmarks.
@@ -16,8 +16,9 @@ namespace femorax::testing {
 struct ColumnSpec {
   int nx = 2, ny = 2, nz = 8;
   double dx = 1.0, dy = 1.0, dz = 0.5;
-  bool lumped = true;
+  bool lumped = true;  // stdBrick's mass; SSPbrick always lumps
   bool damping = true;
+  io::ElementType element = io::ElementType::StdBrick;
 };
 
 inline io::Model soil_column(const ColumnSpec& s) {
@@ -38,9 +39,9 @@ inline io::Model soil_column(const ColumnSpec& s) {
   for (int layer = 0; layer < 2; ++layer) {
     io::ElementGroup g;
     g.id = std::to_string(layer);
-    g.type = io::ElementType::StdBrick;
+    g.type = s.element;
     g.material = layer + 1;
-    g.lumped = s.lumped;
+    g.lumped = s.lumped || s.element == io::ElementType::SSPbrick;
     g.body_force = {0.0, 0.0, layer == 0 ? -19.9 : -19.8};
     const int k0 = layer == 0 ? 0 : s.nz / 2, k1 = layer == 0 ? s.nz / 2 : s.nz;
     for (int k = k0; k < k1; ++k)

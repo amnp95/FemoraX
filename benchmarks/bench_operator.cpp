@@ -25,7 +25,51 @@
 
 namespace femorax::bench {
 
+namespace {
+
+// operator_ssp/<n>^3/<variant>: the same variants with SSPbrick (lumped mass, one point,
+// the hourglass term from the element constants or recomputed).
+void register_ssp(Registry& registry, const Options& options) {
+  testing::ColumnSpec s;
+  s.nx = s.ny = s.nz = options.side();
+  s.element = io::ElementType::SSPbrick;
+  const auto model = testing::soil_column(s);
+  compile::CompileOptions co;
+  co.simd_width = simd_width();
+  co.build_coloring = true;
+  const auto compiled = std::make_shared<compile::Compiled>(compile::compile_model(model, co));
+  auto k = std::make_shared<exec::InternalForce>(*compiled, exec::GeometryCache::On);
+  k->enable_stored_tangents();
+  const std::int64_t neq = k->num_equations(), nel = k->num_elements(), N = compiled->dofs.num_nodes();
+  auto x = std::make_shared<exec::Vec>("x", static_cast<std::size_t>(neq));
+  auto y = std::make_shared<exec::Vec>("y", static_cast<std::size_t>(neq));
+  auto u = std::make_shared<exec::Vec>("u", static_cast<std::size_t>(neq));
+  Kokkos::deep_copy(*x, 1e-3);
+  k->store_tangents(*u, {});
+  const OperatorCoefficients coef{1.0, 2e3, 1.6e7};
+  const std::string def = exec::to_string(k->resolve(exec::OperatorSettings{}));
+  for (auto sc : {exec::Scatter::Gather, exec::Scatter::Atomic})
+    for (auto g : {exec::Geometry::Recompute, exec::Geometry::Cached}) {
+      const exec::OperatorSettings v = k->resolve({sc, g, exec::TangentSource::Auto});
+      const std::string name = exec::to_string(v);
+      std::int64_t bytes = 2 * neq * 8 + nel * 25 * 4;
+      bytes += g == exec::Geometry::Cached ? k->geometry_cache_bytes() : 3 * N * 8;
+      if (sc == exec::Scatter::Gather) bytes += 2 * nel * 24 * 8 + nel * 24 * 8 + neq * 8;
+      registry.add({.name = "operator_ssp/" + std::to_string(s.nx) + "^3/" + name,
+                    .unit = "call",
+                    .bytes = bytes,
+                    .flops = 0.0,
+                    .items = nel,
+                    .run = [k, v, coef, x, y, u] { k->apply_operator(coef, v, *u, *x, *y); },
+                    .gated = name == def,
+                    .bound = "compute"});
+    }
+}
+
+}  // namespace
+
 void register_operator(Registry& registry, const Options& options) {
+  register_ssp(registry, options);
   testing::ColumnSpec s;
   s.nx = s.ny = s.nz = options.side();
   s.lumped = false;

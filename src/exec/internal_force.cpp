@@ -137,6 +137,10 @@ struct TypedBatch final : InternalForce::Batch {
     if (cache) {
       b.geometry = Vec("batch_geometry", static_cast<std::size_t>(Elem::NGEOM) * Elem::NGP * b.padded);
       kernels::fill_geometry<Elem>(b, coords, N);
+      if constexpr (ElementTermElement<Elem>) {
+        b.constants = Vec("batch_element_constants", static_cast<std::size_t>(Elem::NCONST) * b.padded);
+        kernels::fill_constants<Elem>(b, coords, N);
+      }
     }
   }
 
@@ -170,7 +174,8 @@ struct TypedBatch final : InternalForce::Batch {
     return static_cast<std::int64_t>(b.node.extent(0) + b.eq.extent(0) + b.param.extent(0) +
                                      b.color_elements.extent(0)) * 4 +
            static_cast<std::int64_t>(b.params.extent(0) * sizeof(kernels::DevParams<Elem>)) +
-           static_cast<std::int64_t>(b.geometry.extent(0) + t.constant.extent(0) + t.stored.extent(0)) * 8;
+           static_cast<std::int64_t>(b.geometry.extent(0) + b.constants.extent(0) + t.constant.extent(0) +
+                                     t.stored.extent(0)) * 8;
   }
   double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const override {
     return kernels::min_critical_dt<Elem>(b, coords, N, s);
@@ -277,7 +282,8 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
     using Elem = typename E::template Element<typename M::Material>;
     for (const auto& hb : c.batches)
       if (hb.pair == index && Elem::GEOMETRY_CACHEABLE)
-        cache_bytes_ += static_cast<std::int64_t>(Elem::NGEOM) * Elem::NGP * hb.padded * 8;
+        cache_bytes_ += (static_cast<std::int64_t>(Elem::NGEOM) * Elem::NGP + element_constant_count<Elem>()) *
+                        hb.padded * 8;
   });
   if (cache == GeometryCache::Auto) {
     const std::int64_t need = compile::memory_estimate_bytes(c) + cache_bytes_ +

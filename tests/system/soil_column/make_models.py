@@ -3,7 +3,7 @@
 
     .venv/bin/python tests/system/soil_column/make_models.py <out_dir> [nx ny nz] [duration] [dt]
         [--integrator ExplicitDifference|CentralDifference] [--mass-damping-only]
-        [--vtkhdf DT] [--no-node-recorders]
+        [--vtkhdf DT] [--no-node-recorders] [--element stdBrick|SSPbrick]
 
 CentralDifference keeps only the mass-proportional damping (alphaM), the case FemoraX
 solves without a linear solver; --mass-damping-only does the same for ExplicitDifference.
@@ -11,7 +11,7 @@ solves without a linear solver; --mass-damping-only does the same for ExplicitDi
 step) writing opensees.vtkhdf and femorax.vtkhdf; --no-node-recorders drops the text ones.
 
 The column follows Femora's layered soil column (examples/site_response): stdBrick +
-ElasticIsotropic with lumped mass and body force, two materials (lower and upper half),
+ElasticIsotropic with lumped mass (or SSPbrick, which always lumps) and body force, two materials (lower and upper half),
 the base fixed, the laminar boundary as Femora writes it (at every elevation above the base
 the side nodes tied to the first one in DOFs 1 2 3), Rayleigh damping per region (all
 elements, then the top layer with other coefficients, the later region winning), and a
@@ -41,6 +41,34 @@ MATS = [  # (E kPa, nu, rho Mg/m^3), lower and upper half
     (377000.0, 0.3, 2.0285),
     (109200.0, 0.3, 2.0183),
 ]
+ELEMENT = "stdBrick"  # or "SSPbrick" (--element)
+
+
+def tcl_element(e, conn, mi, lumped: bool) -> str:
+    b3 = -GRAVITY * MATS[mi][2]
+    if ELEMENT == "SSPbrick":
+        return f"element SSPbrick {e} {' '.join(map(str, conn))} {mi + 1} 0.0 0.0 {b3!r}"
+    return f"element stdBrick {e} {' '.join(map(str, conn))} {mi + 1} 0.0 0.0 {b3!r}" + (" -lumped" if lumped else "")
+
+
+def femorax_element_attrs(mi, lumped: bool) -> dict:
+    a = {"type": ELEMENT, "material": w.i32(mi + 1), "body_force": w.f64([0.0, 0.0, -GRAVITY * MATS[mi][2]])}
+    if ELEMENT == "stdBrick":
+        a["lumped"] = w.u8(lumped)
+    return a
+
+
+def take_element_option(argv: list) -> None:
+    """Removes --element X from argv and sets ELEMENT."""
+    global ELEMENT
+    if "--element" in argv:
+        k = argv.index("--element")
+        ELEMENT = argv[k + 1]
+        del argv[k:k + 2]
+        if ELEMENT not in ("stdBrick", "SSPbrick"):
+            raise SystemExit(f"unknown element {ELEMENT}")
+
+
 RAYLEIGH = [  # (alphaM, betaK, betaKinit, betaKcomm): all elements, then the top layer
     (0.6, 5.8e-4, 0.0, 0.0),
     (0.9, 3.0e-4, 1.0e-4, 0.0),
@@ -89,8 +117,7 @@ def write_tcl(m, path: Path, dt: float, integrator: str):
     for (t, x, y, z) in m["nodes"]:
         out.append(f"node {t} {x!r} {y!r} {z!r}")
     for (e, conn, mi) in m["elements"]:
-        b3 = -GRAVITY * MATS[mi][2]
-        out.append(f"element stdBrick {e} {' '.join(map(str, conn))} {mi + 1} 0.0 0.0 {b3!r} -lumped")
+        out.append(tcl_element(e, conn, mi, True))
     for n in m["fixes"]:
         out.append(f"fix {n} 1 1 1")
     for (r, c) in m["ties"]:
@@ -120,8 +147,7 @@ def write_femorax(m, path: Path, dt: float, prefix: str, integrator: str):
     for mi in range(len(MATS)):
         els = [(e, c) for (e, c, k) in m["elements"] if k == mi]
         groups[f"{mi:06d}"] = w.node(
-            attrs={"type": "stdBrick", "material": w.i32(mi + 1),
-                   "body_force": w.f64([0.0, 0.0, -GRAVITY * MATS[mi][2]]), "lumped": w.u8(True)},
+            attrs=femorax_element_attrs(mi, True),
             data={"tags": w.i32([e for e, _ in els]), "connectivity": w.i32([c for _, c in els])})
     regions = {f"{i:06d}": w.node(attrs={"alphaM": w.f64(r[0]), "betaK": w.f64(r[1]), "betaKinit": w.f64(r[2]),
                                          "betaKcomm": w.f64(r[3])}, data={"elements": w.i32(els)})
@@ -164,6 +190,7 @@ def write_femorax(m, path: Path, dt: float, prefix: str, integrator: str):
 
 def main() -> int:
     argv = sys.argv[1:]
+    take_element_option(argv)
     integrator = "ExplicitDifference"
     if "--integrator" in argv:
         k = argv.index("--integrator")
@@ -197,7 +224,7 @@ def main() -> int:
     m["rayleigh"] = RAYLEIGH if integrator == "ExplicitDifference" and not alpha_only else [(r[0], 0.0, 0.0, 0.0) for r in RAYLEIGH]
     write_tcl(m, out / "model.tcl", dt, integrator)
     write_femorax(m, out / "model.femorax.h5", dt, "femorax", integrator)
-    print(f"{nx}x{ny}x{nz} column, {len(m['elements'])} elements, {len(m['nodes'])} nodes, "
+    print(f"{nx}x{ny}x{nz} {ELEMENT} column, {len(m['elements'])} elements, {len(m['nodes'])} nodes, "
           f"{duration} s at dt {dt}, {integrator} -> {out}")
     return 0
 

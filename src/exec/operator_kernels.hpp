@@ -61,7 +61,7 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
   constexpr int NNODE = Elem::NNODE, NDOF = Elem::NDOF, NDM = Elem::NDM, NS = Mat::NSTRAIN;
   const auto node = b.node, eq = b.eq, param = b.param, colors = b.color_elements;
   const auto params = b.params;
-  const auto geo = b.geometry;
+  const auto geo = b.geometry, cst = b.constants;
   const auto tc = t.constant, ts = t.stored;
   const Index P = b.padded;
   const std::int64_t base = b.slot_offset;
@@ -101,13 +101,14 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
         // Committed tangent (betaKcomm): from the committed state, empty today.
         auto committed_at = [&](int, double (*D)[NS]) { Mat::committed_tangent(pr.p.mat, {}, D); };
         // Cached is a template constant (plain if: nvcc cannot capture inside if constexpr).
-        const typename Elem::CachedGeometry cached{cache_of<Elem>(geo, e, P)};
-        const typename Elem::RecomputedGeometry recomputed{xl};
-        if (Diagonal) {
-          if (Cached) element_operator_diagonal<Elem>(pr.p, pr.damp, k, cached, tangent_at, committed_at, eqe, ye);
-          else element_operator_diagonal<Elem>(pr.p, pr.damp, k, recomputed, tangent_at, committed_at, eqe, ye);
+        // Only the source in use is built (a recomputed source may compute element constants).
+        if (Cached) {
+          const auto cached = cached_geometry<Elem>(geo, cst, e, P);
+          if (Diagonal) element_operator_diagonal<Elem>(pr.p, pr.damp, k, cached, tangent_at, committed_at, eqe, ye);
+          else element_operator_apply<Elem>(pr.p, pr.damp, k, cached, tangent_at, committed_at, xe_e, ye);
         } else {
-          if (Cached) element_operator_apply<Elem>(pr.p, pr.damp, k, cached, tangent_at, committed_at, xe_e, ye);
+          const auto recomputed = Elem::recomputed_geometry(xl, pr.p);
+          if (Diagonal) element_operator_diagonal<Elem>(pr.p, pr.damp, k, recomputed, tangent_at, committed_at, eqe, ye);
           else element_operator_apply<Elem>(pr.p, pr.damp, k, recomputed, tangent_at, committed_at, xe_e, ye);
         }
         for (int a = 0; a < NDOF; ++a)

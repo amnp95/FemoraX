@@ -223,5 +223,6 @@ Correctness before every commit; performance on TACC:
 
 ## Current milestone
 
-Milestone 1a: layered elastic soil column with explicit central difference, end to end on the
-CPU backend (see design.md, Roadmap). Update this line when the milestone changes.
+Milestone 2: nonlinear layered soil column (SSPbrick, PressureDependMultiYield and
+PressureIndependMultiYield, material stages, Femora's retry and substep recovery; see
+design.md, Roadmap, for the approved plan). Update this line when the milestone changes.

@@ -2,10 +2,11 @@
 """Write the implicit soil-column model for both programs: model.femorax.h5 and model.tcl.
 
     .venv/bin/python tests/system/soil_column/make_implicit.py <out_dir> [nx ny nz] [duration] [dt]
-        [--gravity dynamic|static] [--algorithm Linear|Newton]
+        [--gravity dynamic|static] [--algorithm Linear|Newton] [--element stdBrick|SSPbrick]
 
 The column of make_models.py (two layers, laminar boundary, fixed base, Rayleigh damping
-per region, the sine-sweep base motion) with consistent mass, run as Femora's layered
+per region, the sine-sweep base motion) with consistent mass (stdBrick; SSPbrick always
+lumps, and OpenSees treats its lumped mass correctly in Newmark), run as Femora's layered
 elastic example does:
 
   1. gravity: "dynamic" (default) is Femora's implicit-dynamic gravity stage, Newmark
@@ -64,8 +65,7 @@ def write_tcl(m, path: Path, g: dict, s: dict):
     for (t, x, y, z) in m["nodes"]:
         out.append(f"node {t} {x!r} {y!r} {z!r}")
     for (e, conn, mi) in m["elements"]:
-        b3 = -mm.GRAVITY * mm.MATS[mi][2]
-        out.append(f"element stdBrick {e} {' '.join(map(str, conn))} {mi + 1} 0.0 0.0 {b3!r}")  # consistent mass
+        out.append(mm.tcl_element(e, conn, mi, False))  # stdBrick: consistent mass
     for n in m["fixes"]:
         out.append(f"fix {n} 1 1 1")
     for (r, c) in m["ties"]:
@@ -94,8 +94,7 @@ def write_femorax(m, path: Path, g: dict, s: dict):
     for mi in range(len(mm.MATS)):
         els = [(e, c) for (e, c, k) in m["elements"] if k == mi]
         groups[f"{mi:06d}"] = w.node(
-            attrs={"type": "stdBrick", "material": w.i32(mi + 1),
-                   "body_force": w.f64([0.0, 0.0, -mm.GRAVITY * mm.MATS[mi][2]]), "lumped": w.u8(False)},
+            attrs=mm.femorax_element_attrs(mi, False),
             data={"tags": w.i32([e for e, _ in els]), "connectivity": w.i32([c for _, c in els])})
     regions = {f"{i:06d}": w.node(attrs={"alphaM": w.f64(r[0]), "betaK": w.f64(r[1]), "betaKinit": w.f64(r[2]),
                                          "betaKcomm": w.f64(r[3])}, data={"elements": w.i32(els)})
@@ -144,6 +143,7 @@ def write_femorax(m, path: Path, g: dict, s: dict):
 
 def main() -> int:
     argv = sys.argv[1:]
+    mm.take_element_option(argv)
     opts = {"--gravity": "dynamic", "--algorithm": "Linear"}
     for k in list(opts):
         if k in argv:
@@ -162,7 +162,7 @@ def main() -> int:
     g, s = stages(opts["--gravity"], opts["--algorithm"], duration, dt)
     write_tcl(m, out / "model.tcl", g, s)
     write_femorax(m, out / "model.femorax.h5", g, s)
-    print(f"{nx}x{ny}x{nz} column (consistent mass), gravity {opts['--gravity']}, {opts['--algorithm']}, "
+    print(f"{nx}x{ny}x{nz} {mm.ELEMENT} column, gravity {opts['--gravity']}, {opts['--algorithm']}, "
           f"shaking {duration} s at dt {dt} -> {out}")
     return 0
 

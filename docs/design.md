@@ -171,6 +171,38 @@ and the kernels (`src/exec/element_kernels.hpp`: every layout x scatter x geomet
 over the element) are generic over the entries. A pair that is not registered is an
 unsupported component.
 
+### Element-level terms and element constants
+
+Most elements are sums over integration points of `B^T D B` and point masses. Some also have
+a stiffness of their own: SSPbrick's hourglass stabilization `Kstab`, later beams' element
+matrices and interface elements. The contract has an optional part for them
+(`ElementTermElement` in `contracts.hpp`), used by every kernel generically:
+
+- **Element constants:** `NCONST` doubles per element, built once from the coordinates and
+  the parameters by `element_constants(p, xl, c)`. They live in the element-constants array
+  (per-element layout, `value[k * nElements + e]`), built together with the geometry cache;
+  without the cache every kernel recomputes them with the same function, so both paths give
+  the same bits. The element's geometry sources carry them (`geometry.constants()`), made
+  by the element's own factories `recomputed_geometry(xl, p)` and `cached_geometry(g, c)`.
+- **The term `K_el v` without forming `K_el`** (performance rule 3a): an element-wide
+  reduction `element_term_reduce(p, c, v, z)` (`NTERM` values; for SSPbrick `z = interior *
+  (Mben v)`, 12 values) and a per-node expansion `element_term_node(p, c, z, j, out)`, so the
+  reduction runs once per element and the nodes split across lanes. `element_term_entry(p, c,
+  a, b)` gives single entries for diagonals (Jacobi) and test references.
+- **Semantics:** `K_el` is constant and part of the current, initial and committed
+  stiffness alike, so every stiffness-proportional damping term includes it
+  (`physics/common/element_term.hpp`). An element whose initial stiffness is its tangent
+  (`INITIAL_STIFFNESS_IS_TANGENT`, as SSPbrick's `getInitialStiff`) uses `D_t` for
+  `betaKinit`.
+- **Where it enters:** the force (the element's `compute` starts from `K_el u` and the
+  damping from `(betaK + betaKinit + betaKcomm) K_el v`, then adds the point terms; the team
+  layout writes the same initial values in an extra stage), the matrix-free operator and its
+  diagonal (`cK + cC (betaK + betaKinit + betaKcomm)` times `K_el`), the stable step, and the
+  host reference assembly of the tests.
+
+Adding SSPbrick took its physics header, its registry adapter and list entry, and this
+generic extension (written once for every later element that needs it).
+
 ## DOF numbering
 
 Nothing assumes a fixed number of DOFs per node.
@@ -310,7 +342,8 @@ stays in the code, the tests and the benchmarks.
 ### Geometry cache
 
 - The recompute path is permanent. Cached geometry (25 doubles per Gauss point, 1.6 KB per
-  brick) is used only for elements with `GEOMETRY_CACHEABLE`, and only if it fits: with
+  stdBrick; SSPbrick: 34 doubles at its one point plus 110 element constants, 1.2 KB) is
+  used only for elements with `GEOMETRY_CACHEABLE`, and only if it fits: with
   `GeometryCache::Auto` the cache is built when the model, the cache and the work vectors
   fit in 80% of the device's free memory (`exec::device_free_memory_bytes`). Otherwise
   `Geometry::Cached` falls back to recomputing, with the same bits.
@@ -747,8 +780,36 @@ Correctness is checked against physics first and OpenSees second.
        three column sizes).
    11. Chebyshev with Jacobi.
    Later milestone: matrix-free geometric multigrid (plan first).
-2. **Nonlinear layered soil column**: CUDA build, GPU solvers, PressureDependMultiYield,
-   material stages.
+2. **Nonlinear layered soil column**. Plan approved 2026-11-07 (one commit per step, a
+   report after each):
+   1. SSPbrick through the element registry, verified against OpenSees like stdBrick, with
+      the generic element-term extension ("Element-level terms and element constants")
+      (done).
+   2. Schema 0.4 (approved): PressureDependMultiYield and PressureIndependMultiYield with
+      Femora's parameters and optional `pairs` (nd = 3 only), the `updateMaterialStage`
+      action (stage 0 or 1), `stress3D6` and `strain3D6` in VTKHDF. Then PDMY, then PIMY:
+      fixed-size state with a compile-time maximum number of yield surfaces per batch
+      (buckets 20 and 40, a new bucket is one line), automatic surfaces (positive N) and
+      user backbones (negative N with pairs); no heap and no static workspaces; state
+      through the strided views; surface loops through `inner_for` / `inner_reduce`; the
+      material stage as OpenSees' `updateMaterialStage`; the tangent symmetry declared from
+      the OpenSees source; a fused kernel and a compacted plastic-corrector variant, both
+      kept for TACC benchmarks; the state size per point reported. `pa` per material (a
+      deviation: OpenSees keeps one global `pAtm`, the last constructed material's), with
+      a standalone OpenSees issue example.
+   3. Verification against OpenSees: strain paths at the Gauss-point level (the OpenSees
+      material called directly, no domain), then single elements, then the system test.
+   4. System test: Femora's nonlinear layered soil column (its own 1x1x25 column, staged
+      elastic gravity, the switch to plastic, shaking with FrequencySweep from 1.9 to
+      3.9 s stored as a trimmed record), FemoraX against OpenSees on CPU and GPU, explicit
+      and implicit where the example allows. Tolerances: exact event sequences (active
+      surfaces, substeps, retries) plus value tolerances set from the first runs and
+      justified in docs/deviations.md; how often GPU and CPU take different plastic paths
+      is reported.
+   5. Femora's retry and substep recovery, tested on a case that needs it.
+   OpenSees references for nonlinear materials stay tiny (material paths; the 1x1x25
+   column, 1-2 s): run once, stored in the repository, compared against by the tests;
+   OpenSees never runs in the normal check. Bigger nonlinear models run only in FemoraX.
 3. **Laterally loaded pile**: beams, sections, embedded interfaces.
 4. **DRM basin and dynamic pile-soil interaction**: H5DRM, PML, absorbing boundaries.
 5. **Rotated two-pile bent**: fiber sections, ForceBeamColumn, multi-GPU using Femora's

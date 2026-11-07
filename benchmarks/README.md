@@ -123,6 +123,13 @@ Current:
   every layout and scatter mode; team variants for each elements-per-team that fits the
   backend's scratch. The fastest variant per backend goes into
   `src/exec/force_settings.cpp`.
+- `explicit_force_ssp/<n>^3/<variant>` and `operator_ssp/<n>^3/<variant>`: the same with
+  SSPbrick (one integration point, lumped mass, the hourglass term `Kstab` from the element
+  constants, cached with the geometry, or recomputed). FLOPs are not counted for SSPbrick
+  yet (`bound` = compute). Laptop orientation, 40^3, gather scatter: explicit force cached
+  11.9 ms (stdBrick 19.1 ms) on 8 threads, 1.67 ms (stdBrick 6.2 ms) on the RTX 3050 Ti;
+  recomputed 47 ms / 10.7 ms (the stabilization's setup runs in every call); operator
+  7.6 ms / 1.10 ms (stdBrick, consistent mass: 18.9 ms / 4.8 ms). Not baselines.
 
-Planned for milestone 1a: SSPbrick, the explicit step (time per step and DOFs per second),
-and the recorders' per-step cost.
+Planned: the explicit step (time per step and DOFs per second) and the recorders' per-step
+cost.

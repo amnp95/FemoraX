@@ -7,6 +7,7 @@
 #include "exec/inner_kokkos.hpp"
 #include "physics/common/inner.hpp"
 #include "physics/common/strided.hpp"
+#include "physics/elements/ssp_brick.hpp"
 #include "physics/elements/std_brick.hpp"
 #include "physics/materials/elastic_isotropic.hpp"
 #include "../reference/drivers/driver_common.hpp"
@@ -59,6 +60,7 @@ static_assert(femorax::Material<ToyHistory>);
 
 using ToyBrick = femorax::StdBrick<ToyHistory>;
 using Brick = femorax::StdBrick<femorax::ElasticIsotropic>;
+using Ssp = femorax::SSPbrick<femorax::ElasticIsotropic>;
 constexpr int NDOF = 24, NGP = 8;
 
 struct Element {
@@ -210,6 +212,7 @@ TEST(MemoryContract, InnerLoopSplitAcrossLanesDoesNotChangeResults) {
                                  reverse);
         lane_vs_serial<Brick>(Brick::Params{{377000.0, 0.3, 2.0285}, {0.5, -1.0, -19.9}, 1}, el,
                               lanes, reverse);
+        lane_vs_serial<Ssp>(Ssp::Params{{377000.0, 0.3, 2.0285}, {0.5, -1.0, -19.9}}, el, lanes, reverse);
       }
     }
   }
@@ -240,7 +243,8 @@ struct KokkosLaneResult {
   Kokkos::View<double*> reduced;
 };
 
-KokkosLaneResult run_kokkos_lanes(const std::vector<Element>& els, const Brick::Params& p,
+template <class Elem>
+KokkosLaneResult run_kokkos_lanes(const std::vector<Element>& els, const typename Elem::Params& p,
                                   const Rayleigh& d, int vl) {
   using Space = Kokkos::DefaultExecutionSpace;
   using Policy = Kokkos::TeamPolicy<Space>;
@@ -263,13 +267,13 @@ KokkosLaneResult run_kokkos_lanes(const std::vector<Element>& els, const Brick::
       "contract_kokkos_lanes", policy, KOKKOS_LAMBDA(const Member& m) {
         const int e = m.league_rank();
         Scratch buf(m.team_scratch(0), work_doubles);
-        auto* work = reinterpret_cast<Brick::Work*>(buf.data());
+        auto* work = reinterpret_cast<typename Elem::Work*>(buf.data());
         double* f = buf.data() + 2 * NDOF;
         auto* K = reinterpret_cast<double(*)[NDOF]>(f + NDOF);
         double* red = f + NDOF + NDOF * NDOF;
         femorax::exec::VectorLanes<Member> ctx{m, red, 64};
         const Element& el = dev_els(e);
-        Brick::compute<true>(ctx, p, d, el.xe, el.u, el.v, {}, {}, f, K, *work);
+        Elem::template compute<true>(ctx, p, d, el.xe, el.u, el.v, {}, {}, f, K, *work);
         const double s = inner_reduce(ctx, NDOF, [&](int i) { return f[i] * (i + 1); });
         Kokkos::single(Kokkos::PerThread(m), [&]() {
           for (int i = 0; i < NDOF; ++i) fe(e, i) = f[i];
@@ -280,16 +284,16 @@ KokkosLaneResult run_kokkos_lanes(const std::vector<Element>& els, const Brick::
   return {fe, Ke, reduced};
 }
 
-TEST(MemoryContract, KokkosLaneMappingMatchesSerial) {
+template <class Elem>
+void kokkos_lanes_vs_serial(const typename Elem::Params& p) {
   const auto els = elements(4);
   const int nE = static_cast<int>(els.size());
-  const Brick::Params p{{377000.0, 0.3, 2.0285}, {0.5, -1.0, -19.9}, 0};
   const Rayleigh d{0.3, 1e-3, 2e-4, 3e-4};
   // Lanes per thread: one, and the backend's maximum (a full warp on a GPU).
   using Policy = Kokkos::TeamPolicy<Kokkos::DefaultExecutionSpace>;
   const int vmax = std::min(Policy::vector_length_max(), 32);
-  const auto one = run_kokkos_lanes(els, p, d, 1);
-  const auto [fe, Ke, reduced] = run_kokkos_lanes(els, p, d, vmax);
+  const auto one = run_kokkos_lanes<Elem>(els, p, d, 1);
+  const auto [fe, Ke, reduced] = run_kokkos_lanes<Elem>(els, p, d, vmax);
   // The lane split never changes a bit, on any backend.
   auto bits = [](const auto& a, const auto& b) {
     auto ha = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), a);
@@ -307,7 +311,7 @@ TEST(MemoryContract, KokkosLaneMappingMatchesSerial) {
   auto h_red = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), reduced);
   for (int e = 0; e < nE; ++e) {
     double f[NDOF], K[NDOF][NDOF];
-    Brick::compute<true>(p, d, els[e].xe, els[e].u, els[e].v, {}, {}, f, K);
+    Elem::template compute<true>(p, d, els[e].xe, els[e].u, els[e].v, {}, {}, f, K);
     double s = 0;
     for (int i = 0; i < NDOF; ++i) s += f[i] * (i + 1);
     double fs = 0, ks = 0;
@@ -318,6 +322,11 @@ TEST(MemoryContract, KokkosLaneMappingMatchesSerial) {
     for (int i = 0; i < NDOF * NDOF; ++i) EXPECT_NEAR(h_Ke(e, i), (&K[0][0])[i], tk) << "element " << e;
     EXPECT_NEAR(h_red(e), s, host ? 0.0 : 1e-13 * std::abs(s) * NDOF) << "element " << e;
   }
+}
+
+TEST(MemoryContract, KokkosLaneMappingMatchesSerial) {
+  kokkos_lanes_vs_serial<Brick>(Brick::Params{{377000.0, 0.3, 2.0285}, {0.5, -1.0, -19.9}, 0});
+  kokkos_lanes_vs_serial<Ssp>(Ssp::Params{{377000.0, 0.3, 2.0285}, {0.5, -1.0, -19.9}});
 }
 
 }  // namespace

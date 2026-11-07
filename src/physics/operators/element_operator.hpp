@@ -15,7 +15,14 @@
 // shape functions) that recomputes
 // it, loads it from storage, or copies a constant per material (the launch layer picks;
 // physics never knows). Node DOFs are assumed to be 3 per node (the elements so far).
+//
+// Elements with an element-level stiffness term K_el (ElementTermElement: SSPbrick's
+// stabilization) add cE K_el v, cE = cK + cC (betaK + betaKinit + betaKcomm), applied through
+// the element's reduce/node functions (never formed); geometry.constants() gives its
+// constants. Elements whose initial stiffness is their tangent
+// (initial_stiffness_is_tangent: SSPbrick) use D_t for the betaKinit term.
 
+#include "physics/common/element_term.hpp"
 #include "physics/contracts.hpp"
 #include "physics/macros.hpp"
 
@@ -35,8 +42,9 @@ template <class Elem>
 struct Factors {
   double cK, c0, cc, cM;
   FEMORAX_HD Factors(const Rayleigh& d, const OperatorCoefficients& k)
-      : cK(k.stiffness + k.damping * d.betaK),
-        c0(k.damping * d.betaKinit),
+      : cK(initial_stiffness_is_tangent<Elem>() ? k.stiffness + k.damping * d.betaK + k.damping * d.betaKinit
+                                                 : k.stiffness + k.damping * d.betaK),
+        c0(initial_stiffness_is_tangent<Elem>() ? 0.0 : k.damping * d.betaKinit),
         cc(k.damping * d.betaKcomm),
         cM(k.mass + k.damping * d.alphaM) {}
 };
@@ -97,6 +105,19 @@ FEMORAX_HD void element_operator_apply(const typename Elem::Params& p, const Ray
         double mj[3];
         Elem::point_mass_apply(p, s, ve, j, mj);
         for (int q = 0; q < 3; ++q) ye[3 * j + q] += f.cM * mj[q];
+      }
+    }
+  }
+  if constexpr (ElementTermElement<Elem>) {
+    const double cE = element_term_factor(damp, k.stiffness, k.damping);
+    if (cE != 0.0) {
+      const Strided<const double> c = geometry.constants();
+      double z[Elem::NTERM];
+      Elem::element_term_reduce(p, c, ve, z);
+      for (int j = 0; j < NNODE; ++j) {
+        double kj[3];
+        Elem::element_term_node(p, c, z, j, kj);
+        for (int q = 0; q < 3; ++q) ye[3 * j + q] += cE * kj[q];
       }
     }
   }
@@ -164,6 +185,20 @@ FEMORAX_HD void element_operator_diagonal(const typename Elem::Params& p, const 
             de[first[ia]] += blk[a][c] + (a == c ? m : 0.0);
           }
       }
+  }
+  if constexpr (ElementTermElement<Elem>) {
+    const double cE = element_term_factor(damp, k.stiffness, k.damping);
+    if (cE != 0.0) {
+      const Strided<const double> c = geometry.constants();
+      for (int a = 0; a < NDOF; ++a) de[a] += cE * Elem::element_term_entry(p, c, a, a);
+      if (merged) {
+        for (int a = 0; a < NDOF; ++a)
+          for (int b = 0; b < NDOF; ++b) {
+            if (a == b || eq[a] < 0 || eq[a] != eq[b]) continue;
+            de[first[a]] += cE * Elem::element_term_entry(p, c, a, b);
+          }
+      }
+    }
   }
 }
 

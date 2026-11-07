@@ -163,6 +163,19 @@ concept PointwiseElement =
       { E::point_block_tangent(cs, dd, gp, gp, KIJ) } -> std::same_as<void>;
     };
 
+// Geometry sources of a MatrixFreeElement (RecomputedGeometry, CachedGeometry), made by
+// the element itself so the launch layer never needs their layout:
+//   recomputed_geometry(xl, p)   from the local coordinates xl[3][8] and the parameters
+//   cached_geometry(g, c)        from the geometry cache (per point) and the element
+//                                constants (per element; empty for elements without them)
+// and geometry.shape(gp, s) gives point gp's shape functions.
+template <class E>
+concept GeometryFactories = requires(const typename E::Params& p, const double (*xl)[8],
+                                     PointArray<const double> g, Strided<const double> c) {
+  { E::recomputed_geometry(xl, p) } -> std::same_as<typename E::RecomputedGeometry>;
+  { E::cached_geometry(g, c) } -> std::same_as<typename E::CachedGeometry>;
+};
+
 // A pointwise element that also gives its mass per point, so the matrix-free operator
 // (physics/operators/element_operator.hpp) and its diagonal apply M without forming it:
 //   point_mass_apply:    (M v) at node j from point s, all components (out[ndf of j])
@@ -175,11 +188,55 @@ concept MatrixFreeElement =
       typename E::RecomputedGeometry;  // shape(gp, s) from local coordinates
       typename E::CachedGeometry;      // shape(gp, s) from the geometry cache
     } &&
+    GeometryFactories<E> &&
     requires(const typename E::Params& p, const typename E::PointShape& cs, const double* v,
              int j, double* out) {
       { E::point_mass_apply(p, cs, v, j, out) } -> std::same_as<void>;
       { E::point_mass_entry(p, cs, j, j) } -> std::same_as<double>;
     };
+
+// An element with a stiffness term of its own besides the point terms B^T D B (docs/design.md,
+// "Element-level terms"): SSPbrick's hourglass stabilization Kstab, later beams' and
+// interfaces' element matrices. The term K_el is built from per-element constants:
+//   NCONST                        doubles per element, built once from the coordinates and
+//                                 the parameters by element_constants(p, xl, c) (stored in
+//                                 the element-constants array, value k at [k * nElements + e],
+//                                 or recomputed in each kernel: the same function either way;
+//                                 geometry.constants() gives them to the element's code)
+//   element_term_reduce(p, c, v, z)        z[NTERM]: the element-wide part of K_el v
+//   element_term_node(p, c, z, j, out)     (K_el v) at node j from z
+//   element_term_entry(p, c, a, b)         K_el(a, b), for diagonals and assembled references
+// so that K_el v is applied without forming the NDOF x NDOF matrix in one thread
+// (CLAUDE.md, performance rule 3a), and the reduction runs once per element while the node
+// expansion splits across lanes (inner.hpp). K_el is constant and part of the current,
+// initial and committed stiffness alike: every stiffness-proportional damping term
+// includes it.
+template <class E>
+concept ElementTermElement =
+    detail::is_constexpr_int<decltype(E::NCONST)> && detail::is_constexpr_int<decltype(E::NTERM)> &&
+    (E::NCONST > 0) && (E::NTERM > 0) &&
+    requires(const typename E::Params& p, const double (*xl)[8], Strided<double> cw,
+             Strided<const double> c, const double* v, double* z, int j, double* out) {
+      { E::element_constants(p, xl, cw) } -> std::same_as<void>;
+      { E::element_term_reduce(p, c, v, z) } -> std::same_as<void>;
+      { E::element_term_node(p, c, z, j, out) } -> std::same_as<void>;
+      { E::element_term_entry(p, c, j, j) } -> std::same_as<double>;
+    };
+
+// Whether the element's "initial stiffness" (betaKinit damping) is its current tangent, as
+// SSPbrick::getInitialStiff returns getTangentStiff. Optional trait; false when absent.
+template <class E>
+FEMORAX_HD constexpr bool initial_stiffness_is_tangent() {
+  if constexpr (requires { E::INITIAL_STIFFNESS_IS_TANGENT; }) return E::INITIAL_STIFFNESS_IS_TANGENT;
+  else return false;
+}
+
+// Doubles of element constants per element (0 without an element term).
+template <class E>
+FEMORAX_HD constexpr int element_constant_count() {
+  if constexpr (ElementTermElement<E>) return E::NCONST;
+  else return 0;
+}
 
 // An (element, material) pair that can be instantiated as a batch.
 template <class E, class M>

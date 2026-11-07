@@ -31,12 +31,13 @@ using femorax::exec::Scatter;
 using femorax::exec::TangentSource;
 using femorax::exec::Vec;
 
-femorax::io::Model column(bool lumped) {
+femorax::io::Model column(bool lumped, femorax::io::ElementType type = femorax::io::ElementType::StdBrick) {
   femorax::testing::ColumnSpec s;
   s.nx = 3;
   s.ny = 2;
   s.nz = 8;
   s.lumped = lumped;
+  s.element = type;
   auto m = femorax::testing::soil_column(s);
   // Every Rayleigh term somewhere (the top region has betaKinit; add betaKcomm), and nodal
   // masses on two nodes.
@@ -81,10 +82,20 @@ const OperatorCoefficients kCases[] = {
     {1.0, 2e3, 1.6e7},     // Newmark-like: K + c2 C + c3 M at dt = 2.5e-4
 };
 
+struct Case {
+  bool lumped;
+  femorax::io::ElementType type;
+  const char* name;
+};
+const Case kCases2[] = {{false, femorax::io::ElementType::StdBrick, "stdBrick consistent"},
+                        {true, femorax::io::ElementType::StdBrick, "stdBrick lumped"},
+                        {true, femorax::io::ElementType::SSPbrick, "SSPbrick"}};
+
 TEST(MatrixFreeOperator, MatchesTheAssembledReferenceInEveryVariant) {
-  for (bool lumped : {false, true}) {
-    SCOPED_TRACE(lumped ? "lumped" : "consistent");
-    const auto m = column(lumped);
+  for (const auto& cs : kCases2) {
+    const bool lumped = cs.lumped;
+    SCOPED_TRACE(cs.name);
+    const auto m = column(lumped, cs.type);
     CompileOptions o;
     o.build_coloring = true;
     const Compiled c = compile_model(m, o);
@@ -138,9 +149,10 @@ TEST(MatrixFreeOperator, MatchesTheAssembledReferenceInEveryVariant) {
 TEST(MatrixFreeOperator, GroundLoadIncludesTheMovingBase) {
   // M r_d over every element DOF (the fixed base too) plus nodal masses: a consistent mass
   // loads the DOFs next to the base through their coupling to it.
-  for (bool lumped : {false, true}) {
-    SCOPED_TRACE(lumped ? "lumped" : "consistent");
-    const auto m = column(lumped);
+  for (const auto& cs : kCases2) {
+    const bool lumped = cs.lumped;
+    SCOPED_TRACE(cs.name);
+    const auto m = column(lumped, cs.type);
     const Compiled c = compile_model(m, CompileOptions{});
     const auto ref = femorax::testing::assemble_reference(m, c);
     InternalForce force(c, GeometryCache::On);

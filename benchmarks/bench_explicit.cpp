@@ -2,6 +2,9 @@
 // renumbering on.
 //   explicit_force/<n>^3/<variant>         Rayleigh damping (the soil column's two regions),
 //                                          every layout x scatter x geometry variant
+//   explicit_force_ssp/<n>^3/<variant>     the same with SSPbrick (one point and the
+//                                          hourglass term; the geometry cache adds its
+//                                          element constants); FLOPs not counted yet
 //   explicit_force_nodamp/<n>^3/<variant>  no damping, flat atomic only: the work of
 //                                          OpenSees' update() + getResistingForce(), for the
 //                                          comparison with tests/reference/drivers/brick_bench
@@ -28,10 +31,13 @@ namespace femorax::bench {
 
 namespace {
 
-void register_model(Registry& registry, const Options& options, bool damped) {
+void register_model(Registry& registry, const Options& options, bool damped,
+                    io::ElementType type = io::ElementType::StdBrick) {
+  const bool ssp = type == io::ElementType::SSPbrick;
   testing::ColumnSpec s;
   s.nx = s.ny = s.nz = options.side();
   s.damping = damped;
+  s.element = type;
   const auto model = testing::soil_column(s);
   compile::CompileOptions co;
   co.renumbering = compile::Renumbering::RCM;
@@ -51,6 +57,7 @@ void register_model(Registry& registry, const Options& options, bool damped) {
   };
   auto flops_of = [&](bool team, bool cached) {
     double total = 0;
+    if (ssp) return total;
     for (const auto& b : compiled->batches)
       for (std::int32_t e = 0; e < b.count; ++e) {
         const auto& ps = b.params[b.param[e]];
@@ -72,7 +79,7 @@ void register_model(Registry& registry, const Options& options, bool damped) {
                 {exec::Layout::Flat, exec::Scatter::Atomic, 0, exec::Geometry::Cached}};
   }
   const std::string def = exec::to_string(k->resolve(exec::default_force_settings()));
-  const std::string group = std::string(damped ? "explicit_force/" : "explicit_force_nodamp/") +
+  const std::string group = std::string(ssp ? "explicit_force_ssp/" : damped ? "explicit_force/" : "explicit_force_nodamp/") +
                             std::to_string(s.nx) + "^3/";
   for (const auto& v0 : variants) {
     const auto v = k->resolve(v0);
@@ -85,7 +92,8 @@ void register_model(Registry& registry, const Options& options, bool damped) {
                   .run = [k, v] { k->compute(v); },
                   // Gate this device's default (and the undamped comparison runs); the other
                   // variants inform the defaults and the auto-tune.
-                  .gated = !damped || name == def});
+                  .gated = !damped || name == def,
+                  .bound = ssp ? "compute" : ""});
   }
 }
 
@@ -94,6 +102,7 @@ void register_model(Registry& registry, const Options& options, bool damped) {
 void register_explicit(Registry& registry, const Options& options) {
   register_model(registry, options, true);
   register_model(registry, options, false);
+  register_model(registry, options, true, io::ElementType::SSPbrick);
 }
 
 }  // namespace femorax::bench

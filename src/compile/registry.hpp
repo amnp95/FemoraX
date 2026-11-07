@@ -16,6 +16,7 @@
 
 #include "io/model.hpp"
 #include "physics/contracts.hpp"
+#include "physics/elements/ssp_brick.hpp"
 #include "physics/elements/std_brick.hpp"
 #include "physics/materials/elastic_isotropic.hpp"
 
@@ -50,9 +51,21 @@ struct StdBrickEntry {
   }
 };
 
+struct SSPbrickEntry {
+  template <class Mat>
+  using Element = SSPbrick<Mat>;
+  static constexpr io::ElementType type = io::ElementType::SSPbrick;
+  static constexpr const char* name = "SSPbrick";
+  template <class Mat>
+  static typename Element<Mat>::Params params(const io::ElementGroup& g,
+                                              const typename Mat::Params& mp) {
+    return {mp, {g.body_force[0], g.body_force[1], g.body_force[2]}};
+  }
+};
+
 // The registered entries: one line each.
 using Materials = TypeList<ElasticIsotropicEntry>;
-using Elements = TypeList<StdBrickEntry>;
+using Elements = TypeList<StdBrickEntry, SSPbrickEntry>;
 
 // --- Dispatch ------------------------------------------------------------------------------
 // Pair index: element entry index * number of materials + material entry index.

@@ -15,6 +15,9 @@ Run FemoraX in subdirectories (`cd $D/rcm && femorax run ../model.femorax.h5 --r
 on`, the CUDA build, ...) and compare each against the same OpenSees output by linking the
 files. Tolerance and observed differences: `docs/deviations.md` ("System tests").
 
+`--element SSPbrick` (both scripts) writes the column with SSPbrick instead of stdBrick;
+`vtkhdf_check.sh` and `implicit_check.sh` run both elements.
+
 `--integrator CentralDifference` writes the alphaM-only variant; FemoraX deliberately
 differs from OpenSees there (docs/deviations.md, "CentralDifference with lumped stdBrick").
 
