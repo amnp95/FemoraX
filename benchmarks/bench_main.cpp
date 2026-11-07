@@ -1,6 +1,6 @@
 // femorax_bench: run the benchmark suite.
 //
-//   femorax_bench [--json out.json] [--filter text] [--reps N] [--warmup N] [--quick]
+//   femorax_bench [--json out.json] [--filter text[,text...]] [--reps N] [--warmup N] [--quick]
 //                 [--kokkos-...]
 //
 // Use benchmarks/check.py to run it against a baseline; see benchmarks/README.md.
@@ -49,6 +49,7 @@ int main(int argc, char* argv[]) {
     femorax::bench::register_stream(registry, options);
     femorax::bench::register_peak(registry, options);
     femorax::bench::register_explicit(registry, options);
+    femorax::bench::register_solvers(registry, options);
 
     const auto results = femorax::bench::run_all(registry, options);
     if (results.empty()) {

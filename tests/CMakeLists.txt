@@ -16,8 +16,9 @@ add_executable(femorax_unit_tests
   unit/test_renumber.cpp
   unit/test_internal_force.cpp
   unit/test_ground_motion.cpp
+  unit/test_vector_ops.cpp
   unit/test_runtime.cpp)
-target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::compile GTest::gtest)
+target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest)
 target_compile_definitions(femorax_unit_tests PRIVATE
   FEMORAX_REFERENCE_DATA="${PROJECT_SOURCE_DIR}/tests/reference/data")
 femorax_set_warnings(femorax_unit_tests)
