@@ -7,7 +7,8 @@
 //   - a force evaluation without a commit changes nothing (trial work is redone from the
 //     committed state), so Newton iterations and the auto-tune may call it freely;
 //   - set_material_stage changes only the materials named;
-//   - the stored tangents and the committed tangent use the state.
+//   - the stored tangents and the committed tangent use the state;
+//   - an explicit stage re-checks the stable step as the soil stiffens with confinement.
 
 #include <Kokkos_Core.hpp>
 #include <gtest/gtest.h>
@@ -21,6 +22,7 @@
 #include "../common/synthetic_models.hpp"
 #include "compile/batches.hpp"
 #include "compile/registry.hpp"
+#include "exec/explicit_analysis.hpp"
 #include "exec/force_settings.hpp"
 #include "exec/internal_force.hpp"
 #include "exec/runtime.hpp"
@@ -295,6 +297,39 @@ TEST(MaterialState, OperatorUsesTheStateAndRecomputedFallsBackToStored) {
   const double dt = k.min_critical_dt(ExplicitScheme::ExplicitDifference);
   EXPECT_GT(dt, 0.0);
   EXPECT_TRUE(std::isfinite(dt));
+}
+
+// Gravity switched on in an explicit stage, in the plastic stage from zero stress: the
+// moduli start at getModulusFactor of the residual pressure (about 7% of the reference) and
+// grow with the confinement, so the stable step shrinks during the stage. A dt that is
+// stable at the start stops the run at the first periodic check after it is not.
+TEST(MaterialState, ExplicitStageStopsWhenTheStableStepFallsBelowDt) {
+  auto model = [](double dt, int steps) {
+    io::Model m = column(io::ElementType::SSPbrick);
+    m.process.push_back({"000000", "", io::UpdateMaterialStageStep{{1, 2}, 1}});
+    io::AnalysisStep a;
+    a.name = "gravity";
+    a.dt = dt;
+    a.num_steps = steps;
+    a.integrator = io::Integrator::ExplicitDifference;
+    m.process.push_back({"000001", "", a});
+    return m;
+  };
+  exec::RunOptions o;
+  o.verbose = false;
+  o.stable_step_check_interval = 10;
+  const auto first = exec::run_model(model(1e-6, 10), o);
+  const double dt0 = first.stages.at(0).critical_dt;
+  ASSERT_GT(dt0, 0.0);
+  EXPECT_LE(first.stages.at(0).min_critical_dt, dt0);
+  try {
+    exec::run_model(model(0.6 * dt0, 4000), o);
+    FAIL() << "expected the stable step check to stop the run";
+  } catch (const io::ModelError& e) {
+    const std::string what = e.what();
+    EXPECT_NE(what.find("the stable step fell to"), std::string::npos) << what;
+    EXPECT_NE(what.find("allow_unstable_dt"), std::string::npos) << what;
+  }
 }
 
 }  // namespace

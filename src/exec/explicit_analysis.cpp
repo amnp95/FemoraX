@@ -2,6 +2,7 @@
 
 #include <Kokkos_Core.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -234,6 +235,9 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         if (!an->allow_unstable_dt) throw io::ModelError(std::string(msg) + " (reduce dt, or set allow_unstable_dt)");
         if (opt.verbose) std::printf("femorax: warning: %s\n", msg);
       }
+      st.min_critical_dt = st.critical_dt;
+      const bool recheck = opt.stable_step_check_interval > 0 && force.has_state();
+      bool warned = false;
       // domainChanged: the integrator starts from the committed state.
       const double dt = an->dt;
       const Index n = static_cast<Index>(neq);
@@ -263,6 +267,23 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         ++k;
         force.commit_state();  // Domain::commit: the materials' trial state becomes committed
         recorders.record(time, u, v_rec, a);
+        if (recheck && k % opt.stable_step_check_interval == 0) {
+          // History materials change their stiffness during the stage (PressureDependMultiYield
+          // with confinement), so the stable step can fall below dt.
+          const double dtc =
+              force.min_critical_dt(ed ? ExplicitScheme::ExplicitDifference : ExplicitScheme::CentralDifference);
+          st.min_critical_dt = std::min(st.min_critical_dt, dtc);
+          if (dt > dtc && !warned) {
+            char msg[384];
+            std::snprintf(msg, sizeof(msg),
+                          "stage \"%s\": at step %lld (t = %.6g) the stable step fell to %.6g (%.6g at the start of "
+                          "the stage), below dt = %.6g: the material stiffened",
+                          an->name.c_str(), static_cast<long long>(k), time, dtc, st.critical_dt, dt);
+            if (!an->allow_unstable_dt) throw io::ModelError(std::string(msg) + " (reduce dt, or set allow_unstable_dt)");
+            if (opt.verbose) std::printf("femorax: warning: %s\n", msg);
+            warned = true;
+          }
+        }
         if (opt.nan_check_interval > 0 && k % opt.nan_check_interval == 0 && !all_finite(u)) {
           throw io::ModelError("stage \"" + an->name + "\": displacements are not finite at step " +
                                std::to_string(k) + " (t = " + std::to_string(time) +
@@ -276,9 +297,15 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       st.seconds = now() - t0;
       rep.stages.push_back(st);
       if (opt.verbose) {
-        std::printf("femorax: stage %s: %s, %lld steps of %.6g (stable step %.6g), %.3f s (%.3f ms/step)\n",
-                    st.name.c_str(), st.integrator.c_str(), static_cast<long long>(st.steps), st.dt,
-                    st.critical_dt, st.seconds, st.steps ? 1e3 * st.seconds / st.steps : 0.0);
+        char limit[96];
+        if (st.min_critical_dt < st.critical_dt) {
+          std::snprintf(limit, sizeof(limit), "stable step %.6g, smallest %.6g", st.critical_dt, st.min_critical_dt);
+        } else {
+          std::snprintf(limit, sizeof(limit), "stable step %.6g", st.critical_dt);
+        }
+        std::printf("femorax: stage %s: %s, %lld steps of %.6g (%s), %.3f s (%.3f ms/step)\n", st.name.c_str(),
+                    st.integrator.c_str(), static_cast<long long>(st.steps), st.dt, limit, st.seconds,
+                    st.steps ? 1e3 * st.seconds / st.steps : 0.0);
       }
     }
   }

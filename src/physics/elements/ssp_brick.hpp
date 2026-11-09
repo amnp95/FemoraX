@@ -1206,9 +1206,9 @@ struct SSPbrick {
     for (int j = 0; j < NNODE; ++j) m[j] = node_mass(p, s, j);
   }
 
-  // Largest omega^2 of K phi = omega^2 M phi with the lumped mass and the committed tangent
-  // (Kstab included). Runs once per element per stage, so the 24 x 24 matrix in one thread
-  // is acceptable here.
+  // Largest omega^2 of K phi = omega^2 M phi with the lumped mass and the stability tangent
+  // (contracts.hpp; Kstab included). Runs once per element at each stable step check, so the
+  // 24 x 24 matrix in one thread is acceptable here.
   FEMORAX_HD static double max_omega_sq(const Params& p, const double (*xe)[NDM], PointArray<const double> committed) {
     double xl[3][8];
     local_coords(xe, xl);
@@ -1220,7 +1220,7 @@ struct SSPbrick {
     for (int a = 0; a < NDOF; ++a)
       for (int b = 0; b < NDOF; ++b) A[a][b] = element_term_entry(p, c, a, b);
     double dd[NSTRESS][NSTRESS];
-    Mat::committed_tangent(p.mat, committed.point(0), dd);
+    stability_tangent<Mat>(p.mat, committed.point(0), dd);
     for (int j = 0; j < NNODE; j++)
       for (int k = 0; k < NNODE; k++) {
         double stiffJK[3][3];

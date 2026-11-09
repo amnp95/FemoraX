@@ -18,8 +18,10 @@
 // steps while t < final_time, as Femora's Tcl loop does.
 //
 // Checks: the device memory estimate before anything is allocated; the stable step at the
-// start of each stage (stops unless allow_unstable_dt); NaN/Inf in the displacements every
-// nan_check_interval steps (and at the end of each stage).
+// start of each stage and, when a material has history (PressureDependMultiYield stiffens
+// with confinement), again every stable_step_check_interval steps (stops unless
+// allow_unstable_dt, which warns once with the new limit); NaN/Inf in the displacements
+// every nan_check_interval steps (and at the end of each stage).
 
 #include <cstdint>
 #include <string>
@@ -33,6 +35,7 @@ namespace femorax::exec {
 struct RunOptions {
   compile::Renumbering renumbering = compile::Renumbering::RCM;
   int nan_check_interval = 100;
+  int stable_step_check_interval = 100;  // 0: only at the start of each stage
   bool verbose = true;
 };
 
@@ -40,7 +43,8 @@ struct StageReport {
   std::string name;
   std::string integrator;
   std::int64_t steps = 0;
-  double dt = 0, critical_dt = 0;
+  double dt = 0, critical_dt = 0;  // critical_dt: at the start of the stage
+  double min_critical_dt = 0;       // the smallest stable step of the stage's checks
   double seconds = 0;  // wall time of the time loop (device work included)
   // Implicit stages: Newton iterations and Krylov iterations in total, and the solver.
   std::int64_t newton_iterations = 0, krylov_iterations = 0;

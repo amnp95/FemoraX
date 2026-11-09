@@ -147,7 +147,9 @@ struct ElasticIsotropic {
 ```
 
 The committed tangent that `betaKcomm` damping needs comes from `update` at the committed
-state, or from a stored copy when the material is expensive; the material decides.
+state, or from a stored copy when the material is expensive; the material decides. An
+optional `stability_tangent(p, committed, D)` gives the stable step its tangent ("Stable
+time step"); without it the committed tangent serves.
 
 ### Registration
 
@@ -255,9 +257,18 @@ Rayleigh damping. With `alpha = alphaM` and
 `omega^2` is the largest `max_omega_sq` over all elements, a min-reduction of
 `critical_dt` gives the stage's stable step, and both are checked at the start of each
 explicit stage. A step above `dt_crit` stops the run with the two values and the element
-that sets the limit; `allow_unstable_dt` turns the stop into a warning. Nonlinear runs
-re-check every N steps. Tests run a single mode and a column just below and just above
-`dt_crit` for both schemes, with and without each damping term.
+that sets the limit; `allow_unstable_dt` turns the stop into a warning. When a material
+has history, the step is re-checked every `stable_step_check_interval` steps (100 by
+default, `exec::RunOptions`): a limit below `dt` stops the run with the step, the time, the
+new limit and the one at the start of the stage (with `allow_unstable_dt`, one warning per
+stage), and the stage summary reports the smallest limit seen. The element's `omega^2`
+reads the material's stability tangent (`stability_tangent` in `contracts.hpp`, optional;
+the committed tangent when absent): the stiffest response the next step can show. An
+elastoplastic tangent is softer than the elastic unloading stiffness and would overstate
+the step, so PressureDependMultiYield gives its elastic moduli at the committed
+confinement (reference moduli times `getModulusFactor` of the committed stress). Tests run
+a single mode and a column just below and just above `dt_crit` for both schemes, with and
+without each damping term.
 
 ## Element kernels
 

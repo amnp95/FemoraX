@@ -246,6 +246,18 @@ FEMORAX_HD constexpr int element_constant_count() {
   else return 0;
 }
 
+// The tangent the stable time step reads: the stiffest response the material can show from
+// its committed state. Optional material function stability_tangent(p, committed, D); without
+// it, the committed tangent. Elastoplastic materials provide it, because their committed
+// tangent is softer than the elastic unloading stiffness that bounds the next step (for
+// PressureDependMultiYield, the elastic moduli at the current confinement).
+template <class M>
+FEMORAX_HD void stability_tangent(const typename M::Params& p, Strided<const double> committed,
+                                  double (*D)[M::NSTRAIN]) {
+  if constexpr (requires { M::stability_tangent(p, committed, D); }) M::stability_tangent(p, committed, D);
+  else M::committed_tangent(p, committed, D);
+}
+
 // An (element, material) pair that can be instantiated as a batch.
 template <class E, class M>
 concept CompatiblePair = Element<E> && Material<M> && (E::MATERIAL_KIND == M::KIND);

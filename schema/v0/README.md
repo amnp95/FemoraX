@@ -384,7 +384,9 @@ Rules for explicit stages (decided for milestone 1a):
   region, so the OpenSees system matrix `M/dt^2 + C/(2*dt)` is diagonal. Anything else is
   rejected until 1b adds the solver.
 - At the start of each explicit stage, `dt` is checked against the stable step, including
-  stiffness-proportional damping (`docs/design.md`, "Stable time step").
+  stiffness-proportional damping (`docs/design.md`, "Stable time step"). With a history
+  material (PressureDependMultiYield), it is checked again every 100 steps, because the
+  soil stiffens with confinement; `allow_unstable_dt` turns either stop into a warning.
 
 ---
 

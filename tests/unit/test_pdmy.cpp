@@ -139,4 +139,36 @@ TEST(PressureDependMultiYield, UpdateIsAPureFunctionOfTheCommittedState) {
   EXPECT_GT(C[P20::STATE::ACTIVE], 0.0);
 }
 
+TEST(PressureDependMultiYield, StabilityTangentIsTheElasticTangentAtTheConfinement) {
+  // The stable step's tangent: stage 0, the reference moduli; stage 1, the moduli scaled by
+  // getModulusFactor of the committed stress, at least as stiff as the committed
+  // (elastoplastic) tangent, and stiffer than the reference below the column's depth.
+  P20::Params p{};
+  ASSERT_EQ(P20::setup(dense_ottawa(), p), P20::Ok);
+  std::vector<double> C(P20::NSTATE), T(P20::NSTATE);
+  P20::initial_state(p, {C.data(), 1});
+  double D[6][6], Dc[6][6], Dref[6][6];
+  P20::stability_tangent(p, {C.data(), 1}, Dref);
+  EXPECT_EQ(Dref[3][3], 145.0e3);
+  for (int k = 1; k <= 40; ++k) {
+    p.loadStage = k <= 10 ? 0 : 1;
+    const double ev = -1.2e-3 * std::min(k, 10) / 10.0;  // confinement above refPress
+    const double eps[6] = {0, 0, ev, 0, 0, k > 10 ? 1.5e-3 * std::sin(0.3 * (k - 10)) : 0.0};
+    double sig[6];
+    P20::update(p, {C.data(), 1}, {T.data(), 1}, eps, sig, D);
+    std::swap(C, T);
+  }
+  P20::stability_tangent(p, {C.data(), 1}, D);
+  P20::committed_tangent(p, {C.data(), 1}, Dc);
+  femorax::soil::T2 stress;
+  stress.load(femorax::Strided<const double>{C.data(), 1}, P20::STATE::STRESS);
+  const double factor =
+      std::pow((stress.volume() - p.residualPress) / (p.refPressure - p.residualPress), p.pressDependCoeff);
+  EXPECT_GT(factor, 1.0);
+  EXPECT_DOUBLE_EQ(D[3][3], 145.0e3 * factor);
+  EXPECT_DOUBLE_EQ(D[0][0], (2.0 * 145.0e3 * 1.3 / 1.2 + 4.0 * 145.0e3 / 3.0) * factor);
+  for (int i = 0; i < 6; ++i) EXPECT_GE(D[i][i], Dc[i][i] * (1.0 - 1e-12)) << i;
+  EXPECT_GT(D[3][3], Dref[3][3]);
+}
+
 }  // namespace

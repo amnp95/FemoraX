@@ -619,9 +619,9 @@ struct StdBrick {
     }
   }
 
-  // Largest omega^2 of K phi = omega^2 M phi with the lumped mass and the committed
-  // tangent. Runs once per element per stage (stable step check), so holding the 24x24
-  // matrix in one thread is acceptable here.
+  // Largest omega^2 of K phi = omega^2 M phi with the lumped mass and the material's
+  // stability tangent (contracts.hpp). Runs once per element at each stable step check, so
+  // holding the 24x24 matrix in one thread is acceptable here.
   FEMORAX_HD static double max_omega_sq(const Params& p, const double (*xe)[NDM],
                                         PointArray<const double> committed) {
     double xl[3][8];
@@ -635,7 +635,7 @@ struct StdBrick {
       PointShape s;
       point_geometry(xl, i, s);
       double dd[NSTRESS][NSTRESS];
-      Mat::committed_tangent(p.mat, committed.point(i), dd);
+      stability_tangent<Mat>(p.mat, committed.point(i), dd);
       for (int j = 0; j < NNODE; j++)
         for (int k = 0; k < NNODE; k++) {
           double stiffJK[3][3];

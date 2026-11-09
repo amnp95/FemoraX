@@ -200,6 +200,22 @@ struct PressureDependMultiYield {
     w.getTangent(D);
   }
 
+  // The stable step's tangent (contracts.hpp, stability_tangent): the elastic moduli at the
+  // committed confinement, refShearModul and refBulkModul times getModulusFactor of the
+  // committed stress, the stiffest response the next step can show (unloading is elastic;
+  // the volumetric softening Hv only lowers the bulk modulus). Stage 0 is linear elastic
+  // with the reference moduli. Not an OpenSees function: OpenSees has no stable step check.
+  FEMORAX_HD static void stability_tangent(const Params& p, Strided<const double> committed, double (*D)[NSTRAIN]) {
+    if (p.loadStage != 1) {
+      elastic_tangent(p, 1.0, D);
+      return;
+    }
+    const Point<SerialInner> w(p, SerialInner{}, committed, Strided<double>{});
+    soil::T2 stress;
+    stress.load(committed, STATE::STRESS);
+    elastic_tangent(p, w.getModulusFactor(stress), D);
+  }
+
   // What a recorder reads after a commit (element output): getStress, which redoes the
   // update from the committed state with a zero strain increment (commitState zeroes
   // strainRate), and getStrain, the committed strain. `scratch` receives the trial state
