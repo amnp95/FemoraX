@@ -4,7 +4,8 @@
 //
 //   soil_material <out_dir>
 //
-// writes <out_dir>/PressureDependMultiYield_<case>_<path>.txt (format: driver_common.hpp).
+// writes <out_dir>/PressureDependMultiYield_<case>_<path>.txt and
+// <out_dir>/PressureIndependMultiYield_<case>_<path>.txt (format: driver_common.hpp).
 //
 // Each path starts in the elastic stage (stage 0) with an oedometric consolidation to a
 // vertical stress, switches to the plastic stage (updateParameter "updateMaterialStage",
@@ -15,9 +16,13 @@
 // discarded trial (if any), the strain, the stress and the full tangent, so a test can
 // replay the same calls.
 //
-// Materials: Femora's three soils of examples/site_response/nonlinear_layered_soil_column.py
-// (dense Ottawa, loose Ottawa with the liquefaction parameters, dense Monterey) and a
-// user-defined G/Gmax backbone (negative noYieldSurf).
+// Materials: PressureDependMultiYield with Femora's three soils of
+// examples/site_response/nonlinear_layered_soil_column.py (dense Ottawa, loose Ottawa with
+// the liquefaction parameters, dense Monterey) and a user-defined G/Gmax backbone (negative
+// noYieldSurf); PressureIndependMultiYield with the clay of Femora's basin example
+// (examples/domain_reduction_method/basin.py: friction angle 0), a frictional material
+// (friction angle 30, pressure-dependent moduli: paramScaling at the switch), and user
+// backbones without and with friction.
 
 #include "driver_common.hpp"
 
@@ -25,6 +30,7 @@
 #include <Matrix.h>
 #include <NDMaterial.h>
 #include <PressureDependMultiYield.h>
+#include <PressureIndependMultiYield.h>
 #include <Vector.h>
 
 #include <array>
@@ -125,6 +131,14 @@ Path stage_back_and_forth(double ev) {  // plastic, elastic again, plastic again
   return p;
 }
 
+Path switch_at_rest(double ev) {  // the switch with no strain increment (a static step's predictor), then shear
+  Path p;
+  consolidate(p, ev);
+  for (int k = 1; k <= 3; ++k) p.push_back({1, {0, 0, ev, 0, 0, 0}});
+  for (int k = 1; k <= 40; ++k) p.push_back({1, {0, 0, ev, 0, 0, 2e-3 * std::sin(2 * pi * k / 40.0)}});
+  return p;
+}
+
 struct Soil {
   std::string name;
   double rho, G, B, phi, gmax, pref, n, pt, contrac, dil1, dil2, liq1, liq2, liq3;
@@ -132,6 +146,29 @@ struct Soil {
   std::vector<double> pairs;
   double e, cs1, cs2, cs3, pa, c;
 };
+
+// Runs one path on `mat` (the copy an element gets) and writes the file.
+void drive(NDMaterial& m, const Path& path, refdrv::Writer& out);
+
+std::vector<std::string> columns() {
+  std::vector<std::string> cols = {"step", "stage", "pre"};
+  for (int i = 0; i < 6; ++i) cols.push_back("pre" + std::to_string(i));
+  for (int i = 0; i < 6; ++i) cols.push_back("eps" + std::to_string(i));
+  for (int i = 0; i < 6; ++i) cols.push_back("sig" + std::to_string(i));
+  for (int i = 0; i < 6; ++i)
+    for (int j = 0; j < 6; ++j) cols.push_back("D" + std::to_string(i) + std::to_string(j));
+  return cols;
+}
+
+std::string pairs_line(const std::vector<double>& pairs) {
+  std::string line = "pairs";
+  for (double v : pairs) {
+    char b[40];
+    std::snprintf(b, sizeof(b), " %.17g", v);
+    line += b;
+  }
+  return line;
+}
 
 void run(const Soil& s, const Path& path, const std::string& file, const std::string& pname) {
   // The prototype (nDMaterial command) and the copy an element asks for.
@@ -149,22 +186,36 @@ void run(const Soil& s, const Path& path, const std::string& file, const std::st
                 "cs3 %.17g pa %.17g c %.17g",
                 s.rho, s.G, s.B, s.phi, s.gmax, s.pref, s.n, s.pt, s.contrac, s.dil1, s.dil2, s.liq1, s.liq2,
                 s.liq3, s.surfaces, s.e, s.cs1, s.cs2, s.cs3, s.pa, s.c);
-  std::string pairs = "pairs";
-  for (double v : s.pairs) {
-    char b[40];
-    std::snprintf(b, sizeof(b), " %.17g", v);
-    pairs += b;
-  }
-  std::vector<std::string> cols = {"step", "stage", "pre"};
-  for (int i = 0; i < 6; ++i) cols.push_back("pre" + std::to_string(i));
-  for (int i = 0; i < 6; ++i) cols.push_back("eps" + std::to_string(i));
-  for (int i = 0; i < 6; ++i) cols.push_back("sig" + std::to_string(i));
-  for (int i = 0; i < 6; ++i)
-    for (int j = 0; j < 6; ++j) cols.push_back("D" + std::to_string(i) + std::to_string(j));
-  refdrv::Writer out(file, {"material PressureDependMultiYield ThreeDimensional", params, pairs, "case " + s.name,
-                            "path " + pname},
-                     cols);
+  refdrv::Writer out(file, {"material PressureDependMultiYield ThreeDimensional", params, pairs_line(s.pairs),
+                            "case " + s.name, "path " + pname},
+                     columns());
+  drive(*mat, path, out);
+}
 
+struct Clay {  // PressureIndependMultiYield
+  std::string name;
+  double rho, G, B, c, gmax, phi, pref, n;
+  int surfaces;
+  std::vector<double> pairs;
+};
+
+void run_pimy(const Clay& s, const Path& path, const std::string& file, const std::string& pname) {
+  PressureIndependMultiYield proto(1, 3, s.rho, s.G, s.B, s.c, s.gmax, s.phi, s.pref, s.n, s.surfaces,
+                                   s.pairs.empty() ? nullptr : const_cast<double*>(s.pairs.data()));
+  std::unique_ptr<NDMaterial> mat(proto.getCopy("ThreeDimensional"));
+  char params[512];
+  std::snprintf(params, sizeof(params),
+                "params rho %.17g refShearModul %.17g refBulkModul %.17g cohesi %.17g peakShearStra %.17g "
+                "frictionAng %.17g refPress %.17g pressDependCoe %.17g noYieldSurf %d",
+                s.rho, s.G, s.B, s.c, s.gmax, s.phi, s.pref, s.n, s.surfaces);
+  refdrv::Writer out(file, {"material PressureIndependMultiYield ThreeDimensional", params, pairs_line(s.pairs),
+                            "case " + s.name, "path " + pname},
+                     columns());
+  drive(*mat, path, out);
+}
+
+void drive(NDMaterial& m, const Path& path, refdrv::Writer& out) {
+  NDMaterial* mat = &m;
   Vector strain(6);
   Strain prev{};
   int stage = 0;
@@ -257,6 +308,43 @@ int main(int argc, char** argv) {
     }
     for (const auto& [pname, path] : paths) {
       run(s, path, out + "/PressureDependMultiYield_" + s.name + "_" + pname + ".txt", pname);
+      ++files;
+    }
+  }
+  // PressureIndependMultiYield (kN, m, s). Femora's basin clay: rho 1.8, Vs 150, Vp 300,
+  // cohesion 8, friction 0 (OpenSees' defaults refPress 100, pressDependCoe 0).
+  const std::vector<Clay> clays = {
+      {"basin_clay", 1.8, 1.8 * 150.0 * 150.0, 1.8 * (300.0 * 300.0 - 4.0 * 150.0 * 150.0 / 3.0), 8.0, 0.1, 0.0, 100.0,
+       0.0, 20, {}},
+      {"frictional", 2.0, 60.0e3, 150.0e3, 5.0, 0.1, 30.0, 80.0, 0.5, 20, {}},
+      {"backbone_clay", 1.8, 40.5e3, 108.0e3, 10.0, 0.1, 0.0, 100.0, 0.0, 8,
+       {1e-5, 0.98, 3e-5, 0.95, 1e-4, 0.85, 3e-4, 0.65, 1e-3, 0.35, 3e-3, 0.15, 1e-2, 0.05, 3e-2, 0.018}},
+      {"backbone_frictional", 2.0, 60.0e3, 150.0e3, 5.0, 0.1, 30.0, 80.0, 0.5, 8,
+       {1e-5, 0.98, 3e-5, 0.95, 1e-4, 0.85, 3e-4, 0.65, 1e-3, 0.35, 3e-3, 0.15, 1e-2, 0.05, 3e-2, 0.018}},
+  };
+  for (const auto& s : clays) {
+    auto ev = [&](double sv) { return -sv / (s.B + 4.0 * s.G / 3.0); };
+    std::vector<std::pair<std::string, Path>> paths = {
+        {"monotonic_shear_150", monotonic_shear(ev(150))},
+        {"cyclic_1e-3_150", cyclic(ev(150), 1e-3, 3, 40)},
+        {"cyclic_1e-2_150", cyclic(ev(150), 1e-2, 3, 40)},
+        {"random_reversals_150", random_reversals(ev(150))},
+        {"stage_switch_sheared_150", stage_switch_sheared(ev(150))},
+    };
+    if (s.name == "basin_clay" || s.name == "frictional") {
+      paths.push_back({"cyclic_1e-4_150", cyclic(ev(150), 1e-4, 3, 40)});
+      paths.push_back({"cyclic_large_steps_150", cyclic(ev(150), 1e-2, 2, 8)});
+      paths.push_back({"confinement_change_150", confinement_change(ev(150))});
+      paths.push_back({"tension_50", tension(ev(50))});
+      paths.push_back({"stage_back_and_forth_150", stage_back_and_forth(ev(150))});
+      paths.push_back({"switch_at_rest_150", switch_at_rest(ev(150))});
+    }
+    if (s.name == "frictional") {
+      paths.push_back({"monotonic_shear_50", monotonic_shear(ev(50))});
+      paths.push_back({"monotonic_shear_300", monotonic_shear(ev(300))});
+    }
+    for (const auto& [pname, path] : paths) {
+      run_pimy(s, path, out + "/PressureIndependMultiYield_" + s.name + "_" + pname + ".txt", pname);
       ++files;
     }
   }

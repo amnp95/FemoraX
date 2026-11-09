@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Write a nonlinear soil column (PressureDependMultiYield) for both programs.
+"""Write a nonlinear soil column (PressureDependMultiYield or PressureIndependMultiYield) for both programs.
 
     .venv/bin/python tests/system/soil_column/make_nonlinear.py <out_dir> [nx ny nz] [duration] [dt]
-        [--element stdBrick|SSPbrick] [--soil dense|loose|layered] [--amp A] [--tol T]
+        [--element stdBrick|SSPbrick] [--soil dense|loose|layered|clay|frictional|layered_clay] [--amp A] [--tol T]
         [--shaking implicit|explicit]
         [--vtkhdf DT]  (also a VTKHDF recorder: disp vel accel stress3D6 strain3D6 every DT)
         [--record-dt DT]  (the node recorders sample every DT of time instead of every step)
@@ -12,7 +12,9 @@
 
 The mesh of make_models.py (base fixed, the laminar boundary as Femora writes it), with
 Femora's soils of examples/site_response/nonlinear_layered_soil_column.py (dense Ottawa,
-loose Ottawa with the liquefaction parameters; layered: dense below, loose above),
+loose Ottawa with the liquefaction parameters; layered: dense below, loose above), or with
+PressureIndependMultiYield (clay: Femora's basin clay; frictional; layered_clay: frictional
+below, clay above),
 Femora's frequency-Rayleigh damping (2.76 and 13.84 Hz, 3%), stdBrick with consistent mass
 (or SSPbrick), and the example's staging:
 
@@ -52,7 +54,30 @@ SOILS = {
 }
 
 
+# PressureIndependMultiYield: Femora's basin clay (examples/domain_reduction_method/basin.py:
+# rho 1.8, Vs 150, Vp 300, cohesion 8, friction 0) and a frictional material (friction 30,
+# pressure-dependent moduli).
+CLAYS = {
+    "clay": dict(nd=3, rho=1.8, refShearModul=1.8 * 150.0 ** 2, refBulkModul=1.8 * (300.0 ** 2 - 4.0 * 150.0 ** 2 / 3.0),
+                 cohesi=8.0, peakShearStra=0.1, frictionAng=0.0, refPress=100.0, pressDependCoe=0.0, noYieldSurf=20),
+    "frictional": dict(nd=3, rho=2.0, refShearModul=60.0e3, refBulkModul=150.0e3, cohesi=5.0, peakShearStra=0.1,
+                       frictionAng=30.0, refPress=80.0, pressDependCoe=0.5, noYieldSurf=20),
+}
+PIMY_ORDER = ["nd", "rho", "refShearModul", "refBulkModul", "cohesi", "peakShearStra", "frictionAng", "refPress",
+              "pressDependCoe", "noYieldSurf"]
+
+
+def material_type(name: str) -> str:
+    return "PressureIndependMultiYield" if name in CLAYS else "PressureDependMultiYield"
+
+
+def material_order(name: str) -> list:
+    return PIMY_ORDER if name in CLAYS else ORDER
+
+
 def soil_params(name: str) -> dict:
+    if name in CLAYS:
+        return CLAYS[name]
     s = SOILS[name]
     G, nu = s["G"], 0.3
     return dict(nd=3, rho=s["gamma"] / mm.GRAVITY, refShearModul=G,
@@ -111,7 +136,7 @@ def write_tcl(m, soils, path: Path, g, q, s, amp, vtkhdf=None, record_dt=None):
     out = ["wipe", "model BasicBuilder -ndm 3 -ndf 3"]
     for i, name in enumerate(soils):
         p = soil_params(name)
-        out.append(f"nDMaterial PressureDependMultiYield {i + 1} " + " ".join(repr(p[k]) for k in ORDER))
+        out.append(f"nDMaterial {material_type(name)} {i + 1} " + " ".join(repr(p[k]) for k in material_order(name)))
     for (t, x, y, z) in m["nodes"]:
         out.append(f"node {t} {x!r} {y!r} {z!r}")
     for (e, conn, mi_) in m["elements"]:
@@ -145,8 +170,8 @@ def write_femorax(m, soils, path: Path, g, q, s, amp, vtkhdf=None, record_dt=Non
     materials = {}
     for i, name in enumerate(soils):
         p = soil_params(name)
-        attrs = {"type": "PressureDependMultiYield"}
-        for k in ORDER:
+        attrs = {"type": material_type(name)}
+        for k in material_order(name):
             attrs[k] = w.i32(p[k]) if k in ("nd", "noYieldSurf") else w.f64(p[k])
         materials[str(i + 1)] = w.node(attrs=attrs)
     groups = {}
@@ -237,15 +262,15 @@ def main() -> int:
     amp = float(opts["--amp"])
     m = mm.build(nx, ny, nz, max(duration, 1.0))
     soil = opts["--soil"]
-    soils = ["dense", "loose"] if soil == "layered" else [soil]
-    if soil != "layered":
+    soils = {"layered": ["dense", "loose"], "layered_clay": ["frictional", "clay"]}.get(soil, [soil])
+    if len(soils) == 1:
         m["elements"] = [(e, c, 0) for (e, c, _k) in m["elements"]]
     g, q, s = stages(duration, dt, float(opts["--tol"]), opts["--shaking"] == "explicit", opts["--equilibration"])
     vt = float(opts["--vtkhdf"]) if opts["--vtkhdf"] else None
     rdt = float(opts["--record-dt"]) if opts["--record-dt"] else None
     write_tcl(m, soils, out / "model.tcl", g, q, s, amp, vt, rdt)
     write_femorax(m, soils, out / "model.femorax.h5", g, q, s, amp, vt, rdt)
-    print(f"{nx}x{ny}x{nz} {mm.ELEMENT} column, PressureDependMultiYield ({soil}), shaking {duration} s at dt {dt}, "
+    print(f"{nx}x{ny}x{nz} {mm.ELEMENT} column, {material_type(soils[0])} ({soil}), shaking {duration} s at dt {dt}, "
           f"motion x{amp} -> {out}")
     return 0
 

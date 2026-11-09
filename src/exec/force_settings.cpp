@@ -73,10 +73,22 @@ std::vector<ForceSettings> tunable_variants(const InternalForce& force) {
   // kernels, so the two layouts can differ in the last bit; within a layout every variant
   // is bit-identical. There the tuner keeps to the default's layout. Host compilers do not
   // fuse (GCC, -std=c++20), and every variant is bit-identical.
+  //
+  // The same holds for the geometry modes: the cached and the recomputed kernels are
+  // different instantiations, and with a material as large as PressureIndependMultiYield
+  // nvcc contracts some of the inlined update differently in each (last-bit differences in
+  // test_material_state). There the tuner also keeps to the default's geometry mode (or
+  // recomputes without a cache), and varies only the elements per team, which is a run-time
+  // value of one kernel.
   const Layout family = default_force_settings().layout;
   std::vector<ForceSettings> out;
-  std::vector<Geometry> geometries = {Geometry::Recompute};
-  if (force.has_geometry_cache()) geometries.push_back(Geometry::Cached);
+  std::vector<Geometry> geometries;
+  if (layouts_share_arithmetic()) {
+    geometries = {Geometry::Recompute};
+    if (force.has_geometry_cache()) geometries.push_back(Geometry::Cached);
+  } else {
+    geometries = {force.has_geometry_cache() ? default_force_settings().geometry : Geometry::Recompute};
+  }
   for (auto g : geometries) {
     if (layouts_share_arithmetic() || family == Layout::Flat)
       out.push_back({Layout::Flat, Scatter::Gather, 0, g});

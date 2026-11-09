@@ -357,7 +357,10 @@ stays in the code, the tests and the benchmarks.
   used only for elements with `GEOMETRY_CACHEABLE`, and only if it fits: with
   `GeometryCache::Auto` the cache is built when the model, the cache and the work vectors
   fit in 80% of the device's free memory (`exec::device_free_memory_bytes`). Otherwise
-  `Geometry::Cached` falls back to recomputing, with the same bits.
+  `Geometry::Cached` falls back to recomputing, with the same bits on host backends; on
+  GPUs the two are different kernel instantiations, which nvcc may contract differently
+  (seen with PressureIndependMultiYield on SSPbrick: last bits), so there the auto-tune
+  keeps to the default's geometry mode.
 - Later: share the geometry between elements of identical shape (regular grids, the common
   case in soil columns and boxes): store each distinct shape once and give elements a shape
   index, so the cache costs almost no memory. Elements are identical when their nodal
@@ -841,8 +844,11 @@ Correctness is checked against physics first and OpenSees second.
       first 2 s of its shaking against stored OpenSees output
       (`tests/system/femora_example/`): the same retries, fields within 1.1e-11 on the CPU
       and 5.6e-5 on the GPU. Event sequences compare retries and substeps; active surfaces
-      are not compared yet (docs/todo.md). Next: the compacted-corrector kernel, then
-      PressureIndependMultiYield.
+      are not compared yet (docs/todo.md). Compacted-corrector kernel done (2026-11-09).
+      PressureIndependMultiYield done (2026-11-09): bit-identical to OpenSees along 34
+      strain paths; per-point moduli and surfaces (paramScaling at the switch) in the
+      state, 30 + 8 NS doubles per buffer (2.97 KiB per point for NS = 20 with both
+      buffers); stored system cases (docs/deviations.md).
    3. Verification against OpenSees: strain paths at the Gauss-point level (the OpenSees
       material called directly, no domain), then single elements, then the system test.
    4. System test: Femora's nonlinear layered soil column (its own 1x1x25 column, staged

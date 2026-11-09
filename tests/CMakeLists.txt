@@ -18,6 +18,8 @@ add_executable(femorax_unit_tests
   unit/test_ssp_brick_reference.cpp
   unit/test_pdmy.cpp
   unit/test_pdmy_reference.cpp
+  unit/test_pimy.cpp
+  unit/test_pimy_reference.cpp
   unit/test_material_state.cpp
   unit/test_memory_contract.cpp
   unit/test_dof_numbering.cpp
@@ -174,12 +176,12 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/nonlinear_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_nonlinear
                    ${femorax_backend})
-  set_tests_properties(system.nonlinear_vs_stored_opensees PROPERTIES TIMEOUT 300)
+  set_tests_properties(system.nonlinear_vs_stored_opensees PROPERTIES TIMEOUT 900)
   # Femora's own nonlinear layered soil column (its example, exported by Femora, on a 2 s
   # window of its motion) against stored OpenSees output (femora_example_reference.sh).
   add_test(NAME system.femora_example_vs_stored_opensees
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/femora_example/femora_example_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_femora_example
                    ${femorax_backend})
-  set_tests_properties(system.femora_example_vs_stored_opensees PROPERTIES TIMEOUT 300)
+  set_tests_properties(system.femora_example_vs_stored_opensees PROPERTIES TIMEOUT 900)
 endif()

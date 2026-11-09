@@ -20,7 +20,7 @@ set(allowed_std_headers
 # Forbidden patterns: regex | message
 set(rules
   "Kokkos|Kokkos is not allowed in src/physics (rule 2)"
-  "(^|[^A-Za-z0-9_])new[ \t]*[A-Za-z_(]|heap allocation (new)"
+  "(^|[^A-Za-z0-9_])new([ \t]+[A-Za-z_(]|[ \t]*\\()|heap allocation (new)"
   "(^|[^A-Za-z0-9_])delete([ \t]|<lb>)|heap allocation (delete)"
   "(^|[^A-Za-z0-9_])(malloc|calloc|realloc|free)[ \t]*\\(|heap allocation (malloc/free)"
   "(^|[^A-Za-z0-9_])virtual([^A-Za-z0-9_]|$)|virtual functions"

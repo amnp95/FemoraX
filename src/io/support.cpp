@@ -1,7 +1,10 @@
 #include "io/support.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
+#include <variant>
+#include <vector>
 
 #include "io/h5.hpp"
 
@@ -37,6 +40,37 @@ void check_supported(const Model& m, const Capabilities& caps) {
     if ((pdmy && !caps.pressure_depend_multi_yield) || (pimy && !caps.pressure_independ_multi_yield)) {
       unsupported(std::string("nD material ") + material_type_name(mat) + " (/materials/nd/" +
                   std::to_string(mat.tag) + ") is not available yet (milestone 2)");
+    }
+  }
+  // PressureIndependMultiYield: nothing that reads its initial tangent after the switch to
+  // the plastic stage, which OpenSees scales per point (docs/deviations.md): betaKinit
+  // damping on its elements and ModifiedNewton -initial. (The schema keeps the number of
+  // surfaces below 40, within FemoraX's buckets.)
+  std::vector<std::int32_t> pimy_tags;
+  for (const auto& mat : m.materials)
+    if (std::holds_alternative<PressureIndependMultiYieldData>(mat.data)) pimy_tags.push_back(mat.tag);
+  if (!pimy_tags.empty()) {
+    std::vector<std::int32_t> pimy_elements;
+    for (const auto& g : m.elements)
+      if (std::find(pimy_tags.begin(), pimy_tags.end(), g.material) != pimy_tags.end())
+        pimy_elements.insert(pimy_elements.end(), g.tags.begin(), g.tags.end());
+    std::sort(pimy_elements.begin(), pimy_elements.end());
+    for (const auto& r : m.rayleigh) {
+      if (r.betaKinit == 0.0) continue;
+      for (const auto e : r.elements)
+        if (std::binary_search(pimy_elements.begin(), pimy_elements.end(), e)) {
+          unsupported("betaKinit damping on PressureIndependMultiYield elements (element " + std::to_string(e) +
+                      "): OpenSees scales that material's initial tangent per point at the switch to the "
+                      "plastic stage, and FemoraX does not keep it");
+        }
+    }
+    for (const auto& s : m.process) {
+      const auto* a = std::get_if<AnalysisStep>(&s.step);
+      if (a && a->algorithm == Algorithm::ModifiedNewton && a->modified_newton_initial) {
+        unsupported("ModifiedNewton -initial (/process/" + s.id +
+                    ") with PressureIndependMultiYield: OpenSees scales that material's initial tangent per "
+                    "point at the switch to the plastic stage, and FemoraX does not keep it");
+      }
     }
   }
   for (const auto& r : m.recorders) {

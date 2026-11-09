@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -58,17 +59,48 @@ io::PressureDependMultiYieldData soil(bool loose) {
   return d;
 }
 
-io::Model column(io::ElementType type) {
+// PressureIndependMultiYield: Femora's basin clay (friction 0, 20 surfaces) above and a
+// frictional material (pressure-dependent moduli, 25 surfaces: the 40 bucket) below.
+io::PressureIndependMultiYieldData clay(bool frictional) {
+  io::PressureIndependMultiYieldData d;
+  d.rho = frictional ? 2.0 : 1.8;
+  d.refShearModul = frictional ? 60.0e3 : 40.5e3;
+  d.refBulkModul = frictional ? 150.0e3 : 108.0e3;
+  d.cohesi = frictional ? 5.0 : 8.0;
+  d.peakShearStra = 0.1;
+  d.frictionAng = frictional ? 30.0 : 0.0;
+  d.refPress = frictional ? 80.0 : 100.0;
+  d.pressDependCoe = frictional ? 0.5 : 0.0;
+  d.noYieldSurf = frictional ? 25 : 20;
+  return d;
+}
+
+// kind "PDMY" or "PIMY".
+io::Model column(io::ElementType type, const std::string& kind = "PDMY") {
   femorax::testing::ColumnSpec s;
   s.nx = 2;
   s.ny = 2;
   s.nz = 6;
   s.element = type;
   auto m = femorax::testing::soil_column(s);
-  m.materials[0].data = soil(false);
-  m.materials[1].data = soil(true);
+  if (kind == "PDMY") {
+    m.materials[0].data = soil(false);
+    m.materials[1].data = soil(true);
+  } else {
+    m.materials[0].data = clay(true);
+    m.materials[1].data = clay(false);
+  }
   return m;
 }
+
+struct ColumnCase {
+  const char* kind;
+  io::ElementType type;
+};
+const ColumnCase kColumns[] = {{"PDMY", io::ElementType::StdBrick},
+                               {"PDMY", io::ElementType::SSPbrick},
+                               {"PIMY", io::ElementType::StdBrick},
+                               {"PIMY", io::ElementType::SSPbrick}};
 
 // The displacement field of step k: oedometric compression growing to step 4, then
 // cyclic shear in x with a random part.
@@ -178,14 +210,14 @@ double max_abs(const std::vector<double>& a) {
   return m;
 }
 
-TEST(MaterialState, PressureDependMultiYieldColumnMatchesTheHostReference) {
-  for (auto type : {io::ElementType::StdBrick, io::ElementType::SSPbrick}) {
-    SCOPED_TRACE(io::to_string(type));
-    const io::Model m = column(type);
+TEST(MaterialState, MultiYieldColumnMatchesTheHostReference) {
+  for (const auto& [kind, type] : kColumns) {
+    SCOPED_TRACE(std::string(kind) + " " + io::to_string(type));
+    const io::Model m = column(type, kind);
     CompileOptions co;
     co.simd_width = femorax::simd_width();
     const Compiled c = compile_model(m, co);
-    ASSERT_EQ(c.batches.size(), 2u);  // NS 40 (dense, 25 surfaces) and NS 20 (loose)
+    ASSERT_EQ(c.batches.size(), 2u);  // NS 40 (25 surfaces) and NS 20
     InternalForce k(c, exec::GeometryCache::On);
     ASSERT_TRUE(k.has_state());
     Reference ref(c);
@@ -221,8 +253,8 @@ TEST(MaterialState, PressureDependMultiYieldColumnMatchesTheHostReference) {
       k.commit_state();
       ref.commit();
     }
-    std::printf("[ %s PDMY column, 14 steps with the stage switch: largest difference from the host reference "
-                "%.2e ]\n", io::to_string(type), worst);
+    std::printf("[ %s %s column, 14 steps with the stage switch: largest difference from the host reference "
+                "%.2e ]\n", io::to_string(type), kind, worst);
   }
 }
 
@@ -231,9 +263,9 @@ TEST(MaterialState, PressureDependMultiYieldColumnMatchesTheHostReference) {
 // reference. Bit-identical on host backends; on GPUs the corrector is its own kernel and
 // agrees to rounding.
 TEST(MaterialState, CompactedCorrectorPathMatchesTheHostReference) {
-  for (auto type : {io::ElementType::StdBrick, io::ElementType::SSPbrick}) {
-    SCOPED_TRACE(io::to_string(type));
-    const io::Model m = column(type);
+  for (const auto& [kind, type] : kColumns) {
+    SCOPED_TRACE(std::string(kind) + " " + io::to_string(type));
+    const io::Model m = column(type, kind);
     CompileOptions co;
     co.simd_width = femorax::simd_width();
     const Compiled c = compile_model(m, co);
@@ -280,9 +312,9 @@ TEST(MaterialState, CompactedCorrectorPathMatchesTheHostReference) {
     }
     EXPECT_GT(plastic, 0);
     EXPECT_LT(plastic, points);
-    std::printf("[ %s PDMY column, compacted corrector: %lld of %lld point updates took the corrector; largest "
+    std::printf("[ %s %s column, compacted corrector: %lld of %lld point updates took the corrector; largest "
                 "difference from the host reference %.2e ]\n",
-                io::to_string(type), static_cast<long long>(plastic), static_cast<long long>(points), worst);
+                io::to_string(type), kind, static_cast<long long>(plastic), static_cast<long long>(points), worst);
   }
 }
 

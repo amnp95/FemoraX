@@ -22,6 +22,7 @@
 #include "physics/elements/std_brick.hpp"
 #include "physics/materials/elastic_isotropic.hpp"
 #include "physics/materials/pressure_depend_multi_yield.hpp"
+#include "physics/materials/pressure_independ_multi_yield.hpp"
 
 namespace femorax::registry {
 
@@ -100,6 +101,50 @@ struct PressureDependMultiYieldEntry {
   }
 };
 
+// PressureIndependMultiYield in the same surface buckets.
+template <int NS>
+struct PressureIndependMultiYieldEntry {
+  using Material = PressureIndependMultiYield<NS>;
+  static constexpr const char* name = NS == 20 ? "PressureIndependMultiYield20" : "PressureIndependMultiYield40";
+  static int surfaces(const io::NDMaterial& m) {
+    const auto* d = std::get_if<io::PressureIndependMultiYieldData>(&m.data);
+    if (!d) return -1;
+    return d->noYieldSurf < 0 ? -d->noYieldSurf : d->noYieldSurf;
+  }
+  static bool matches(const io::NDMaterial& m);  // defined below the type list
+  static typename Material::Params params(const io::NDMaterial& m) {
+    const auto& d = std::get<io::PressureIndependMultiYieldData>(m.data);
+    if (d.nd != 3) throw io::UnsupportedComponent("unsupported component: PressureIndependMultiYield nd = 2");
+    PressureIndependMultiYieldInput in{};
+    in.rho = d.rho;
+    in.refShearModul = d.refShearModul;
+    in.refBulkModul = d.refBulkModul;
+    in.cohesi = d.cohesi;
+    in.peakShearStra = d.peakShearStra;
+    in.frictionAng = d.frictionAng;
+    in.refPress = d.refPress;
+    in.pressDependCoe = d.pressDependCoe;
+    in.numberOfYieldSurf = surfaces(m);
+    in.gredu = d.noYieldSurf < 0 ? d.pairs.data() : nullptr;
+    typename Material::Params p{};
+    const int r = Material::setup(in, p);
+    const std::string where = "/materials/nd/" + std::to_string(m.tag);
+    switch (r) {
+      case Material::Ok: return p;
+      case Material::InvalidFrictionAngle:
+        throw io::ModelError(where + ": the G/Gmax curve and refPress give sin(friction angle) outside [0, 1] "
+                             "(OpenSees: \"Invalid friction angle, please modify ref. pressure or G/Gmax curve\")");
+      case Material::NegativeModulus:
+        throw io::ModelError(where + ": the G/Gmax curve gives a yield surface with a plastic modulus <= 0 "
+                             "(OpenSees: \"has plastic modulus < 0. Please modify G/Gmax curve\")");
+      case Material::TooFewPairs:
+        throw io::ModelError(where + ": a user-defined backbone needs at least two (gamma, G/Gmax) pairs");
+      default:
+        throw io::ModelError(where + ": invalid PressureIndependMultiYield parameters");
+    }
+  }
+};
+
 // --- Elements ------------------------------------------------------------------------------
 struct StdBrickEntry {
   template <class Mat>
@@ -126,11 +171,19 @@ struct SSPbrickEntry {
 };
 
 // The registered entries: one line each.
-using Materials = TypeList<ElasticIsotropicEntry, PressureDependMultiYieldEntry<20>, PressureDependMultiYieldEntry<40>>;
+using Materials = TypeList<ElasticIsotropicEntry, PressureDependMultiYieldEntry<20>, PressureDependMultiYieldEntry<40>,
+                           PressureIndependMultiYieldEntry<20>, PressureIndependMultiYieldEntry<40>>;
 
 // The smallest bucket that holds the material's surfaces.
 template <int NS>
 bool PressureDependMultiYieldEntry<NS>::matches(const io::NDMaterial& m) {
+  const int n = surfaces(m);
+  if (n < 0) return false;
+  if constexpr (NS == 20) return n <= 20;
+  else return n > 20 && n <= NS;
+}
+template <int NS>
+bool PressureIndependMultiYieldEntry<NS>::matches(const io::NDMaterial& m) {
   const int n = surfaces(m);
   if (n < 0) return false;
   if constexpr (NS == 20) return n <= 20;

@@ -14,7 +14,7 @@ struct Capabilities {
   bool implicit = true;  // Newmark, LoadControl, Newton, ModifiedNewton, load_const (1b)
   // Milestone 2 (schema 0.4), switched on as each part is ported and verified:
   bool pressure_depend_multi_yield = true;
-  bool pressure_independ_multi_yield = false;
+  bool pressure_independ_multi_yield = true;
   bool material_stages = true;            // the update_material_stage action
   bool vtkhdf_element_responses = true;   // VTKHDF stress3D6, strain3D6
 };

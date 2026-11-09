@@ -344,7 +344,9 @@ TEST(ForceSettings, EveryTunableVariantGivesIdenticalResults) {
   const auto u = random_vector(static_cast<std::size_t>(k.num_equations()), 1e-3, 5);
   const auto v = random_vector(static_cast<std::size_t>(k.num_equations()), 1e-2, 6);
   const auto variants = femorax::exec::tunable_variants(k);
-  ASSERT_GE(variants.size(), 4u);
+  // Host backends: every layout and geometry mode; GPUs: the default's, several elements
+  // per team (force_settings.cpp).
+  ASSERT_GE(variants.size(), femorax::exec::layouts_share_arithmetic() ? 4u : 2u);
   const auto first = run(k, u, v, variants[0].layout, variants[0].scatter,
                          variants[0].elements_per_team, variants[0].geometry);
   for (const auto& s : variants) {

@@ -50,6 +50,24 @@ Default tolerances (until a component states otherwise):
   2e-4 (implicit). The Gauss-point paths (test_pdmy_reference, DeviceBackend) separate
   rounding from branch flips: 31 of 32 within 2.3e-11, one flipped.
 
+- Nonlinear system tests, PressureIndependMultiYield (same stored-output checks): one
+  frictional SSPbrick, explicit, 1e-12 (observed 6.0e-14); a 4-SSPbrick layered column
+  (frictional below, Femora's basin clay above), explicit, re-equilibrated with Newton,
+  1e-12 (observed 6.5e-14). With Femora's ModifiedNewton -factoronce re-equilibration the
+  clay's first plastic step takes OpenSees' `isLoadReversal` at a zero strain increment,
+  where the sign of a rounding-level difference (`setTrialStress` recomputes the deviator)
+  decides between a load reversal (elastic tangent) and loading (plastic tangent): a host
+  replica of OpenSees' algorithm with FemoraX's physics and exact solves follows OpenSees
+  (one iteration, residual 9.8e-17), FemoraX's CG solutions of the elastic gravity stage
+  differ in the last bits and take the other branch (active surface 2), and ModifiedNewton
+  keeps that tangent for the whole stage, which then ends within the NormUnbalance 1e-7
+  test but apart. Tolerances from the runs: the explicit 4-element column 1e-6 (observed
+  7.9e-8; stress3D6 1.3e-8), one clay stdBrick implicit 1e-5 (observed 2.0e-6), the
+  4-element stdBrick column implicit 5e-6 (observed 6.5e-7). On the GPU: the explicit
+  frictional element 7.0e-14 and the Newton-re-equilibrated column 5.5e-14 (tolerance 5e-6,
+  as the other explicit cases), the ModifiedNewton column 7.9e-8 (1e-6), the implicit clay
+  element 5.6e-6 (5e-5) and column 1.7e-6 (2e-5).
+
 - Femora's nonlinear soil column (its example `nonlinear_layered_soil_column.py`, exported
   by Femora unchanged, on the first 2 s of shaking, 1.9-3.9 s of FrequencySweep; stored
   OpenSees output, `tests/system/femora_example/femora_example_check.sh`): retry events
@@ -198,6 +216,39 @@ Default tolerances (until a component states otherwise):
   observed: bit-identical), `tests/unit/test_pdmy.cpp`; the standalone OpenSees example
   `tests/reference/opensees_issues/7_pdmy_global_patm.tcl` (an unused second material with
   another `pa` changes the first one's stress by 4%).
+
+### PressureIndependMultiYield — the port's structure, and the initial tangent
+- OpenSees: `SRC/material/nD/soil/PressureIndependMultiYield.cpp` (with `T2Vector.cpp`,
+  `MultiYieldSurface.cpp`), commit 955ceb0
+- Difference:
+  - As PressureDependMultiYield: the static arrays are Params, the static workspaces
+    locals; `elast2Plast` runs inside the update on a copy of the committed state; the
+    recursions are loops; impossible states (`secondOrderEqn`, "error in (direction of)
+    surface motion") give NaN stress instead of `exit()`.
+  - The instance members `refShearModulus`, `refBulkModulus` and the surfaces' sizes and
+    moduli change at the switch to the plastic stage (`paramScaling`: by the confinement
+    then, when the friction angle is positive). They are point state (`STATE::G`, `K`,
+    `SIZES`, `MODULI`), so every point keeps its own, as each OpenSees instance does.
+  - `getInitialTangent` returns the instance's moduli, scaled after the switch. The
+    material contract's initial tangent has no state, so FemoraX returns the reference
+    moduli (what SSPbrick's stabilization reads when the element is created, before any
+    switch, in both programs). The two things that would read it after the switch are
+    refused with this material (`io/support.cpp`): `betaKinit` damping on its elements and
+    ModifiedNewton `-initial`. Femora's examples use neither.
+  - Up to 40 surfaces (the schema's limit and FemoraX's buckets 20 and 40; OpenSees allows
+    100).
+- Why: GPU kernels without static or global state (CLAUDE.md rule 2), a failed step instead
+  of a stopped program, and a stateless initial tangent in the material contract.
+- Effect on results: none on the verification data: 201,516 of 201,516 stress and tangent
+  values bit-identical to OpenSees along 34 strain paths (Femora's basin clay, friction 0;
+  a frictional material with pressure-dependent moduli, friction 30; user G/Gmax
+  backbones with and without friction; consolidation in the elastic stage, the switch,
+  also with no strain increment, monotonic and cyclic shear from 1e-4 to 1e-2, reversals,
+  confinement changes, extension, switching back and forth, discarded trials).
+- Test: `tests/unit/test_pimy_reference.cpp` (gate: relative 1e-14; observed:
+  bit-identical), `tests/unit/test_pimy.cpp`, `test_material_state` (columns of both
+  elements, both force paths), the stored system cases in
+  `tests/system/soil_column/nonlinear_cases.sh`.
 
 ### SSPbrick — Kstab applied matrix-free, damping summed term by term
 - OpenSees: `SRC/element/UWelements/SSPbrick.cpp` with `SRC/element/Element.cpp`
