@@ -84,6 +84,16 @@ std::vector<ForceSettings> tunable_variants(const InternalForce& force) {
       for (int ept : {1, 2, 4, 8})
         if (ept <= force.max_elements_per_team()) out.push_back({Layout::Team, Scatter::Gather, ept, g});
   }
+  // The compacted corrector path: bit-identical to the fused one where the compiler does not
+  // contract (the same condition as the layouts).
+  if (force.has_split_material() && layouts_share_arithmetic()) {
+    const std::size_t n = out.size();
+    for (std::size_t i = 0; i < n; ++i) {
+      ForceSettings c = out[i];
+      c.material = MaterialPath::Compacted;
+      out.push_back(c);
+    }
+  }
   return out;
 }
 
@@ -99,6 +109,14 @@ std::vector<ForceSettings> all_variants(const InternalForce& force) {
       for (int ept : {1, 2, 4, 8})
         if (ept <= force.max_elements_per_team()) out.push_back({Layout::Team, sc, ept, g});
     }
+  if (force.has_split_material()) {
+    const std::size_t n = out.size();
+    for (std::size_t i = 0; i < n; ++i) {
+      ForceSettings c = out[i];
+      c.material = MaterialPath::Compacted;
+      out.push_back(c);
+    }
+  }
   return out;
 }
 

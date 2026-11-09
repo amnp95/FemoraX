@@ -115,6 +115,10 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
       b.nnode = Elem::NNODE;
       b.ndof = Elem::NDOF;
       b.nstate = Elem::NSTATE;
+      if constexpr (SplitMaterial<typename Elem::Material> && RebindableElement<Elem>) {
+        constexpr int NS = Elem::Material::NSTRAIN;
+        b.compact_bytes = Elem::NGP * ((2 * NS + NS * NS) * 8 + 2 * 4);
+      }
       b.count = static_cast<std::int32_t>(list.size());
       b.padded = round_up(b.count, opt.simd_width);
       const auto P = static_cast<std::size_t>(b.padded);
@@ -198,6 +202,7 @@ std::int64_t memory_estimate_bytes(const Compiled& c) {
     const std::int64_t P = b.padded;
     bytes += P * 4 * (1 + b.nnode + b.ndof + 1);  // tag, nodes, equations, param index
     bytes += 2 * P * b.nstate * 8;                // material state, committed and trial
+    bytes += P * b.compact_bytes;                 // compacted corrector buffers
     for (const auto& ps : b.params) bytes += static_cast<std::int64_t>(ps.element.bytes.size()) + 64;
     bytes += static_cast<std::int64_t>(b.color_elements.size() + b.color_start.size()) * 4;
   }

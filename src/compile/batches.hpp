@@ -43,6 +43,9 @@ struct Batch {
   io::ElementType element = io::ElementType::StdBrick;
   int nnode = 0, ndof = 0;
   int nstate = 0;           // material history doubles per element (Elem::NSTATE), per buffer
+  // Bytes per element of the compacted corrector path's buffers (exec/compacted_kernels.hpp:
+  // stress, tangent and strain per point, a flag and a list entry), for split materials.
+  int compact_bytes = 0;
   std::int32_t count = 0;   // real elements
   std::int32_t padded = 0;  // count rounded up to the SIMD width
   std::vector<std::int32_t> tag;    // [padded]; -1 for padding

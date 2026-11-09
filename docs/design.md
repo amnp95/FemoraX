@@ -707,7 +707,15 @@ changelog (checked 2026-11-06):
 - PressureDependMultiYield / PressureIndependMultiYield: branchy return mapping. Use an
   elastic predictor on all points, then compact the yielding points and run the plastic
   corrector only on those. OpenSees uses static workspaces and dynamic yield surfaces here;
-  rewrite both as fixed-size local data.
+  rewrite both as fixed-size local data. Done for PressureDependMultiYield (2026-11-09):
+  `MaterialPath::Compacted` (`src/exec/compacted_kernels.hpp`), for any `SplitMaterial`
+  in an element with `WithMaterial`: predictor one thread per point, a scan of the plastic
+  points, the corrector one thread per plastic point, then any force-kernel variant with
+  the element instantiated on `Replay<Mat>` (reads the stored stress and tangent).
+  Bit-identical to the fused path on host backends (in the auto-tune there), rounding on
+  GPUs; slower than the fused team layout on the laptop GPU (benchmarks/README.md), kept
+  for the TACC benchmarks. Not yet in the stored-tangent state determination of implicit
+  stages, which runs the fused update.
 - ForceBeamColumn with fiber or RC sections: iterates inside the element. Use one team
   (thread block) per element, threads over fibers.
 - PML3D: extra DOFs and its own integration parameters; needs its own kernel.

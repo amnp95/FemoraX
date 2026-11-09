@@ -8,6 +8,7 @@
 #include <concepts>
 #include <type_traits>
 
+#include "physics/common/inner.hpp"
 #include "physics/common/strided.hpp"
 #include "physics/macros.hpp"
 
@@ -245,6 +246,24 @@ FEMORAX_HD constexpr int element_constant_count() {
   if constexpr (ElementTermElement<E>) return E::NCONST;
   else return 0;
 }
+
+// A material whose update splits into an elastic predictor and a plastic corrector
+// (PressureDependMultiYield): predict(ctx, p, c, t, eps, sig, D) finishes a point that stays
+// elastic and returns false, or returns true for a point that needs correct(...), which
+// finishes it; together they give update's bits. The launch layer's compacted path runs the
+// corrector only on the points that need it.
+template <class M>
+concept SplitMaterial = Material<M> && requires(const typename M::Params& p, Strided<const double> c,
+                                                Strided<double> t, const double* eps, double* sig,
+                                                double (*D)[M::NSTRAIN]) {
+  { M::predict(SerialInner{}, p, c, t, eps, sig, D) } -> std::same_as<bool>;
+  { M::correct(SerialInner{}, p, c, t, eps, sig, D) } -> std::same_as<void>;
+};
+
+// An element whose material can be swapped (Elem::WithMaterial<M>), with the pointwise
+// interface the compacted path's predictor pass uses.
+template <class E>
+concept RebindableElement = requires { typename E::template WithMaterial<typename E::Material>; };
 
 // The tangent the stable time step reads: the stiffest response the material can show from
 // its committed state. Optional material function stability_tangent(p, committed, D); without

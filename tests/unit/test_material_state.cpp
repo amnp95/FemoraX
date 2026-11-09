@@ -8,6 +8,7 @@
 //     committed state), so Newton iterations and the auto-tune may call it freely;
 //   - set_material_stage changes only the materials named;
 //   - the stored tangents and the committed tangent use the state;
+//   - the compacted corrector path gives the same forces and commits the same state;
 //   - an explicit stage re-checks the stable step as the soil stiffens with confinement.
 
 #include <Kokkos_Core.hpp>
@@ -222,6 +223,66 @@ TEST(MaterialState, PressureDependMultiYieldColumnMatchesTheHostReference) {
     }
     std::printf("[ %s PDMY column, 14 steps with the stage switch: largest difference from the host reference "
                 "%.2e ]\n", io::to_string(type), worst);
+  }
+}
+
+// The compacted corrector path (exec/compacted_kernels.hpp) through a whole sequence: its
+// trial state is the one committed, every layout and geometry mode, against the same host
+// reference. Bit-identical on host backends; on GPUs the corrector is its own kernel and
+// agrees to rounding.
+TEST(MaterialState, CompactedCorrectorPathMatchesTheHostReference) {
+  for (auto type : {io::ElementType::StdBrick, io::ElementType::SSPbrick}) {
+    SCOPED_TRACE(io::to_string(type));
+    const io::Model m = column(type);
+    CompileOptions co;
+    co.simd_width = femorax::simd_width();
+    const Compiled c = compile_model(m, co);
+    InternalForce k(c, exec::GeometryCache::On);
+    ASSERT_TRUE(k.has_split_material());
+    exec::ForceSettings s = exec::default_force_settings();
+    s.material = exec::MaterialPath::Compacted;
+    EXPECT_EQ(exec::to_string(s).substr(exec::to_string(s).size() - 10), "_compacted");
+    exec::ForceSettings parsed;
+    ASSERT_TRUE(exec::parse_settings(exec::to_string(s), parsed));
+    EXPECT_EQ(parsed.material, exec::MaterialPath::Compacted);
+    std::vector<exec::ForceSettings> variants;
+    for (const auto& v : exec::all_variants(k))
+      if (v.material == exec::MaterialPath::Compacted && v.deterministic()) variants.push_back(v);
+    ASSERT_FALSE(variants.empty());
+    Reference ref(c);
+    int stage = 0;
+    double worst = 0.0;
+    std::int64_t plastic = 0, points = 0;
+    for (int step = 1; step <= 14; ++step) {
+      SCOPED_TRACE("step " + std::to_string(step));
+      if (step == 5) {
+        stage = 1;
+        EXPECT_TRUE(k.set_material_stage(0, 1));
+        EXPECT_TRUE(k.set_material_stage(1, 1));
+      }
+      const auto u = field(c, step, 1.0), v = field(c, step, 0.01);
+      const auto want = ref.force(u, v, stage);
+      for (const auto& vs : variants) {  // every compacted variant, no commit between them
+        const auto got = run(k, u, v, vs);
+        if (kHost) {
+          ASSERT_EQ(std::memcmp(got.data(), want.data(), got.size() * sizeof(double)), 0) << exec::to_string(vs);
+        } else {
+          for (std::size_t q = 0; q < got.size(); ++q) EXPECT_NEAR(got[q], want[q], 1e-9 * max_abs(want));
+        }
+        for (std::size_t q = 0; q < got.size(); ++q)
+          worst = std::max(worst, std::abs(got[q] - want[q]) / max_abs(want));
+      }
+      run(k, u, v, s);  // the trial state that is committed: the compacted path's
+      plastic += k.last_plastic_points();
+      points += k.num_elements() * (type == io::ElementType::StdBrick ? 8 : 1);
+      k.commit_state();
+      ref.commit();
+    }
+    EXPECT_GT(plastic, 0);
+    EXPECT_LT(plastic, points);
+    std::printf("[ %s PDMY column, compacted corrector: %lld of %lld point updates took the corrector; largest "
+                "difference from the host reference %.2e ]\n",
+                io::to_string(type), static_cast<long long>(plastic), static_cast<long long>(points), worst);
   }
 }
 

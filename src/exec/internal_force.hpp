@@ -13,6 +13,11 @@
 //   Scatter::Colored    one launch per color (deterministic; needs the compile step's
 //                       coloring; developer option)
 //   Geometry::Recompute / Geometry::Cached
+//   MaterialPath::Fused      the material update inside the element kernel
+//   MaterialPath::Compacted  for split materials (PressureDependMultiYield): predictor pass,
+//                            the plastic points compacted, corrector on those only, then
+//                            the element kernel (exec/compacted_kernels.hpp); same bits on
+//                            host backends, rounding on GPUs
 // Users never choose: exec/force_settings.hpp picks the settings. All memory is allocated
 // in the constructor; compute() allocates nothing.
 
@@ -32,20 +37,24 @@ namespace femorax::exec {
 enum class Layout { Flat, Team };
 enum class Scatter { Gather, Atomic, Colored };
 enum class Geometry { Recompute, Cached };
+enum class MaterialPath { Fused, Compacted };
 
 const char* to_string(Layout l);
 const char* to_string(Scatter s);
 const char* to_string(Geometry g);
+const char* to_string(MaterialPath m);
 
 struct ForceSettings {
   Layout layout = Layout::Flat;
   Scatter scatter = Scatter::Gather;
   int elements_per_team = 0;  // team layout; 0 = the backend's default
   Geometry geometry = Geometry::Recompute;
+  MaterialPath material = MaterialPath::Fused;  // batches without a split material: Fused
   bool deterministic() const { return scatter != Scatter::Atomic; }
 };
 
-// "flat_gather_cached", "team_gather_ept4", ...; parse_settings reads the same form.
+// "flat_gather_cached", "team_gather_ept4", "flat_gather_cached_compacted", ...;
+// parse_settings reads the same form.
 std::string to_string(const ForceSettings& s);
 bool parse_settings(const std::string& text, ForceSettings& out);
 
@@ -89,6 +98,10 @@ class InternalForce {
   std::int32_t num_equations() const { return neq_; }
   std::int64_t num_elements() const;
   bool has_geometry_cache() const { return has_cache_; }
+  // Whether a batch's material splits into predictor and corrector (MaterialPath::Compacted
+  // changes something), and how many points took the corrector in the last compute.
+  bool has_split_material() const;
+  std::int64_t last_plastic_points() const { return last_plastic_points_; }
   bool has_coloring() const { return has_coloring_; }
   std::int64_t geometry_cache_bytes() const { return cache_bytes_; }
   std::int64_t gather_bytes() const { return gather_.bytes(); }
@@ -147,7 +160,7 @@ class InternalForce {
  private:
   std::int32_t neq_ = 0, nnodes_ = 0;
   bool has_cache_ = false, has_coloring_ = true;
-  std::int64_t cache_bytes_ = 0, stored_bytes_ = 0;
+  std::int64_t cache_bytes_ = 0, stored_bytes_ = 0, last_plastic_points_ = 0;
   Vec coords_;
   Vec nodal_mass_;
   Kokkos::View<std::int8_t*, Space> eq_dof_;

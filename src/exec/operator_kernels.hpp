@@ -50,6 +50,21 @@ KOKKOS_INLINE_FUNCTION void material_tangent(const typename Elem::Params& p, con
   Mat::update(p.mat, committed, trial, eps, sig, D);
 }
 
+// The recomputed source: materials without history state only (InternalForce::resolve
+// falls back to the stored source for the others), so no state is passed. For a material
+// with state the branch is never taken; it is not compiled either, which keeps the compiler
+// from analysing an update on empty state views.
+template <class Elem>
+KOKKOS_INLINE_FUNCTION void recomputed_tangent(const typename Elem::Params& p, const typename Elem::PointShape& s,
+                                               const double* ue, double (*D)[Elem::Material::NSTRAIN]) {
+  if constexpr (Elem::Material::NSTATE == 0) {
+    material_tangent<Elem>(p, s, ue, {}, {}, D);
+  } else {
+    (void)p, (void)s, (void)ue, (void)D;
+    Kokkos::abort("recomputed tangent for a material with history state");
+  }
+}
+
 // One element: gather, operator or diagonal, emit. Diagonal = true writes diag(K_eff).
 // unit_dir >= 0 replaces x by the rigid unit translation in that direction at every element
 // DOF, fixed ones included (y = K_eff r: the UniformExcitation load -ag M r, which couples
@@ -98,7 +113,7 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
           } else if (SourceI == static_cast<int>(Source::Stored)) {
             Storage<Elem>::load(tangents_of<Elem>(ts, e, P).point(gp), D);
           } else {  // Recomputed: materials without history state only (InternalForce::resolve)
-            material_tangent<Elem>(pr.p, s, ue, {}, {}, D);
+            recomputed_tangent<Elem>(pr.p, s, ue, D);
           }
         };
         // Committed tangent (betaKcomm): from the point's committed state.

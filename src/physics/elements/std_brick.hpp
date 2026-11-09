@@ -157,6 +157,9 @@ template <class Mat>
 struct StdBrick {
   static_assert(Material<Mat>);
   using Material = Mat;
+  // The same element with another material (the launch layer's compacted corrector path).
+  template <class M>
+  using WithMaterial = StdBrick<M>;
   static_assert(Mat::KIND == MaterialKind::NDMaterial3D, "stdBrick needs a 3D nD material");
 
   static constexpr int NDM = 3;

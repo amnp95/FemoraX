@@ -789,6 +789,9 @@ template <class Mat, SSPbrickMass MASS_FORMULA = SSPbrickMass::Exact>
 struct SSPbrick {
   static_assert(Material<Mat>);
   using Material = Mat;
+  // The same element with another material (the launch layer's compacted corrector path).
+  template <class M>
+  using WithMaterial = SSPbrick<M, MASS_FORMULA>;
   static_assert(Mat::KIND == MaterialKind::NDMaterial3D, "SSPbrick needs a 3D nD material");
 
   static constexpr int NDM = 3;

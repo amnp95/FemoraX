@@ -30,7 +30,9 @@ ForceSettings default_force_settings();
 
 // The variants the auto-tune chooses among: gather scatter, every elements-per-team that
 // fits, cached geometry if the force object has a cache; every layout on host backends,
-// the default's layout on GPU backends (layouts_share_arithmetic). All bit-identical.
+// the default's layout on GPU backends (layouts_share_arithmetic); with a split material,
+// each of these also with the compacted corrector path (host backends only, for the same
+// reason). All bit-identical.
 std::vector<ForceSettings> tunable_variants(const InternalForce& force);
 
 // Whether the flat and team layouts compile to the same arithmetic (host backends: yes;

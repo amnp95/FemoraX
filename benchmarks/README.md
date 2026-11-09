@@ -130,6 +130,20 @@ Current:
   11.9 ms (stdBrick 19.1 ms) on 8 threads, 1.67 ms (stdBrick 6.2 ms) on the RTX 3050 Ti;
   recomputed 47 ms / 10.7 ms (the stabilization's setup runs in every call); operator
   7.6 ms / 1.10 ms (stdBrick, consistent mass: 18.9 ms / 4.8 ms). Not baselines.
+- `explicit_force_pdmy[_ssp]/<n>^3/<mix>/<variant>`: PressureDependMultiYield (dense below,
+  loose above, plastic stage) under a shear field, `elastic` (no point yields), `mixed`
+  (the upper part yields: 56% of the points) and `plastic` (every point); the gather
+  cached variants, fused and with the compacted plastic corrector
+  (`src/exec/compacted_kernels.hpp`). The run prints the number of plastic points per mix.
+  Compulsory traffic adds the material state (committed read, trial written) and, for the
+  compacted path, 48 doubles per point written and read, plus a flag and a list entry.
+  Laptop orientation, 16^3 (32768 points for stdBrick), RTX 3050 Ti, fused team ept4
+  against compacted team ept4: elastic 8.5 / 9.1 ms, mixed 18.3 / 22.3 ms, plastic
+  34.1 / 40.3 ms; SSPbrick (flat or ept8) 1.9 / 1.8, 4.1 / 4.5, 5.5 / 6.3 ms. On this card
+  the compacted path does not pay: the fused team layout already runs one thread per point,
+  and compaction adds a scan, a count copied to the host, the per-point results and a
+  second predictor pass in the corrector. CPU (8 threads): no gain either, as expected
+  without warp divergence. The question for TACC is the H100/H200 balance. Not baselines.
 
 Planned: the explicit step (time per step and DOFs per second) and the recorders' per-step
 cost.

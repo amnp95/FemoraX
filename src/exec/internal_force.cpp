@@ -1,6 +1,8 @@
 #include "exec/internal_force.hpp"
 
 #include <algorithm>
+#include <cstring>
+#include <type_traits>
 #include <unordered_map>
 #include <sstream>
 #include <string>
@@ -8,6 +10,7 @@
 #include "compile/registry.hpp"
 #include "io/h5.hpp"
 #include "exec/device_memory.hpp"
+#include "exec/compacted_kernels.hpp"
 #include "exec/element_kernels.hpp"
 #include "exec/operator_kernels.hpp"
 #include "exec/runtime.hpp"
@@ -19,11 +22,13 @@ const char* to_string(Scatter s) {
   return s == Scatter::Atomic ? "atomic" : s == Scatter::Colored ? "colored" : "gather";
 }
 const char* to_string(Geometry g) { return g == Geometry::Recompute ? "recompute" : "cached"; }
+const char* to_string(MaterialPath m) { return m == MaterialPath::Fused ? "fused" : "compacted"; }
 
 std::string to_string(const ForceSettings& s) {
   std::string r = std::string(to_string(s.layout)) + "_" + to_string(s.scatter);
   if (s.layout == Layout::Team) r += "_ept" + std::to_string(s.elements_per_team);
   if (s.geometry == Geometry::Cached) r += "_cached";
+  if (s.material == MaterialPath::Compacted) r += "_compacted";
   return r;
 }
 
@@ -46,6 +51,8 @@ bool parse_settings(const std::string& text, ForceSettings& out) {
       s.elements_per_team = std::atoi(part.c_str() + 3);
     } else if (part == "cached") {
       s.geometry = Geometry::Cached;
+    } else if (part == "compacted") {
+      s.material = MaterialPath::Compacted;
     } else {
       return false;
     }
@@ -88,8 +95,10 @@ Kokkos::View<T*, Space> upload(const char* label, const std::vector<T>& h) {
 // once per batch per call; the launch layer may use it, physics may not).
 struct InternalForce::Batch {
   virtual ~Batch() = default;
-  virtual void run(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
-                   const Vec& v, const Vec& f, const Vec& slots) = 0;
+  // Returns the number of points that took the plastic corrector (compacted path; 0 else).
+  virtual std::int64_t run(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
+                           const Vec& v, const Vec& f, const Vec& slots) = 0;
+  virtual bool split_material() const = 0;
   virtual std::int64_t count() const = 0;
   virtual std::int64_t device_bytes() const = 0;
   virtual int max_elements_per_team() const = 0;
@@ -119,6 +128,9 @@ template <class Elem>
 struct TypedBatch final : InternalForce::Batch {
   kernels::DevBatch<Elem> b;
   kernels::DevTangents<Elem> t;
+  static constexpr bool kCompact = kernels::kCompactable<Elem>;
+  struct NoCompact {};
+  std::conditional_t<kCompact, kernels::DevCompact<Elem>, NoCompact> compact;
 
   std::vector<kernels::DevParams<Elem>> host_params;
   std::vector<std::int32_t> param_material;
@@ -140,6 +152,16 @@ struct TypedBatch final : InternalForce::Batch {
     }
     b.params = upload("batch_params", ps);
     kernels::init_state<Elem>(b);
+    if constexpr (kCompact) {
+      using R = kernels::Replay<typename Elem::Material>;
+      const auto points = static_cast<std::size_t>(Elem::NGP) * b.padded;
+      compact.results = Vec("batch_compact_results", static_cast<std::size_t>(R::NSTATE) * points);
+      compact.flag = Kokkos::View<std::int32_t*, Space>("batch_compact_flag", points);
+      compact.list = Kokkos::View<std::int32_t*, Space>("batch_compact_list", points);
+      compact.params = Kokkos::View<kernels::DevParams<kernels::ReplayElement<Elem>>*, Space>(
+          "batch_compact_params", ps.size());
+      upload_replay_params();
+    }
     using Mat = typename Elem::Material;
     if constexpr (Mat::CONSTANT_TANGENT) {
       constexpr int NS = Mat::NSTRAIN;
@@ -162,20 +184,60 @@ struct TypedBatch final : InternalForce::Batch {
     }
   }
 
-  void run(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
-           const Vec& v, const Vec& f, const Vec& slots) override {
+  // The parameter sets retyped for the Replay element (the same bytes: Replay's Params is
+  // the material's).
+  void upload_replay_params() {
+    if constexpr (kCompact) {
+      using RP = kernels::DevParams<kernels::ReplayElement<Elem>>;
+      static_assert(sizeof(RP) == sizeof(kernels::DevParams<Elem>) && std::is_trivially_copyable_v<RP>);
+      auto m = Kokkos::create_mirror_view(compact.params);
+      for (std::size_t i = 0; i < host_params.size(); ++i)
+        std::memcpy(static_cast<void*>(&m(i)), static_cast<const void*>(&host_params[i]), sizeof(RP));
+      Kokkos::deep_copy(compact.params, m);
+    }
+  }
+
+  bool split_material() const override { return kCompact; }
+
+  std::int64_t run(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
+                   const Vec& v, const Vec& f, const Vec& slots) override {
+    if constexpr (kCompact) {
+      if (s.material == MaterialPath::Compacted) return run_compacted(s, out, coords, N, u, v, f, slots);
+    }
+    run_kernels(b, s, out, coords, N, u, v, f, slots);
+    return 0;
+  }
+
+  std::int64_t run_compacted(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
+                             const Vec& v, const Vec& f, const Vec& slots) {
+    if constexpr (kCompact) {
+      if (s.geometry == Geometry::Cached) kernels::launch_predict<Elem, true>(b, compact, coords, N, u);
+      else kernels::launch_predict<Elem, false>(b, compact, coords, N, u);
+      const Index plastic = kernels::compact_plastic_points<Elem>(b, compact);
+      kernels::launch_correct<Elem>(b, compact, plastic);
+      run_kernels(kernels::replay_batch<Elem>(b, compact), s, out, coords, N, u, v, f, slots);
+      return plastic;
+    } else {
+      (void)s, (void)out, (void)coords, (void)N, (void)u, (void)v, (void)f, (void)slots;
+      return 0;
+    }
+  }
+
+  template <class E>
+  static void run_kernels(const kernels::DevBatch<E>& b, const ForceSettings& s, Out out, const Vec& coords, Index N,
+                          const Vec& u, const Vec& v, const Vec& f, const Vec& slots) {
     const bool cached = s.geometry == Geometry::Cached;
     auto launch = [&](Index begin, Index end, bool by_color) {
       if (s.layout == Layout::Flat) {
-        if (cached) kernels::launch_flat<Elem, true>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
-        else kernels::launch_flat<Elem, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
+        if (cached) kernels::launch_flat<E, true>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
+        else kernels::launch_flat<E, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
       } else {
-        if constexpr (PointwiseElement<Elem>) {
+        if constexpr (PointwiseElement<E>) {
           const int ept = s.elements_per_team;
-          if (cached) kernels::launch_team<Elem, true>(b, coords, N, u, v, f, slots, out, begin, end, by_color, ept);
-          else kernels::launch_team<Elem, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color, ept);
+          if (cached) kernels::launch_team<E, true>(b, coords, N, u, v, f, slots, out, begin, end, by_color, ept);
+          else kernels::launch_team<E, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color, ept);
         } else {
-          kernels::launch_flat<Elem, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
+          kernels::launch_flat<E, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
         }
       }
     };
@@ -193,7 +255,17 @@ struct TypedBatch final : InternalForce::Batch {
                                      b.color_elements.extent(0)) * 4 +
            static_cast<std::int64_t>(b.params.extent(0) * sizeof(kernels::DevParams<Elem>)) +
            static_cast<std::int64_t>(b.geometry.extent(0) + b.constants.extent(0) + t.constant.extent(0) +
-                                     t.stored.extent(0) + b.state[0].extent(0) + b.state[1].extent(0)) * 8;
+                                     t.stored.extent(0) + b.state[0].extent(0) + b.state[1].extent(0)) * 8 +
+           compact_bytes();
+  }
+  std::int64_t compact_bytes() const {
+    if constexpr (kCompact) {
+      return static_cast<std::int64_t>(compact.results.extent(0)) * 8 +
+             static_cast<std::int64_t>(compact.flag.extent(0) + compact.list.extent(0)) * 4 +
+             static_cast<std::int64_t>(compact.params.extent(0) * sizeof(kernels::DevParams<kernels::ReplayElement<Elem>>));
+    } else {
+      return 0;
+    }
   }
   double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const override {
     return kernels::min_critical_dt<Elem>(b, coords, N, s);
@@ -278,6 +350,7 @@ struct TypedBatch final : InternalForce::Batch {
         auto m = Kokkos::create_mirror_view(b.params);
         for (std::size_t i = 0; i < host_params.size(); ++i) m(i) = host_params[i];
         Kokkos::deep_copy(b.params, m);
+        upload_replay_params();
       }
       return any;
     } else {
@@ -407,8 +480,15 @@ void InternalForce::compute(const ForceSettings& settings) {
                   : s.scatter == Scatter::Atomic ? Out::Atomic
                                                  : Out::Plain;
   if (out != Out::Slots) Kokkos::deep_copy(f, 0.0);
-  for (auto& b : batches_) b->run(s, out, coords_, nnodes_, u, v, f, gather_.slots());
+  last_plastic_points_ = 0;
+  for (auto& b : batches_) last_plastic_points_ += b->run(s, out, coords_, nnodes_, u, v, f, gather_.slots());
   if (out == Out::Slots) gather_.gather(f);
+}
+
+bool InternalForce::has_split_material() const {
+  for (const auto& b : batches_)
+    if (b->split_material()) return true;
+  return false;
 }
 
 // --- Matrix-free operator ---------------------------------------------------------------
