@@ -293,6 +293,14 @@ TEST(MaterialState, OperatorUsesTheStateAndRecomputedFallsBackToStored) {
     scale = std::max(scale, std::abs(h0(i)));
   }
   EXPECT_GT(diff, 1e-3 * scale);  // the pressure-dependent, elastoplastic tangent
+  // ModifiedNewton -initial: the stiffness term uses the initial tangent (the reference
+  // elastic one, what the zero state gave), whatever the state.
+  exec::Vec y2("y2", n);
+  k.apply_operator({1.0, 0.0, 0.0, true}, {}, uv, x, y2);
+  auto h2 = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), y2);
+  double d02 = 0;
+  for (std::size_t i = 0; i < n; ++i) d02 = std::max(d02, std::abs(h2(i) - h0(i)));
+  EXPECT_LE(d02, 1e-12 * scale);
   // The stable step reads the committed state too (finite and positive).
   const double dt = k.min_critical_dt(ExplicitScheme::ExplicitDifference);
   EXPECT_GT(dt, 0.0);

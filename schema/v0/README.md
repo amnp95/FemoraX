@@ -47,7 +47,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.1 | VTKHDF recorder: optional `elements` dataset (the element tags to record); `region` stays rejected |
 | 0.2 | equalDOF: optional `command` dataset (which `equalDOF` command each row comes from) |
 | 0.4 | nD materials `PressureDependMultiYield` and `PressureIndependMultiYield` (with the optional `pairs` dataset); process step `update_material_stage`; VTKHDF responses `stress3D6`, `strain3D6` |
-| 0.5 | Femora's retry and substep recovery defined: `max_retries`, `num_sublevels`, `num_substeps` (attributes since 0.0) with their rules; ModifiedNewton runs as Newton |
+| 0.5 | Femora's retry and substep recovery defined: `max_retries`, `num_sublevels`, `num_substeps` (attributes since 0.0) with their rules |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
@@ -359,7 +359,7 @@ step has attrs `kind` (string) and `label` (string, *optional*, Femora's descrip
 | `num_iter` | int32 *(optional)* | LoadControl `<numIter>` (default 1) |
 | `min_increment`, `max_increment` | float64 *(optional)* | LoadControl `<minIncr> <maxIncr>` (default: `load_increment`) |
 | `algorithm` | string | `"Linear"` (required for the explicit integrators), `"Newton"` or `"ModifiedNewton"` *(since 0.3)* |
-| `modified_newton_initial`, `modified_newton_factor_once` | uint8 *(optional, since 0.3)* | ModifiedNewton `-initial`, `-factoronce`. FemoraX is matrix-free and runs every ModifiedNewton stage as Newton, with or without these options (a note is printed; `docs/deviations.md`) |
+| `modified_newton_initial`, `modified_newton_factor_once` | uint8 *(optional, since 0.3)* | ModifiedNewton `-initial`, `-factoronce`. As OpenSees, matrix-free: the stored Gauss-point tangent (and the preconditioner built from it) is formed once per step after the first unbalance; `-initial` puts the initial stiffness in the stiffness term; `-factoronce` keeps the tangent across steps until a step fails its convergence test or the step size changes (Femora issues the algorithm again then) |
 | `constraint_handler` | string | `"Transformation"`; `"Plain"` only when there are no MP constraints |
 | `numberer` | string | recorded, ignored (FemoraX numbers its own equations) |
 | `system` | string | recorded, ignored (explicit: lumped diagonal; 1b: Eigen) |
@@ -388,9 +388,11 @@ back to the committed state and time (and the solver's initial guess) and:
 Rules (Femora's own): `max_retries >= 0`; `num_sublevels` and `num_substeps` together,
 `num_sublevels >= 1`, `num_substeps >= 2`, Transient stages only. Static stages retry only
 (LoadControl rescales its increment by the failed attempt's iterations, as OpenSees does).
-Explicit stages ignore all three: a Linear explicit step never fails. FemoraX runs
-ModifiedNewton as Newton, so a retry repeats the failed attempt exactly; it is kept for the
-event record (the stage summary counts retries and substepped steps).
+Explicit stages ignore all three: a Linear explicit step never fails. A retry differs from
+the failed attempt only through the tangent: with ModifiedNewton -factoronce it is formed
+afresh (as OpenSees resets factorOnce after a failed test); with Newton, or ModifiedNewton
+per step, a retry repeats the attempt. The stage summary counts retries and substepped
+steps.
 
 Users and exporters need not set any of the three solver attributes: absent, FemoraX chooses. They exist for
 studies and for cases where the automatic choice needs overriding.

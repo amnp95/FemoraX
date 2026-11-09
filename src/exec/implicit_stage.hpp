@@ -17,10 +17,13 @@
 //   LoadControl.cpp: lambda += dlambda (dlambda scaled by numIter / iterations of the last
 //     step, clamped to [min, max]); the domain time is lambda. Static residual
 //     B = P - f_int(U) (StaticIntegrator: no damping, no inertia); tangent K_t.
-//   Linear.cpp, NewtonRaphson.cpp: Linear solves once per step; Newton: B, test start, then
-//     (tangent, solve, update, B, test) until the test passes. ModifiedNewton (any options)
-//     runs as Newton: it saves factorizations, and the matrix-free path has none
-//     (docs/deviations.md).
+//   Linear.cpp, NewtonRaphson.cpp, ModifiedNewton.cpp: Linear solves once per step; Newton:
+//     B, test start, then (tangent, solve, update, B, test) until the test passes;
+//     ModifiedNewton: the tangent once per step, after the first B (-initial: the initial
+//     stiffness in the stiffness term; -factoronce: kept across steps until a step fails its
+//     test, when OpenSees resets factorOnce, or the step size changes, when Femora's
+//     FemoraAnalyzeTransientStep issues the algorithm again). Matrix-free, "the tangent" is
+//     the stored Gauss-point tangents and the preconditioner built from them.
 //   Femora's recovery (schema 0.5, its FemoraAnalyzeTransientStep): a failed step reverts
 //     to the committed state (Domain::revertToLastCommit, Newmark::revertToLastStep; the
 //     solver's initial guess too) and is retried max_retries times at the same size, then
@@ -63,7 +66,6 @@ struct ImplicitStageReport {
   // also counts substeps. retries: attempts repeated at the same size; substepped: steps
   // split into substeps (at any level); failed_attempts: attempts that did not converge.
   std::int64_t commits = 0, retries = 0, substepped = 0, failed_attempts = 0;
-  bool modified_newton_as_newton = false;  // the model asked for ModifiedNewton
 };
 
 class ImplicitStage {

@@ -826,8 +826,15 @@ Correctness is checked against physics first and OpenSees second.
       VTKHDF recorder writes `stress3D6` and `strain3D6` as OpenSees does (each element's
       average over its points of the material's getStress / getStrain after the commit,
       Brick's and SSPbrick's averaging rules), computed on the device by an element-output
-      kernel and copied with the node data. Next: the system column, the
-      compacted-corrector kernel, then PressureIndependMultiYield.
+      kernel and copied with the node data. Steps 4 and 5 done (2026-11-09): Femora's
+      retry and substep recovery (schema 0.5; ModifiedNewton as OpenSees runs it, the
+      stored tangent kept across steps with -factoronce and formed afresh after a failed
+      attempt or a new step size), and Femora's example column, exported by Femora, on the
+      first 2 s of its shaking against stored OpenSees output
+      (`tests/system/femora_example/`): the same retries, fields within 1.1e-11 on the CPU
+      and 5.6e-5 on the GPU. Event sequences compare retries and substeps; active surfaces
+      are not compared yet (docs/todo.md). Next: the compacted-corrector kernel, then
+      PressureIndependMultiYield.
    3. Verification against OpenSees: strain paths at the Gauss-point level (the OpenSees
       material called directly, no domain), then single elements, then the system test.
    4. System test: Femora's nonlinear layered soil column (its own 1x1x25 column, staged

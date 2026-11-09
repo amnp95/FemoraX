@@ -34,6 +34,9 @@ struct OperatorCoefficients {
   double stiffness = 1.0;
   double damping = 0.0;
   double mass = 0.0;
+  // The stiffness term uses the initial stiffness K_0 instead of K_t (ModifiedNewton
+  // -initial); the damping terms are unchanged.
+  bool initial = false;
 };
 
 namespace element_operator_detail {
@@ -43,8 +46,11 @@ struct Factors {
   double cK, c0, cc, cM;
   FEMORAX_HD Factors(const Rayleigh& d, const OperatorCoefficients& k)
       : cK(initial_stiffness_is_tangent<Elem>() ? k.stiffness + k.damping * d.betaK + k.damping * d.betaKinit
-                                                 : k.stiffness + k.damping * d.betaK),
-        c0(initial_stiffness_is_tangent<Elem>() ? 0.0 : k.damping * d.betaKinit),
+           : k.initial                          ? k.damping * d.betaK
+                                                : k.stiffness + k.damping * d.betaK),
+        c0(initial_stiffness_is_tangent<Elem>() ? 0.0
+           : k.initial                          ? k.stiffness + k.damping * d.betaKinit
+                                                : k.damping * d.betaKinit),
         cc(k.damping * d.betaKcomm),
         cM(k.mass + k.damping * d.alphaM) {}
 };

@@ -84,7 +84,7 @@ def check_layout(pa: str, pb: str) -> list[str]:
     return errors
 
 
-def check_results(pa: str, pb: str, tol: float) -> tuple[list[str], list[str]]:
+def check_results(pa: str, pb: str, tol: float, only: set[str] | None = None) -> tuple[list[str], list[str]]:
     from femora.results import open_results
 
     errors, report = [], []
@@ -118,8 +118,10 @@ def check_results(pa: str, pb: str, tol: float) -> tuple[list[str], list[str]]:
                 continue
             scale = np.abs(fa).max()
             rel = float(np.abs(fa - fb).max() / scale) if scale > 0 else 0.0
-            report.append(f"{resp:13s} {str(fa.shape):16s} max |OpenSees| {scale:.6e}  relative diff {rel:.3e}")
-            if rel > tol:
+            skipped = only is not None and resp not in only
+            report.append(f"{resp:13s} {str(fa.shape):16s} max |OpenSees| {scale:.6e}  relative diff {rel:.3e}"
+                          + ("  (reported only)" if skipped else ""))
+            if rel > tol and not skipped:
                 errors.append(f"{resp}: relative difference {rel:.3e} > {tol:.1e}")
         if ra.available_cell_responses != rb.available_cell_responses:
             errors.append(f"cell responses {ra.available_cell_responses} vs {rb.available_cell_responses}")
@@ -133,8 +135,10 @@ def check_results(pa: str, pb: str, tol: float) -> tuple[list[str], list[str]]:
                 continue
             scale = np.abs(fa).max()
             rel = float(np.abs(fa - fb).max() / scale) if scale > 0 else 0.0
-            report.append(f"{resp:13s} {str(fa.shape):16s} max |OpenSees| {scale:.6e}  relative diff {rel:.3e}")
-            if rel > tol:
+            skipped = only is not None and resp not in only
+            report.append(f"{resp:13s} {str(fa.shape):16s} max |OpenSees| {scale:.6e}  relative diff {rel:.3e}"
+                          + ("  (reported only)" if skipped else ""))
+            if rel > tol and not skipped:
                 errors.append(f"{resp}: relative difference {rel:.3e} > {tol:.1e}")
         # A history read through the high-level interface, as a user would.
         p = ra.nearest_point(tuple(ma.points[-1]), tolerance=1e-9)
@@ -151,12 +155,14 @@ def main() -> int:
     ap.add_argument("opensees")
     ap.add_argument("femorax")
     ap.add_argument("--tol", type=float, default=1e-12)
+    ap.add_argument("--only", default="", help="comma-separated responses to compare; the others are reported")
     args = ap.parse_args()
+    only = set(args.only.split(",")) if args.only else None
     errors = check_layout(args.opensees, args.femorax)
     print(f"layout: {'identical' if not errors else f'{len(errors)} difference(s)'}")
     for e in errors:
         print("  " + e)
-    rerrors, report = check_results(args.opensees, args.femorax, args.tol)
+    rerrors, report = check_results(args.opensees, args.femorax, args.tol, only)
     print("femora.results:")
     for line in report:
         if line:

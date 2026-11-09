@@ -31,28 +31,38 @@ Default tolerances (until a component states otherwise):
   displacement), CPU (renumbering off and on) and GPU.
 
 - Nonlinear system tests (PressureDependMultiYield; stored OpenSees output,
-  `tests/system/soil_column/nonlinear_check.sh`; since 2026-11-09 every case re-equilibrates
-  with Newton in both programs, see "ModifiedNewton — runs as Newton"): explicit stages
-  relative 1e-12 (observed 1.1e-13 and 3.3e-14 on one SSPbrick of dense and of loose sand,
-  1000 steps with plastic flow; 2.3e-14 and 6.4e-13 on the 4- and 25-element columns);
-  implicit stages per case from the runs: one stdBrick 1e-5 (observed 4.6e-6; 2.8e-7 when
-  both re-equilibrated with ModifiedNewton -factoronce), one SSPbrick 5e-5 (observed
-  1.8e-5, acceleration; displacement 2.6e-7). The implicit cases agree to rounding until a
-  shaking step (45 for stdBrick, 66 for SSPbrick), then a rounding-level difference changes
-  a plastic decision and the Newton iterates converge, within the NormDispIncr 1e-10 test,
-  to slightly different answers; how far they drift afterwards depends on the path, which
-  is why the stdBrick figure moved by a factor 16 when only the re-equilibration algorithm
-  changed (docs/todo.md, item 2, asks for a band from OpenSees' own sensitivity). It is not
-  FemoraX-specific: a host replica of OpenSees' algorithm with FemoraX's physics and exact
-  3 x 3 solves differs from itself by 4.7e-7 (SSPbrick) and 1.8e-7 (stdBrick) in
-  displacement when only the pivoting of the linear solve changes. The explicit cases, with
-  no linear solve, stay at rounding: the material, state, commit and stage logic are those
-  of OpenSees. On the GPU (fused multiply-adds, CUDA's pow, exp and log): explicit at
-  rounding too since the Newton re-equilibration (1.0e-13, 2.9e-14, 2.9e-14, 5.8e-13; with
-  ModifiedNewton re-equilibration the single elements had reached 7.1e-7 and 1.2e-6),
-  implicit 1.5e-4 (stdBrick) and 1.8e-5 (SSPbrick); tolerances 5e-6 (explicit), 5e-4 and
+  `tests/system/soil_column/nonlinear_check.sh`): explicit stages relative 1e-12 (observed
+  1.4e-13 and 2.4e-13 on one SSPbrick of dense and of loose sand, 1000 steps with plastic
+  flow); implicit stages per case from the first runs: one stdBrick 1e-6 (observed
+  2.8e-7), one SSPbrick 5e-5 (observed 1.9e-5, acceleration; displacement 4.7e-7). The
+  implicit cases agree to 1e-16 for the first 45 shaking steps, then a rounding-level
+  difference changes a plastic decision and the Newton iterates converge, within the
+  NormDispIncr 1e-10 test, to slightly different answers. It is not FemoraX-specific: a
+  host replica of OpenSees' algorithm with FemoraX's physics and exact 3 x 3 solves
+  differs from itself by 4.7e-7 (SSPbrick) and 1.8e-7 (stdBrick) in displacement when only
+  the pivoting of the linear solve changes, and from OpenSees by 1.8e-7 and 2.5e-7. The
+  Newton iteration counts agree step by step for the stdBrick case (482 in 100 steps) and
+  differ in one step of the SSPbrick case (95: 6 against 5). The explicit cases, with no
+  linear solve, stay at rounding: the material, state, commit and stage logic are those of
+  OpenSees. On the GPU (fused multiply-adds, CUDA's pow, exp and log) the same rounding
+  sensitivity changes plastic decisions in every case: explicit 7.1e-7 and 1.2e-6,
+  implicit 1.9e-4 (stdBrick) and 7.3e-5 (SSPbrick); tolerances 5e-6 (explicit), 5e-4 and
   2e-4 (implicit). The Gauss-point paths (test_pdmy_reference, DeviceBackend) separate
   rounding from branch flips: 31 of 32 within 2.3e-11, one flipped.
+
+- Femora's nonlinear soil column (its example `nonlinear_layered_soil_column.py`, exported
+  by Femora unchanged, on the first 2 s of shaking, 1.9-3.9 s of FrequencySweep; stored
+  OpenSees output, `tests/system/femora_example/femora_example_check.sh`): retry events
+  equal and in order (OpenSees and FemoraX both retry re-equilibration steps 4 and 5 once);
+  displacement, stress3D6 and strain3D6 relative to their largest values, and the surface
+  PGA and 5% response spectrum (100 periods, 0.02-5 s) relative to their peaks: 1e-9 on
+  host backends (observed 4.2e-13, 9.2e-13, 1.1e-11; 6.9e-13 and 1.8e-12), 5e-4 on GPUs
+  (observed 3.0e-6, 8.7e-6, 5.6e-5; 2.1e-6 and 2.8e-5: fused multiply-adds change plastic
+  decisions, which the implicit steps carry forward). Acceleration and velocity histories
+  are reported, not compared step by step: the shaking stage converges to NormDispIncr
+  1e-5 m, which allows up to 40 m/s^2 of acceleration at dt = 0.001, so step values carry
+  that slack (on the CPU they still agree to 2.6e-11 and 1.3e-12; on the GPU 7.0e-3 and
+  9.9e-5); the PGA and the spectrum are what site response uses.
 
 ## Entry format
 
@@ -118,25 +128,6 @@ Default tolerances (until a component states otherwise):
   (`lumped=False`), and the system tests against OpenSees use consistent mass.
 - Test: to come with the Newmark step (lumped against OpenSees with nodal masses and
   massless elements, which is the same model).
-
-### ModifiedNewton — runs as Newton (decided 2026-11-09, milestone 2)
-- OpenSees: `SRC/analysis/algorithm/equiSolnAlgo/ModifiedNewton.cpp` (`-initial`,
-  `-factoronce`), commit 955ceb0; Femora's `FemoraAnalyzeTransientStep`, which re-issues
-  `algorithm ModifiedNewton -factoronce` whenever the step size changes
-- Difference: a stage that asks for ModifiedNewton, with or without `-initial` or
-  `-factoronce`, runs Newton: the tangent of every iteration's state determination. FemoraX
-  prints a note. A retry starts again from the committed state with a fresh tangent.
-- Why: ModifiedNewton exists to save matrix factorizations; the matrix-free path has none,
-  and with PressureDependMultiYield the tangent comes from every state determination
-  anyway, so keeping an old tangent only slows convergence. It also makes OpenSees' retry
-  behaviour moot: OpenSees forms a new tangent after a failed ModifiedNewton step (it
-  resets `factorOnce`), which is why Femora's same-size retries can succeed there.
-- Effect on results: converged answers differ within the convergence tolerance, and
-  iteration counts and retries differ. On the stored single-element and 4-element cases,
-  re-equilibrating with ModifiedNewton -factoronce in OpenSees and Newton in FemoraX moved
-  the explicit comparisons from rounding to 7e-7 (single elements) and 6e-8 (4 elements),
-  so those stored cases now re-equilibrate with Newton in both programs.
-- Test: `test_implicit` (ModifiedNewton gives Newton's answer, and the recovery tests).
 
 ### Stage end time — the Tcl loop's rounding of getTime
 - OpenSees: `SRC/tcl/commands.cpp` (`getTime` prints the domain time with `"%f"`);

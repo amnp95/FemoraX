@@ -122,16 +122,10 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     throw io::UnsupportedComponent("unsupported component: Newmark -form " + an.newmark_form + " in stage \"" +
                                    an.name + "\" (only the displacement form D so far)");
 
-  // ModifiedNewton (with or without -initial, -factoronce) runs as Newton: it exists to save
-  // matrix factorizations, and the matrix-free path has none (docs/deviations.md).
   const bool linear = an.algorithm == io::Algorithm::Linear;
-  if (an.algorithm == io::Algorithm::ModifiedNewton) {
-    rep.modified_newton_as_newton = true;
-    if (verbose)
-      std::printf("femorax: note: stage %s: ModifiedNewton runs as Newton (the tangent of every iteration; "
-                  "matrix-free, there is no factorization to save)\n",
-                  an.name.c_str());
-  }
+  const bool modified = an.algorithm == io::Algorithm::ModifiedNewton;
+  const bool factor_once = modified && an.modified_newton_factor_once;
+  const bool initial = modified && an.modified_newton_initial;
   const bool stored = s.os.tangent == TangentSource::Stored;
   // Linear: OpenSees commits the stress of the state determination before the solve with
   // the strain after it (Linear::solveCurrentStep updates the domain without another
@@ -150,8 +144,10 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
       static_cast<int>(std::max<std::int64_t>(200, std::min<std::int64_t>(s.n, 10000))));
   // Integrator constants (Newmark::newStep, displ == 1) per step size: substeps change them.
   auto coefficients = [&](double h) -> OperatorCoefficients {
-    if (is_static) return {1.0, 0.0, 0.0};
-    return {1.0, gamma / (beta * h), 1.0 / (beta * h * h)};
+    // ModifiedNewton -initial: the initial stiffness K_0 in the stiffness term (the damping
+    // keeps its own terms, as Newmark::formEleTangent with INITIAL_TANGENT).
+    if (is_static) return {1.0, 0.0, 0.0, initial};
+    return {1.0, gamma / (beta * h), 1.0 / (beta * h * h), initial};
   };
   MatrixFreeOperator op(force, u, coefficients(an.dt), s.os);
   // Preconditioner: Jacobi (the automatic choice today). Developer override for studies:
@@ -172,6 +168,10 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
   rep.preconditioner = jacobi.name();
   bool have_tangent = false;  // the preconditioner and solver are set up for the current operator
   double tangent_h = an.dt;   // the step size of the operator's coefficients
+  // ModifiedNewton -factoronce keeps the tangent across steps until an attempt fails its test
+  // (ModifiedNewton::solveCurrentStep resets factorOnce) or the step size changes (Femora's
+  // FemoraAnalyzeTransientStep issues the algorithm again).
+  bool kept_tangent = false;
   auto update_tangent = [&](double h) {
     if (h != tangent_h) {
       op.set_coefficients(coefficients(h));
@@ -240,8 +240,8 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
   double last_iter = spec_iter;
 
   // Developer switches (not user settings): every Newton iteration's test value, for
-  // comparisons with OpenSees' test print flag; every retry and substep, in the format of
-  // Femora's FEMORA_PROGRESS lines.
+  // comparisons with OpenSees' test print flag; every retry and substep (stage, retry, limit,
+  // step size as Femora's FEMORA_PROGRESS|RETRY lines print them, then the step's time).
   const bool trace_iterations = std::getenv("FEMORAX_TRACE_ITERATIONS") != nullptr;
   const bool trace_events = std::getenv("FEMORAX_TRACE_EVENTS") != nullptr;
 
@@ -292,9 +292,13 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
       if (!ok) failure = solve_failure;
     } else {
       form_unbalance();
+      // ModifiedNewton: the tangent once per attempt, after the first unbalance; -factoronce:
+      // once while it stays valid.
+      if (modified && !(factor_once && kept_tangent && h == tangent_h)) update_tangent(h);
+      kept_tangent = factor_once;
       int iter = 1;
       while (true) {
-        update_tangent(h);
+        if (!modified) update_tangent(h);
         if (!solve()) {
           ok = false;
           failure = solve_failure;
@@ -313,6 +317,7 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
                         test_name, value, tol);
           failure = msg;
           ok = false;
+          kept_tangent = false;  // OpenSees: factorOnce = 1 after a failed test
           break;
         }
         ++iter;
@@ -346,14 +351,14 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     for (int r = 1; r <= max_retries; ++r) {
       ++rep.retries;
       if (trace_events)
-        std::printf("femorax-event|RETRY|%s|%d|%d|%.17g|%.17g\n", an.name.c_str(), r, max_retries, h, time);
+        std::printf("femorax-event|RETRY|%s|%d|%d|%.15g|%.17g\n", an.name.c_str(), r, max_retries, h, time + h);
       if (attempt(h)) return true;
     }
     if (level >= num_sublevels) return false;
     ++rep.substepped;
     const double hs = h / static_cast<double>(num_substeps);
     if (trace_events)
-      std::printf("femorax-event|SUBSTEP|%s|%d|%.17g|%.17g\n", an.name.c_str(), level + 1, hs, time);
+      std::printf("femorax-event|SUBSTEP|%s|%d|%.15g|%.17g\n", an.name.c_str(), level + 1, hs, time);
     for (int i = 0; i < num_substeps; ++i)
       if (!recover(hs, level + 1)) return false;
     return true;
@@ -384,7 +389,8 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
       std::snprintf(recovery, sizeof(recovery), "; recovery: %lld retries, %lld steps split into substeps",
                     static_cast<long long>(rep.retries), static_cast<long long>(rep.substepped));
     std::printf("femorax: stage %s: %s, %s, %lld steps, %.2f Newton and %.1f %s+%s iterations per step%s%s\n",
-                an.name.c_str(), io::to_string(an.integrator), linear ? "Linear" : "Newton",
+                an.name.c_str(), io::to_string(an.integrator),
+                linear ? "Linear" : modified ? "ModifiedNewton" : "Newton",
                 static_cast<long long>(rep.steps), static_cast<double>(rep.newton_iterations) / rep.commits,
                 static_cast<double>(rep.krylov_iterations) / std::max<std::int64_t>(1, rep.newton_iterations),
                 rep.solver.c_str(), rep.preconditioner.c_str(), rep.fell_back ? " (CG fell back to GMRES)" : "",
