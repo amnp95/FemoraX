@@ -115,6 +115,13 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
       b.nnode = Elem::NNODE;
       b.ndof = Elem::NDOF;
       b.nstate = Elem::NSTATE;
+      if constexpr (Elem::GEOMETRY_CACHEABLE) b.geometry_doubles = Elem::NGEOM * Elem::NGP + element_constant_count<Elem>();
+      {
+        using Mat = typename Elem::Material;
+        constexpr int NS = Mat::NSTRAIN;
+        if (!Mat::CONSTANT_TANGENT) b.tangent_doubles = Elem::NGP * (is_symmetric(Mat::TANGENT) ? NS * (NS + 1) / 2 : NS * NS);
+        b.tangent = Mat::TANGENT;
+      }
       if constexpr (SplitMaterial<typename Elem::Material> && RebindableElement<Elem>) {
         constexpr int NS = Elem::Material::NSTRAIN;
         b.compact_bytes = Elem::NGP * ((2 * NS + NS * NS) * 8 + 2 * 4);

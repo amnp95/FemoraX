@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "compile/batches.hpp"
 #include "compile/renumber.hpp"
 #include "io/model.hpp"
 
@@ -64,5 +65,12 @@ struct RunReport {
 
 // Throws io::ModelError (instability, NaN, memory) and io::UnsupportedComponent.
 RunReport run_model(const io::Model& model, const RunOptions& options);
+
+// Device bytes a run of `model` allocates (checked against free memory before allocating):
+// the compile step's data, the force object's vectors and gather, the geometry cache and
+// element constants (assumed built), the implicit stages' vectors, stored tangents and
+// Krylov work vectors (GMRES's basis when a stage's operator may be non-SPD), and the
+// recorders. test_memory_estimate checks it against the allocated peak.
+std::int64_t estimate_device_bytes(const io::Model& model, const compile::Compiled& c);
 
 }  // namespace femorax::exec

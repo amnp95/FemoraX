@@ -46,6 +46,14 @@ struct Batch {
   // Bytes per element of the compacted corrector path's buffers (exec/compacted_kernels.hpp:
   // stress, tangent and strain per point, a flag and a list entry), for split materials.
   int compact_bytes = 0;
+  // Doubles per element of the geometry cache (and the element constants built with it); 0
+  // when the element's geometry may not be cached.
+  int geometry_doubles = 0;
+  // Doubles per element of the stored Gauss-point tangents of implicit stages (packed when
+  // the tangent is declared symmetric); 0 for materials with a constant tangent.
+  int tangent_doubles = 0;
+  // The material's declared tangent symmetry.
+  TangentSymmetry tangent = TangentSymmetry::SymmetricPositiveDefinite;
   std::int32_t count = 0;   // real elements
   std::int32_t padded = 0;  // count rounded up to the SIMD width
   std::vector<std::int32_t> tag;    // [padded]; -1 for padding
@@ -96,6 +104,10 @@ Compiled compile_model(const io::Model& model, const CompileOptions& options);
 
 // Bytes the device needs for the compiled model and an explicit stage: coordinates, maps,
 // parameters, state, colorings, and the u, v, a, f, mass and external-force vectors.
+// Device bytes of what the compile step's data needs on the device: coordinates, the
+// batches' maps, material state and compacted-corrector buffers, parameter sets, colors.
+// The run adds the force object's vectors, the gather, the geometry cache, the solvers and
+// the recorders (exec::estimate_device_bytes).
 std::int64_t memory_estimate_bytes(const Compiled& c);
 
 }  // namespace femorax::compile

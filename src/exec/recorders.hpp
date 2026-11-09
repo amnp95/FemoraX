@@ -45,6 +45,9 @@ class Recorders {
   using Vec = Kokkos::View<double*, Space>;
 
   Recorders(const io::Model& model, const compile::Compiled& c);
+  // Bytes the constructor will allocate in the default memory space (the staging buffer and
+  // the equation maps, and on host backends the two pinned buffers), without allocating.
+  static std::int64_t device_bytes_estimate(const io::Model& model, const compile::Compiled& c);
   ~Recorders();
   Recorders(const Recorders&) = delete;
   Recorders& operator=(const Recorders&) = delete;

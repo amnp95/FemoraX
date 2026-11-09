@@ -126,6 +126,39 @@ std::string gb(std::int64_t b) {
 
 }  // namespace
 
+std::int64_t estimate_device_bytes(const io::Model& model, const compile::Compiled& c) {
+  const std::int64_t neq = c.dofs.num_equations;
+  std::int64_t nslots = 0, geometry = 0, tangents = 0;
+  bool non_spd = false;
+  for (const auto& b : c.batches) {
+    nslots += static_cast<std::int64_t>(b.ndof) * b.padded;
+    geometry += static_cast<std::int64_t>(b.geometry_doubles) * b.padded * 8;
+    tangents += static_cast<std::int64_t>(b.tangent_doubles) * b.padded * 8;
+    if (b.tangent != TangentSymmetry::SymmetricPositiveDefinite &&
+        b.tangent != TangentSymmetry::SymmetricPositiveSemidefinite)
+      non_spd = true;
+  }
+  std::int64_t bytes = compile::memory_estimate_bytes(c);
+  bytes += 2 * nslots * 8 + (neq + 1) * 8;  // gather: slots, their list, each equation's start
+  bytes += geometry;                        // geometry cache and element constants
+  bytes += 3 * neq * 8;                     // velocity, previous displacement, acceleration
+  bool implicit = false, gmres = non_spd;
+  for (const auto& s : model.process)
+    if (const auto* a = std::get_if<io::AnalysisStep>(&s.step); a && !io::is_explicit(a->integrator)) {
+      implicit = true;
+      // A static stage has no mass term: a semi-definite tangent gives a non-SPD operator.
+      if (a->type == io::AnalysisType::Static) gmres = gmres || tangents > 0;
+    }
+  if (implicit) {
+    bytes += 10 * neq * 8;  // Newmark predictor, increment, residual, M r (3), work
+    bytes += 7 * neq * 8;   // CG (4), its initial guess, Jacobi diagonal and inverse
+    bytes += tangents;      // stored Gauss-point tangents
+    if (gmres) bytes += (2 * 30 + 3) * neq * 8;  // GMRES(30): basis V, Z, w, r
+  }
+  bytes += Recorders::device_bytes_estimate(model, c);
+  return bytes;
+}
+
 RunReport run_model(const io::Model& model, const RunOptions& opt) {
   RunReport rep;
   const double t_start = now();
@@ -142,9 +175,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
 
   // Memory check before allocating anything on the device.
   const std::int64_t neq = c.dofs.num_equations;
-  std::int64_t nslots = 0;
-  for (const auto& b : c.batches) nslots += static_cast<std::int64_t>(b.ndof) * b.padded;
-  rep.device_bytes_estimate = compile::memory_estimate_bytes(c) + 6 * neq * 8 + 3 * nslots * 8;
+  rep.device_bytes_estimate = estimate_device_bytes(model, c);
   rep.device_bytes_free = device_free_memory_bytes();
   if (rep.device_bytes_free > 0 && rep.device_bytes_estimate > rep.device_bytes_free / 10 * 9) {
     throw io::ModelError("the model needs about " + gb(rep.device_bytes_estimate) + " of device memory, but " +

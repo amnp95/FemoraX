@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <map>
 #include <set>
+#include <type_traits>
 #include <unordered_map>
 
 #include "io/h5.hpp"
@@ -85,6 +86,28 @@ io::VtkhdfMesh build_mesh(const io::Model& m, const std::vector<std::int32_t>& o
 }
 
 }  // namespace
+
+std::int64_t Recorders::device_bytes_estimate(const io::Model& m, const compile::Compiled& c) {
+  (void)c;
+  std::int64_t values = 0, columns = 0;
+  for (const auto& rec : m.recorders) {
+    if (const auto* nr = std::get_if<io::NodeRecorder>(&rec.data)) {
+      const auto n = static_cast<std::int64_t>(nr->nodes.size() * nr->dofs.size());
+      columns += n;
+      values += n;
+    } else if (const auto* vr = std::get_if<io::VtkhdfRecorder>(&rec.data)) {
+      std::vector<std::int32_t> point_nodes;
+      const io::VtkhdfMesh mesh = build_mesh(m, vr->elements, point_nodes);
+      const auto cols = static_cast<std::int64_t>(point_nodes.size()) * 3;
+      std::int64_t node_resp = 0, cell_resp = 0;
+      for (const auto& s : vr->responses) (s == "stress3D6" || s == "strain3D6" ? cell_resp : node_resp) += 1;
+      columns += cols;
+      values += node_resp * cols + cell_resp * static_cast<std::int64_t>(mesh.ele_tags.size()) * 6;
+    }
+  }
+  constexpr bool host = std::is_same_v<Space::memory_space, Kokkos::HostSpace>;
+  return values * 8 + columns * 4 + (host ? 2 * values * 8 : 0);
+}
 
 Recorders::Recorders(const io::Model& m, const compile::Compiled& c) {
   std::unordered_map<std::int32_t, std::int32_t> internal;

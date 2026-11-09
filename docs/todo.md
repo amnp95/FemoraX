@@ -28,3 +28,15 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
    ModifiedNewton both converge linearly (about 0.7 per iteration in the re-equilibration
    of Femora's example: 26 to 31 iterations to NormUnbalance 1e-7). A Krylov-accelerated
    Newton would cut that; it would be a new algorithm and a deviation from OpenSees.
+8. **Implicit stages are slow and fragile at scale.** Seen on the 30 x 30 x 25 and 60 x 60 x 25
+   PressureDependMultiYield columns (2026-11-09): the implicit gravity and re-equilibration
+   took 450 s of an 808 s CPU run (Jacobi CG, 150 to 330 iterations per solve); in the
+   plastic re-equilibration Newton falls into a 2-cycle (CPU) or stalls (GPU) and
+   ModifiedNewton -factoronce fails at step 2; and the absolute tolerances of Femora's
+   stages (NormUnbalance 1e-7) do not scale with the model. Candidates: matrix-free
+   multigrid (the CG cost), KrylovNewton (item 7), and an optional explicit relaxation stage
+   (damped explicit dynamics run to equilibrium) in place of the implicit gravity and
+   re-equilibration.
+9. **Output size.** VTKHDF of every node and element every 0.05 s is 160 MB for 30 x 30 x 25
+   and 632 MB for 60 x 60 x 25 over 2 s. Options: single-precision VTKHDF output (optional;
+   femora.results must read it), and recording a region only.

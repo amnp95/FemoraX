@@ -18,6 +18,7 @@ add_executable(femorax_unit_tests
   unit/test_ssp_brick_reference.cpp
   unit/test_pdmy.cpp
   unit/test_pdmy_reference.cpp
+  unit/test_memory_estimate.cpp
   unit/test_pimy.cpp
   unit/test_pimy_reference.cpp
   unit/test_material_state.cpp
