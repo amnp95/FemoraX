@@ -505,6 +505,65 @@ RECOVERY_CASES = [
      m_static(extra={"num_sublevels": I32(1), "num_substeps": I32(2)})),
 ]
 
+# --- schema 0.6: the H5DRM pattern (its data file: write_drm_file) ---
+def m_h5drm(attrs=None, drop=(), transform=True, version=None, file="drm_fixture.h5drm"):
+    """Add /patterns/7 of type H5DRM (and activate it after the UniformExcitation)."""
+    def m(f):
+        g = f["patterns"].create_group("7")
+        a = {"type": "H5DRM", "file": file, "factor": np.float64(1.0), "crd_scale": np.float64(1.0),
+             "distance_tolerance": np.float64(1e-3), "do_coordinate_transformation": np.int32(1)}
+        a.update(attrs or {})
+        for k, v in a.items():
+            if k not in drop:
+                g.attrs[k] = v
+        if transform:
+            g.create_dataset("transform", data=np.eye(3))
+            g.create_dataset("origin", data=np.zeros(3))
+        names = sorted(f["process"])
+        width = len(names[0])
+        s = f["process"].create_group(f"{len(names):0{width}d}")
+        s.attrs["kind"] = "pattern"
+        s.attrs["tag"] = np.int32(7)
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
+
+
+def write_drm_file(path: Path) -> None:
+    """A minimal file in OpenSees' H5DRM layout: 8 stations at the corners of a unit cube,
+    two time samples of zero motion."""
+    xyz = np.array([[x, y, z] for z in (0.0, 1.0) for y in (0.0, 1.0) for x in (0.0, 1.0)])
+    with h5py.File(path, "w", libver=("earliest", "v110")) as f:
+        d = f.create_group("DRM_Data")
+        d.create_dataset("xyz", data=xyz)
+        d.create_dataset("internal", data=np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=np.int32))
+        d.create_dataset("data_location", data=np.arange(0, 24, 3, dtype=np.int32))
+        d.create_dataset("displacement", data=np.zeros((24, 2)))
+        d.create_dataset("acceleration", data=np.zeros((24, 2)))
+        md = f.create_group("DRM_Metadata")
+        for k, v in {"dt": 0.01, "tstart": 0.0, "tend": 0.01, "drmbox_xmin": 0.0, "drmbox_xmax": 1.0,
+                     "drmbox_ymin": 0.0, "drmbox_ymax": 1.0, "drmbox_zmin": 0.0, "drmbox_zmax": 1.0}.items():
+            md.create_dataset(k, data=np.float64(v))
+        md.create_dataset("drmbox_x0", data=np.zeros(3))
+
+
+DRM_CASES = [
+    # valid in the schema; this build refuses it until the H5DRM pattern runs
+    ("h5drm", "explicit", "unsupported", "the H5DRM pattern", m_h5drm()),
+    ("h5drm_no_transform", "explicit", "unsupported", "the H5DRM pattern",
+     m_h5drm({"do_coordinate_transformation": np.int32(0)}, transform=False)),
+    ("h5drm_in_0_5_file", "explicit", "invalid", "was added in schema 0.6", m_h5drm(version=[0, 5])),
+    ("h5drm_missing_file", "explicit", "invalid", "does not exist", m_h5drm(file="no_such_file.h5drm")),
+    ("h5drm_tolerance", "explicit", "invalid", "distance_tolerance' must be positive",
+     m_h5drm({"distance_tolerance": np.float64(0.0)})),
+    ("h5drm_crd_scale", "explicit", "invalid", "crd_scale' must be finite and non-zero",
+     m_h5drm({"crd_scale": np.float64(0.0)})),
+    ("h5drm_transform_flag", "explicit", "invalid", "must be 0 or 1",
+     m_h5drm({"do_coordinate_transformation": np.int32(2)})),
+    ("h5drm_transform_missing", "explicit", "invalid", "transform", m_h5drm(transform=False)),
+    ("h5drm_missing_factor", "explicit", "invalid", "attribute 'factor'", m_h5drm(drop=("factor",))),
+]
+
 S = "/process/{explicit}"  # placeholder resolved below
 
 CASES = [
@@ -521,7 +580,7 @@ CASES = [
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 0.x files", m_version(1, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 6)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 7)),
     # --- schema 0.3: Static / LoadControl, ModifiedNewton, solver attributes ---------
     ("static_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
      m_static(version=[0, 2])),
@@ -652,7 +711,8 @@ def main() -> int:
     out = Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
     rows = []
-    for name, base, expect, text, mutate in CASES + SOIL_CASES + RECOVERY_CASES:
+    write_drm_file(out / "drm_fixture.h5drm")
+    for name, base, expect, text, mutate in CASES + SOIL_CASES + RECOVERY_CASES + DRM_CASES:
         path = out / f"{name}.femorax.h5"
         if base is None:
             path.write_text("this is not an HDF5 file\n")

@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 0.5
+# FemoraX model file, schema version 0.6
 
-Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 approved 2026-11-09**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 and 0.6 approved 2026-11-09**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -19,6 +19,8 @@ Scope: what milestone 1 needs to run Femora's layered elastic soil column
   element responses `stress3D6` and `strain3D6`. The reader accepts them; a build runs
   them once each is ported and verified (milestone 2), and until then refuses them as
   "not available yet".
+- **4, DRM basin (0.6):** the `H5DRM` pattern (the Domain Reduction Method input motion), its
+  data in its own HDF5 file.
 
 Everything else stops the reader with a message that names the component and suggests the
 OpenSees backend (see "Unsupported components").
@@ -48,6 +50,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.2 | equalDOF: optional `command` dataset (which `equalDOF` command each row comes from) |
 | 0.4 | nD materials `PressureDependMultiYield` and `PressureIndependMultiYield` (with the optional `pairs` dataset); process step `update_material_stage`; VTKHDF responses `stress3D6`, `strain3D6` |
 | 0.5 | Femora's retry and substep recovery defined: `max_retries`, `num_sublevels`, `num_substeps` (attributes since 0.0) with their rules |
+| 0.6 | pattern type `H5DRM` (the DRM data in its own file) |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
@@ -293,6 +296,29 @@ Effective load `-M * r * factor * a_g(t)` through each element's mass, as OpenSe
 `addInertiaLoadToUnbalance`, plus nodal masses from `/mass`. Responses are relative to the
 ground, as in OpenSees.
 
+**H5DRM** *(since 0.6)*: `pattern H5DRM <tag> "<file>" <factor> <crdScale> <distanceTolerance>
+<doCoordinateTransformation> <T00> ... <T22> <x00> <x01> <x02>`, Femora's
+`model.pattern.h5drm`.
+
+| Item | Shape, type | Meaning |
+|---|---|---|
+| attr `type` | string | `"H5DRM"` |
+| attr `file` | string | the DRM file (OpenSees' H5DRM layout: `DRM_Data/xyz`, `internal`, `data_location`, `displacement`, `acceleration`, `DRM_Metadata/dt`, `tstart`, `tend`, `drmbox_*`); a relative path is relative to the model file's folder. It must exist when the model is read |
+| attr `factor` | float64 | `<factor>` |
+| attr `crd_scale` | float64 | `<crdScale>`, finite and non-zero |
+| attr `distance_tolerance` | float64 | `<distanceTolerance>`, positive: a mesh node matches the nearest DRM station closer than this |
+| attr `do_coordinate_transformation` | int32 | 0 or 1 |
+| `transform` | `[3, 3]` float64 *(required when the transformation is on)* | `T` (row-major `T00 T01 T02 / T10 ...`) |
+| `origin` | `[3]` float64 *(required when the transformation is on)* | `x0` |
+
+With the transformation on, each station `x` is placed at `T (crd_scale (x - drmbox_x0)) + x0`,
+as OpenSees does. The DRM elements are the elements all of whose nodes match a station; each
+one with both boundary (`internal`) and exterior nodes receives the effective forces
+`-M_be a_e - K_be u_e` (boundary nodes) and `M_eb a_b + K_eb u_b` (exterior nodes), with the
+motion interpolated linearly in time between the file's samples (OpenSees
+`H5DRMLoadPattern::CalculateBoundaryForces`). The DRM layer must stay linear: FemoraX refuses
+DRM elements whose material has history state.
+
 ### 3.10 `/recorders/<name>` *(optional)*
 
 Like patterns, a recorder starts recording when a `recorder` step in `/process` activates
@@ -420,8 +446,8 @@ The reader stops on these, naming the component and suggesting the OpenSees back
   `ElasticIsotropic`, `PressureDependMultiYield` and `PressureIndependMultiYield` (and those
   two with `nd = 2`), any section or transformation;
 - `ndm != 3`;
-- other time series (`Linear`, `Constant`, `Trig`, ...), patterns (`Plain`, `MultipleSupport`,
-  `H5DRM`), loads (`load`, `eleLoad`, `sp` in patterns);
+- other time series (`Linear`, `Constant`, `Trig`, ...), patterns (`Plain`, `MultipleSupport`),
+  loads (`load`, `eleLoad`, `sp` in patterns);
 - MP constraints other than equalDOF (`rigidDiaphragm`, `rigidLink`, ...), node regions,
   global `rayleigh`, other damping types;
 - recorders other than Node and VTKHDF, Node recorder output other than `-file`

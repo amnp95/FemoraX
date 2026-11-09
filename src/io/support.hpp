@@ -17,6 +17,8 @@ struct Capabilities {
   bool pressure_independ_multi_yield = true;
   bool material_stages = true;            // the update_material_stage action
   bool vtkhdf_element_responses = true;   // VTKHDF stress3D6, strain3D6
+  // Milestone 4 (schema 0.6), switched on when it runs:
+  bool h5drm = false;                     // the H5DRM pattern
 };
 
 // Throws UnsupportedComponent naming the first thing the build cannot run, or ModelError

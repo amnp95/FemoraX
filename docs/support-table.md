@@ -51,7 +51,8 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 |---|---|---|
 | UniformExcitation | in progress (1a) | runs on the device; `-accel`, `-fact`, `-vel0`; matches OpenSees in the system test |
 | Path time series | in progress (1a) | uniform `-dt` and `-time` forms, evaluated on the device exactly as PathSeries / PathTimeSeries (`test_ground_motion`); `-time` with `use_last` or `prepend_zero` refused (OpenSees ignores them) |
-| Plain, MultipleSupport, H5DRM | planned | |
+| H5DRM | in progress (milestone 4) | schema 0.6: read and validated (the DRM file must exist); refused as "not available yet" until it runs |
+| Plain, MultipleSupport | planned | |
 
 ## Integrators
 

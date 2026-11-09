@@ -20,7 +20,7 @@ struct SchemaVersion {
 
 // The schema version this reader implements. It reads files of the same major version
 // with a minor version up to this one.
-inline constexpr SchemaVersion reader_schema_version{0, 5};
+inline constexpr SchemaVersion reader_schema_version{0, 6};
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
 struct Metadata {
@@ -135,6 +135,20 @@ struct UniformExcitation {
   Metadata meta;
 };
 
+// The Domain Reduction Method input motion (schema 0.6): OpenSees' H5DRM pattern, Femora's
+// model.pattern.h5drm. The DRM data (station coordinates, flags, displacement and
+// acceleration histories) stays in its own HDF5 file.
+struct H5DrmPattern {
+  std::int32_t tag = 0;
+  std::string file;  // as written in the model file
+  std::string path;  // resolved: relative paths are relative to the model file's folder
+  double factor = 1.0, crd_scale = 1.0, distance_tolerance = 1e-6;
+  bool do_coordinate_transformation = false;
+  double T[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+  double x0[3] = {0, 0, 0};
+  Metadata meta;
+};
+
 // ---------------------------------------------------------------------------
 enum class NodeResponse { Disp, Vel, Accel };
 
@@ -246,6 +260,7 @@ struct Model {
   std::vector<RayleighRegion> rayleigh;
   std::vector<PathSeries> time_series;
   std::vector<UniformExcitation> patterns;
+  std::vector<H5DrmPattern> drm_patterns;  // schema 0.6
   std::vector<Recorder> recorders;
   std::vector<ProcessStep> process;
 

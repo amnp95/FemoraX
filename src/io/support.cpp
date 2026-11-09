@@ -34,6 +34,10 @@ void check_supported(const Model& m, const Capabilities& caps) {
       unsupported("Node recorder " + r.name + " with -timeSeries (absolute response) is not available yet");
     }
   }
+  for (const auto& p : m.drm_patterns) {
+    const std::string where = "/patterns/" + std::to_string(p.tag);
+    if (!caps.h5drm) unsupported("the H5DRM pattern (" + where + ") is not available yet (milestone 4)");
+  }
   for (const auto& mat : m.materials) {
     const bool pdmy = std::holds_alternative<PressureDependMultiYieldData>(mat.data);
     const bool pimy = std::holds_alternative<PressureIndependMultiYieldData>(mat.data);

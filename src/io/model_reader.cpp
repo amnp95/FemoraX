@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+
+#include <sys/stat.h>
 #include <map>
 #include <set>
 #include <sstream>
@@ -519,15 +521,65 @@ void read_time_series(Group& root, Model& m) {
   ts->finish();
 }
 
-void read_patterns(Group& root, Model& m) {
+H5DrmPattern read_h5drm(Group& g, std::int32_t tag, const Model& m, const std::string& model_file) {
+  require_minor(m, 6, g.path() + " (type \"H5DRM\")");
+  H5DrmPattern d;
+  d.tag = tag;
+  d.file = g.attr_string("file");
+  if (d.file.empty()) invalid(g.attr_item("file") + " is empty");
+  // (std::filesystem would bring std::quoted into this file's overload sets.)
+  if (d.file.front() == '/') {
+    d.path = d.file;
+  } else {
+    const auto slash = model_file.find_last_of('/');
+    d.path = slash == std::string::npos ? d.file : model_file.substr(0, slash + 1) + d.file;
+  }
+  struct stat st {};
+  if (::stat(d.path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+    invalid(g.attr_item("file") + ": the DRM file " + quoted(d.path) + " does not exist");
+  }
+  d.factor = g.attr_double("factor");
+  d.crd_scale = g.attr_double("crd_scale");
+  d.distance_tolerance = g.attr_double("distance_tolerance");
+  const std::int32_t t = g.attr_int("do_coordinate_transformation");
+  require_finite(d.factor, g.attr_item("factor"));
+  if (!(std::isfinite(d.crd_scale) && d.crd_scale != 0.0)) invalid(g.attr_item("crd_scale") + " must be finite and non-zero");
+  if (!(d.distance_tolerance > 0.0 && std::isfinite(d.distance_tolerance))) {
+    invalid(g.attr_item("distance_tolerance") + " must be positive");
+  }
+  if (t != 0 && t != 1) invalid(g.attr_item("do_coordinate_transformation") + " must be 0 or 1");
+  d.do_coordinate_transformation = t == 1;
+  if (g.has_child("transform") || t == 1) {
+    auto a = g.dataset_double("transform", 3);
+    if (a.rows() != 3) invalid(g.item("transform") + " must be 3 x 3");
+    require_finite(a.data, g.item("transform"));
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) d.T[i][j] = a.data[static_cast<std::size_t>(3 * i + j)];
+  }
+  if (g.has_child("origin") || t == 1) {
+    auto a = g.dataset_double("origin");
+    if (a.data.size() != 3) invalid(g.item("origin") + " must have 3 values");
+    require_finite(a.data, g.item("origin"));
+    for (int i = 0; i < 3; ++i) d.x0[i] = a.data[static_cast<std::size_t>(i)];
+  }
+  d.meta = read_meta(g);
+  return d;
+}
+
+void read_patterns(Group& root, Model& m, const std::string& model_file) {
   auto ps = root.optional_group("patterns");
   if (!ps) return;
   for (const auto& name : ps->children()) {
     const std::int32_t tag = parse_tag(name, ps->path());
     Group g = ps->group(name);
     const std::string type = g.attr_string("type");
+    if (type == "H5DRM") {
+      m.drm_patterns.push_back(read_h5drm(g, tag, m, model_file));
+      g.finish();
+      continue;
+    }
     if (type != "UniformExcitation") {
-      unsupported("pattern type " + quoted(type) + " in " + g.path(), "UniformExcitation");
+      unsupported("pattern type " + quoted(type) + " in " + g.path(), "UniformExcitation, H5DRM");
     }
     UniformExcitation u;
     u.tag = tag;
@@ -942,6 +994,7 @@ void validate(Model& m) {
   int max_ndf = 0;
   for (auto v : m.nodes.ndf) max_ndf = std::max(max_ndf, static_cast<int>(v));
   std::unordered_set<std::int32_t> patterns;
+  for (const auto& p : m.drm_patterns) patterns.insert(p.tag);
   for (const auto& p : m.patterns) {
     const std::string where = "/patterns/" + std::to_string(p.tag);
     patterns.insert(p.tag);
@@ -1029,7 +1082,7 @@ Model read_model(const std::string& filename) {
   read_constraints(root, m);
   read_damping(root, m);
   read_time_series(root, m);
-  read_patterns(root, m);
+  read_patterns(root, m, filename);
   read_recorders(root, m);
   read_process(root, m);
   root.finish();
