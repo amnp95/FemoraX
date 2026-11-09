@@ -5,6 +5,10 @@
         [--element stdBrick|SSPbrick] [--soil dense|loose|layered] [--amp A] [--tol T]
         [--shaking implicit|explicit]
         [--vtkhdf DT]  (also a VTKHDF recorder: disp vel accel stress3D6 strain3D6 every DT)
+        [--record-dt DT]  (the node recorders sample every DT of time instead of every step)
+        [--equilibration modified|newton]  (stage 4's algorithm; newton is not Femora's: its
+            ModifiedNewton -factoronce with NormUnbalance 1e-7 fails in OpenSees on columns of
+            25 elements, so longer reference columns use Newton there)
 
 The mesh of make_models.py (base fixed, the laminar boundary as Femora writes it), with
 Femora's soils of examples/site_response/nonlinear_layered_soil_column.py (dense Ottawa,
@@ -15,7 +19,8 @@ Femora's frequency-Rayleigh damping (2.76 and 13.84 Hz, 3%), stdBrick with consi
   1. updateMaterialStage -stage 0 for every soil;
   2. gravity: Newmark 0.6 / 0.3025, dt 1, 30 steps, Newton, NormUnbalance 1e-7 (30);
   3. updateMaterialStage -stage 1;
-  4. re-equilibration: the same integrator, dt 0.01, 100 steps, ModifiedNewton -factoronce;
+  4. re-equilibration: the same integrator, dt 0.01, 100 steps, ModifiedNewton -factoronce
+     (or Newton with --equilibration newton);
   5. the UniformExcitation pattern (make_models.py's sine sweep times A), the recorders,
      setTime 0;
   6. shaking: Newmark 0.5 / 0.25 at dt, Newton, NormDispIncr T (default 1e-10; 25 iterations), while
@@ -67,7 +72,7 @@ def rayleigh():  # Femora's frequency_rayleigh(f1=2.76, f2=13.84, damping_factor
     return (2 * xi * w1 * w2 / (w1 + w2), 2 * xi / (w1 + w2), 0.0, 0.0)
 
 
-def stages(duration: float, dt: float, tol: float = 1e-10, explicit: bool = False):
+def stages(duration: float, dt: float, tol: float = 1e-10, explicit: bool = False, equilibration: str = "modified"):
     base = {"constraint_handler": "Transformation", "numberer": "RCM", "system": "BandGeneral",
             "analysis_type": "Transient", "integrator": "Newmark"}
     g = {**base, "name": "elastic_gravity", "algorithm": "Newton", "test_type": "NormUnbalance",
@@ -75,6 +80,11 @@ def stages(duration: float, dt: float, tol: float = 1e-10, explicit: bool = Fals
     q = {**base, "name": "plastic_equilibration", "algorithm": "ModifiedNewton", "modified_newton_factor_once": 1,
          "test_type": "NormUnbalance", "test_tol": 1e-7, "test_max_iter": 30, "gamma": 0.6, "beta": 0.3025,
          "dt": 0.01, "num_steps": 100}
+    if equilibration == "newton":
+        q = {k: v for k, v in q.items() if k != "modified_newton_factor_once"}
+        q["algorithm"] = "Newton"
+    elif equilibration != "modified":
+        raise SystemExit(f"--equilibration {equilibration}: modified or newton")
     s = {**base, "name": "shaking", "algorithm": "Newton", "test_type": "NormDispIncr", "test_tol": tol,
          "test_max_iter": 25, "gamma": 0.5, "beta": 0.25, "dt": dt, "final_time": duration}
     if explicit:  # ExplicitDifference shaking (lumped mass: SSPbrick)
@@ -97,7 +107,7 @@ def tcl_stage(a: dict) -> list[str]:
             f"integrator Newmark {a['gamma']!r} {a['beta']!r}", "analysis Transient", loop]
 
 
-def write_tcl(m, soils, path: Path, g, q, s, amp, vtkhdf=None):
+def write_tcl(m, soils, path: Path, g, q, s, amp, vtkhdf=None, record_dt=None):
     out = ["wipe", "model BasicBuilder -ndm 3 -ndf 3"]
     for i, name in enumerate(soils):
         p = soil_params(name)
@@ -122,14 +132,15 @@ def write_tcl(m, soils, path: Path, g, q, s, amp, vtkhdf=None):
     out += ["pattern UniformExcitation 2 1 -accel 1"]
     nodes = " ".join(map(str, m["rec_nodes"]))
     for resp in ("disp", "vel", "accel"):
-        out.append(f"recorder Node -file opensees_{resp}.txt -precision 17 -time -node {nodes} -dof 1 2 3 {resp}")
+        every = f" -dT {record_dt!r}" if record_dt is not None else ""
+        out.append(f"recorder Node -file opensees_{resp}.txt -precision 17 -time{every} -node {nodes} -dof 1 2 3 {resp}")
     if vtkhdf is not None:
         out.append(f"recorder vtkhdf opensees.vtkhdf -dT {vtkhdf!r} disp vel accel stress3D6 strain3D6")
     out += ["setTime 0.0"] + tcl_stage(s) + ["wipe"]
     path.write_text("\n".join(out) + "\n")
 
 
-def write_femorax(m, soils, path: Path, g, q, s, amp, vtkhdf=None):
+def write_femorax(m, soils, path: Path, g, q, s, amp, vtkhdf=None, record_dt=None):
     nodes = m["nodes"]
     materials = {}
     for i, name in enumerate(soils):
@@ -153,8 +164,9 @@ def write_femorax(m, soils, path: Path, g, q, s, amp, vtkhdf=None):
     regions = {"000000": w.node(attrs={"alphaM": w.f64(ray[0]), "betaK": w.f64(ray[1]), "betaKinit": w.f64(0.0),
                                        "betaKcomm": w.f64(0.0)},
                                 data={"elements": w.i32([e for (e, _c, _m) in m["elements"]])})}
+    every = {"dT": w.f64(record_dt)} if record_dt is not None else {}
     recorders = {resp: w.node(attrs={"type": "Node", "file": f"femorax_{resp}.txt", "response": resp,
-                                     "time": w.u8(True), "precision": w.i32(17)},
+                                     "time": w.u8(True), "precision": w.i32(17), **every},
                               data={"nodes": w.i32(m["rec_nodes"]), "dofs": w.i32([1, 2, 3])})
                  for resp in ("disp", "vel", "accel")}
     if vtkhdf is not None:
@@ -207,7 +219,8 @@ def write_femorax(m, soils, path: Path, g, q, s, amp, vtkhdf=None):
 def main() -> int:
     argv = sys.argv[1:]
     mm.take_element_option(argv)
-    opts = {"--soil": "layered", "--amp": "3.0", "--tol": "1e-10", "--shaking": "implicit", "--vtkhdf": ""}
+    opts = {"--soil": "layered", "--amp": "3.0", "--tol": "1e-10", "--shaking": "implicit", "--vtkhdf": "",
+            "--record-dt": "", "--equilibration": "modified"}
     for k in list(opts):
         if k in argv:
             i = argv.index(k)
@@ -227,10 +240,11 @@ def main() -> int:
     soils = ["dense", "loose"] if soil == "layered" else [soil]
     if soil != "layered":
         m["elements"] = [(e, c, 0) for (e, c, _k) in m["elements"]]
-    g, q, s = stages(duration, dt, float(opts["--tol"]), opts["--shaking"] == "explicit")
+    g, q, s = stages(duration, dt, float(opts["--tol"]), opts["--shaking"] == "explicit", opts["--equilibration"])
     vt = float(opts["--vtkhdf"]) if opts["--vtkhdf"] else None
-    write_tcl(m, soils, out / "model.tcl", g, q, s, amp, vt)
-    write_femorax(m, soils, out / "model.femorax.h5", g, q, s, amp, vt)
+    rdt = float(opts["--record-dt"]) if opts["--record-dt"] else None
+    write_tcl(m, soils, out / "model.tcl", g, q, s, amp, vt, rdt)
+    write_femorax(m, soils, out / "model.femorax.h5", g, q, s, amp, vt, rdt)
     print(f"{nx}x{ny}x{nz} {mm.ELEMENT} column, PressureDependMultiYield ({soil}), shaking {duration} s at dt {dt}, "
           f"motion x{amp} -> {out}")
     return 0
