@@ -9,6 +9,11 @@
         [--equilibration modified|newton]  (stage 4's algorithm; newton is not Femora's: its
             ModifiedNewton -factoronce with NormUnbalance 1e-7 fails in OpenSees on columns of
             25 elements, so longer reference columns use Newton there)
+        [--equilibration-test TYPE:TOL]  (stage 4's convergence test, e.g. NormDispIncr:1e-9;
+            default NormUnbalance:1e-7, Femora's; an absolute force tolerance does not carry
+            over to wide columns)
+        [--lumped]  (stdBrick with a lumped mass, -lumped: what explicit shaking needs)
+        [--until T]  (end the shaking stage at T < duration; the motion stays that of duration)
 
 The mesh of make_models.py (base fixed, the laminar boundary as Femora writes it), with
 Femora's soils of examples/site_response/nonlinear_layered_soil_column.py (dense Ottawa,
@@ -44,6 +49,7 @@ import make_implicit as mi  # noqa: E402
 import make_models as mm  # noqa: E402
 
 w = mm.w
+LUMPED = False  # --lumped: stdBrick with a lumped mass
 
 # Femora's example (kN, m, s): name -> parameters in the order of the Tcl command.
 SOILS = {
@@ -97,7 +103,8 @@ def rayleigh():  # Femora's frequency_rayleigh(f1=2.76, f2=13.84, damping_factor
     return (2 * xi * w1 * w2 / (w1 + w2), 2 * xi / (w1 + w2), 0.0, 0.0)
 
 
-def stages(duration: float, dt: float, tol: float = 1e-10, explicit: bool = False, equilibration: str = "modified"):
+def stages(duration: float, dt: float, tol: float = 1e-10, explicit: bool = False, equilibration: str = "modified",
+           equilibration_test: str = ""):
     base = {"constraint_handler": "Transformation", "numberer": "RCM", "system": "BandGeneral",
             "analysis_type": "Transient", "integrator": "Newmark"}
     g = {**base, "name": "elastic_gravity", "algorithm": "Newton", "test_type": "NormUnbalance",
@@ -110,6 +117,9 @@ def stages(duration: float, dt: float, tol: float = 1e-10, explicit: bool = Fals
         q["algorithm"] = "Newton"
     elif equilibration != "modified":
         raise SystemExit(f"--equilibration {equilibration}: modified or newton")
+    if equilibration_test:
+        kind, value = equilibration_test.split(":")
+        q["test_type"], q["test_tol"] = kind, float(value)
     s = {**base, "name": "shaking", "algorithm": "Newton", "test_type": "NormDispIncr", "test_tol": tol,
          "test_max_iter": 25, "gamma": 0.5, "beta": 0.25, "dt": dt, "final_time": duration}
     if explicit:  # ExplicitDifference shaking (lumped mass: SSPbrick)
@@ -142,7 +152,8 @@ def write_tcl(m, soils, path: Path, g, q, s, amp, vtkhdf=None, record_dt=None):
     for (e, conn, mi_) in m["elements"]:
         b3 = -mm.GRAVITY * soil_params(soils[mi_])["rho"]
         kind = mm.ELEMENT
-        out.append(f"element {kind} {e} {' '.join(map(str, conn))} {mi_ + 1} 0.0 0.0 {b3!r}")
+        lumped = " -lumped" if LUMPED and kind == "stdBrick" else ""
+        out.append(f"element {kind} {e} {' '.join(map(str, conn))} {mi_ + 1} 0.0 0.0 {b3!r}{lumped}")
     for n in m["fixes"]:
         out.append(f"fix {n} 1 1 1")
     for (r, c) in m["ties"]:
@@ -182,7 +193,7 @@ def write_femorax(m, soils, path: Path, g, q, s, amp, vtkhdf=None, record_dt=Non
         a = {"type": mm.ELEMENT, "material": w.i32(i + 1),
              "body_force": w.f64([0.0, 0.0, -mm.GRAVITY * soil_params(name)["rho"]])}
         if mm.ELEMENT == "stdBrick":
-            a["lumped"] = w.u8(False)
+            a["lumped"] = w.u8(LUMPED)
         groups[f"{i:06d}"] = w.node(attrs=a, data={"tags": w.i32([e for e, _ in els]),
                                                    "connectivity": w.i32([c for _, c in els])})
     ray = rayleigh()
@@ -244,7 +255,12 @@ def write_femorax(m, soils, path: Path, g, q, s, amp, vtkhdf=None, record_dt=Non
 def main() -> int:
     argv = sys.argv[1:]
     mm.take_element_option(argv)
-    opts = {"--soil": "layered", "--amp": "3.0", "--tol": "1e-10", "--shaking": "implicit", "--vtkhdf": "",
+    global LUMPED
+    if "--lumped" in argv:
+        argv.remove("--lumped")
+        LUMPED = True
+    opts = {"--equilibration-test": "", "--soil": "layered", "--amp": "3.0", "--tol": "1e-10", "--shaking": "implicit",
+            "--vtkhdf": "", "--until": "",
             "--record-dt": "", "--equilibration": "modified"}
     for k in list(opts):
         if k in argv:
@@ -265,7 +281,8 @@ def main() -> int:
     soils = {"layered": ["dense", "loose"], "layered_clay": ["frictional", "clay"]}.get(soil, [soil])
     if len(soils) == 1:
         m["elements"] = [(e, c, 0) for (e, c, _k) in m["elements"]]
-    g, q, s = stages(duration, dt, float(opts["--tol"]), opts["--shaking"] == "explicit", opts["--equilibration"])
+    g, q, s = stages(float(opts["--until"]) if opts["--until"] else duration, dt, float(opts["--tol"]), opts["--shaking"] == "explicit", opts["--equilibration"],
+                     opts["--equilibration-test"])
     vt = float(opts["--vtkhdf"]) if opts["--vtkhdf"] else None
     rdt = float(opts["--record-dt"]) if opts["--record-dt"] else None
     write_tcl(m, soils, out / "model.tcl", g, q, s, amp, vt, rdt)

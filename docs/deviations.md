@@ -82,6 +82,29 @@ Default tolerances (until a component states otherwise):
   that slack (on the CPU they still agree to 2.6e-11 and 1.3e-12; on the GPU 7.0e-3 and
   9.9e-5); the PGA and the spectrum are what site response uses.
 
+- Wide columns (`tests/system/soil_column/wide_column_check.sh`, ctest
+  `system.wide_column_vs_stored_opensees`): an n x n x 25 SSPbrick column with laminar sides,
+  the layers and motion of `column25_ssp_explicit`, against that case's stored 1 x 1 x 25
+  OpenSees output; every node against the reference node at its height, every element
+  against the reference element of its layer, over the first 0.5 s of shaking. Relative
+  2e-5 (observed: 30 x 30 on the GPU 3.1e-6 in acceleration, 2.5e-7 in displacement,
+  1.1e-6 in strain; 6 x 6 on the CPU 3.4e-6, 2.7e-7, 6.4e-7). Not at rounding, for two
+  reasons found on the laptop runs (2026-11-09):
+  - The re-equilibration cannot use the single column's test. Its NormUnbalance 1e-7 is an
+    absolute force norm, which grows with the number of columns; scaled by the square root
+    of the equations, Newton still stalls in a 2-cycle (CPU: 1.3e-4 and 1.6e-4) or at 3e-4
+    (GPU) in the first plastic steps, and ModifiedNewton -factoronce fails at step 2. The
+    test uses NormDispIncr 1e-9 (2e-9 at 60 x 60): the cycle there moves the solution by
+    about 6e-10 in norm, 2e-12 per DOF. A 1 x 1 x 25 FemoraX run with that test differs
+    from the stored OpenSees run by only 2.7e-8.
+  - The columns do not stay identical. Rounding-level differences between columns
+    (different summation orders at interior and side nodes, the iterative solves) decide
+    some plastic loading or unloading branches differently from column to column in the
+    re-equilibration, so at the start of shaking the columns already differ by 5e-9
+    (displacement) and later plastic events spread that to 1e-7 (displacement) and up to
+    7e-6 (acceleration, at 2 s) between columns. The explicit shaking itself stays at
+    rounding (1 x 1 x 25: 6e-13 against OpenSees).
+
 ## Entry format
 
 ```

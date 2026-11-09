@@ -177,6 +177,23 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_nonlinear
                    ${femorax_backend})
   set_tests_properties(system.nonlinear_vs_stored_opensees PROPERTIES TIMEOUT 900)
+  # A wide column (n x n x 25, laminar sides) against the stored 1 x 1 x 25 OpenSees output:
+  # every vertical line must move as the single column does (docs/deviations.md, "Wide
+  # columns"). 30 x 30 on GPUs (about 2 minutes on the laptop); 6 x 6 in host Release builds
+  # (about 2 minutes; the 30 x 30 run takes 15). Not in Debug builds (cpu-debug, cpu-asan),
+  # where it would take far longer than the rest of the suite.
+  if(Kokkos_ENABLE_CUDA)
+    set(femorax_wide_n 30)
+  else()
+    set(femorax_wide_n 6)
+  endif()
+  if(Kokkos_ENABLE_CUDA OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+  add_test(NAME system.wide_column_vs_stored_opensees
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/wide_column_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_wide_column
+                   ${femorax_wide_n} 2e-5)
+  set_tests_properties(system.wide_column_vs_stored_opensees PROPERTIES TIMEOUT 900)
+  endif()
   # Femora's own nonlinear layered soil column (its example, exported by Femora, on a 2 s
   # window of its motion) against stored OpenSees output (femora_example_reference.sh).
   add_test(NAME system.femora_example_vs_stored_opensees

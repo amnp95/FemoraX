@@ -117,6 +117,14 @@ int main(int argc, char* argv[]) {
       if (opt.verbose) {
         std::printf("femorax: done in %.3f s (compile %.3f s, setup %.3f s), %lld records written\n",
                     r.total_seconds, r.compile_seconds, r.setup_seconds, static_cast<long long>(r.records));
+        std::printf("femorax: %lld equations, %lld elements; device memory estimate %.3f GB (%s free at start); "
+                    "force settings %s (%s)\n",
+                    static_cast<long long>(r.equations), static_cast<long long>(r.elements),
+                    static_cast<double>(r.device_bytes_estimate) / 1e9,
+                    r.device_bytes_free > 0
+                        ? (std::to_string(static_cast<double>(r.device_bytes_free) / 1e9).substr(0, 5) + " GB").c_str()
+                        : "unknown",
+                    r.force_settings.c_str(), r.force_settings_source.c_str());
       }
       return 0;
     } catch (const femorax::io::UnsupportedComponent& e) {
