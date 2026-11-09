@@ -20,7 +20,7 @@ struct SchemaVersion {
 
 // The schema version this reader implements. It reads files of the same major version
 // with a minor version up to this one.
-inline constexpr SchemaVersion reader_schema_version{0, 4};
+inline constexpr SchemaVersion reader_schema_version{0, 5};
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
 struct Metadata {

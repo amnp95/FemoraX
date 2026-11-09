@@ -6,6 +6,8 @@
 //     with exact solves; Linear, Newton and ModifiedNewton, every convergence test;
 //     consistent and lumped mass, all Rayleigh terms.
 //   - A step that cannot converge stops the run with a message.
+//   - Femora's retry and substep recovery (schema 0.5): a step that fails at full size is
+//     retried, then split into substeps, as the host recurrence does with the same rule.
 
 #include <Eigen/SparseCholesky>
 #include <Kokkos_Core.hpp>
@@ -15,6 +17,9 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -309,6 +314,155 @@ TEST(Implicit, GravityThenShakingAsFemoraWritesIt) {
   const std::vector<double> after_gravity(rows[29].begin() + 1, rows[29].end());
   EXPECT_LE(max_rel(after_gravity, settled), 1e-3);  // damped out after 30 large steps
   EXPECT_NEAR(rows[30][0], 2e-3, 1e-15);           // setTime 0, then t = dt
+}
+
+// Femora's recovery on the host: Newton with max_iter 1 and NormDispIncr on a linear
+// problem converges iff the first (exact) increment satisfies |dU| <= tol, so a step of size
+// h succeeds iff that increment is small enough. A failed step is retried (the same result),
+// then split into `substeps` steps down to `sublevels` levels. Returns the recorded rows and
+// counts the retries and the steps split.
+struct HostRecovery {
+  std::vector<std::vector<double>> rows;
+  long retries = 0, substepped = 0;
+  std::vector<double> full_increments;  // |dU| of each full-size attempt, in order
+};
+
+HostRecovery host_recovery(const io::Model& m, const compile::Compiled& c, double dt, int steps, double tol,
+                           int max_retries, int sublevels, int substeps) {
+  const auto ref = femorax::testing::assemble_reference(m, c);
+  const double gamma = 0.5, beta = 0.25;
+  const auto K = ref.to_eigen(ref.K), C = ref.to_eigen(ref.C), M = ref.to_eigen(ref.M);
+  const Eigen::Index n = K.rows();
+  const Eigen::VectorXd Mr = Eigen::Map<const Eigen::VectorXd>(ref.Mr[0].data(), n), P = body_force(c);
+  Eigen::VectorXd U = Eigen::VectorXd::Zero(n), V = U, A = U;
+  std::map<double, std::unique_ptr<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>> keff;
+  HostRecovery out;
+  double t = 0.0;
+  auto attempt = [&](double h) {
+    const double c2 = gamma / (beta * h), c3 = 1.0 / (beta * h * h);
+    auto& solver = keff[h];
+    if (!solver)
+      solver = std::make_unique<Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>>>(ref.to_eigen(ref.effective(1.0, c2, c3)));
+    const Eigen::VectorXd Vt = V, At = A;
+    Eigen::VectorXd Vp = V * (1.0 - gamma / beta) + At * (h * (1.0 - 0.5 * gamma / beta));
+    Eigen::VectorXd Ap = A * (1.0 - 0.5 / beta) + Vt * (-1.0 / (beta * h));
+    const double tn = t + h;
+    const Eigen::VectorXd B = P - K * U - C * Vp - M * Ap - ag_at(m.time_series[0], tn) * Mr;
+    const Eigen::VectorXd dU = solver->solve(B);
+    if (h == dt) out.full_increments.push_back(dU.norm());
+    if (!(dU.norm() <= tol)) return false;  // reverted: U, V, A, t untouched
+    U += dU;
+    V = Vp + c2 * dU;
+    A = Ap + c3 * dU;
+    t = tn;
+    std::vector<double> row = {t};
+    const auto rec = recorded(c, U);
+    row.insert(row.end(), rec.begin(), rec.end());
+    out.rows.push_back(row);
+    return true;
+  };
+  std::function<bool(double, int)> recover = [&](double h, int level) {
+    if (attempt(h)) return true;
+    for (int r = 0; r < max_retries; ++r) {
+      ++out.retries;
+      if (attempt(h)) return true;
+    }
+    if (level >= sublevels) return false;
+    ++out.substepped;
+    for (int i = 0; i < substeps; ++i)
+      if (!recover(h / substeps, level + 1)) return false;
+    return true;
+  };
+  for (int k = 0; k < steps; ++k)
+    if (!recover(dt, 0)) break;
+  return out;
+}
+
+TEST(Implicit, RetriesAndSubstepsRecoverStepsThatFailAtFullSize) {
+  const double dt = 4e-3;
+  const int steps = 30;
+  io::Model m = column(false);
+  add_motion(m);
+  m.process.push_back({"000000", "", io::PatternStep{2}});
+  compile::CompileOptions co;
+  co.renumbering = compile::Renumbering::Off;
+  const compile::Compiled c = compile::compile_model(m, co);
+  // The tolerance: between the full-size increments, so some steps fail at full size; the
+  // halves and quarters then pass. Away from every increment (CG solves to 1e-12, not exactly).
+  auto probe = host_recovery(m, c, dt, steps, 1e300, 0, 0, 2).full_increments;
+  std::sort(probe.begin(), probe.end());
+  const double tol = 0.5 * (probe[steps / 3] + probe[steps / 3 + 1]);
+  const auto want = host_recovery(m, c, dt, steps, tol, 1, 2, 2);
+  ASSERT_GT(want.substepped, 0);
+  // Both sublevels are used: some commits are quarter steps.
+  bool quarter = false;
+  for (std::size_t k = 1; k < want.rows.size(); ++k)
+    quarter = quarter || std::abs(want.rows[k][0] - want.rows[k - 1][0] - dt / 4) < 1e-12;
+  ASSERT_TRUE(quarter);
+  ASSERT_EQ(want.rows.back()[0], [&] {  // every step completed
+    double t = 0.0;
+    for (const auto& r : want.rows) t = r[0];
+    return t;
+  }());
+  for (double x : want.full_increments) ASSERT_GT(std::abs(x - tol), 1e-6 * tol);
+
+  auto a = newmark_step(io::Algorithm::Newton, dt, steps);
+  a.test_type = io::TestType::NormDispIncr;
+  a.test_tol = tol;
+  a.test_max_iter = 1;
+  a.max_retries = 1;
+  a.num_sublevels = 2;
+  a.num_substeps = 2;
+  m.process.push_back({"000001", "", a});
+  const std::string file = temp_file("recovery.txt");
+  add_recorder(m, file);
+  m.process.insert(m.process.begin(), {"recorder", "", io::RecorderStep{"disp"}});
+  exec::RunOptions o;
+  o.verbose = false;
+  o.renumbering = compile::Renumbering::Off;
+  const auto rep = exec::run_model(m, o);
+  const auto got = read_rows(file);
+  ASSERT_EQ(got.size(), want.rows.size());  // one record per commit, substeps included
+  double worst = 0.0, scale = 0.0;
+  for (std::size_t k = 0; k < got.size(); ++k) {
+    ASSERT_EQ(got[k][0], want.rows[k][0]) << "time of commit " << k;  // t += h, as OpenSees
+    for (std::size_t j = 1; j < got[k].size(); ++j) {
+      worst = std::max(worst, std::abs(got[k][j] - want.rows[k][j]));
+      scale = std::max(scale, std::abs(want.rows[k][j]));
+    }
+  }
+  EXPECT_LE(worst, 1e-8 * scale);
+  const auto& st = rep.stages.at(0);
+  EXPECT_EQ(st.steps, steps);
+  EXPECT_EQ(st.commits, static_cast<std::int64_t>(want.rows.size()));
+  EXPECT_EQ(st.retries, want.retries);
+  EXPECT_EQ(st.substepped, want.substepped);
+  std::printf("[ recovery: %d steps, %zu commits, %ld retries, %ld steps split ]\n", steps, want.rows.size(),
+              want.retries, want.substepped);
+}
+
+TEST(Implicit, RecoveryExhaustedStopsTheRun) {
+  io::Model m = column(false);
+  add_motion(m);
+  m.process.push_back({"000000", "", io::PatternStep{2}});
+  auto a = newmark_step(io::Algorithm::ModifiedNewton, 2e-3, 5);
+  a.modified_newton_factor_once = true;
+  a.test_tol = 0.0;  // unreachable
+  a.test_max_iter = 2;
+  a.max_retries = 2;
+  a.num_sublevels = 1;
+  a.num_substeps = 3;
+  m.process.push_back({"000001", "", a});
+  exec::RunOptions o;
+  o.verbose = false;
+  try {
+    exec::run_model(m, o);
+    FAIL() << "expected a convergence failure";
+  } catch (const io::ModelError& e) {
+    const std::string w = e.what();
+    EXPECT_NE(w.find("did not converge in 2 iterations"), std::string::npos) << w;
+    EXPECT_NE(w.find("recovery exhausted (2 retries, 1 sublevels of 3 substeps)"), std::string::npos) << w;
+  }
 }
 
 TEST(Implicit, ANonConvergingStepStopsTheRun) {

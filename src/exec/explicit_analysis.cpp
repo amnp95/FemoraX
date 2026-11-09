@@ -216,6 +216,9 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       st.steps = ir.steps;
       st.seconds = now() - t0;
       st.newton_iterations = ir.newton_iterations;
+      st.retries = ir.retries;
+      st.substepped = ir.substepped;
+      st.commits = ir.commits;
       st.krylov_iterations = ir.krylov_iterations;
       st.solver = ir.solver;
       if (!all_finite(u))

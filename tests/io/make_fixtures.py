@@ -481,6 +481,24 @@ SOIL_CASES = [
     ("vtkhdf_other_response", "explicit", "unsupported", 'VTKHDF response "stress2D3"', m_responses("disp stress2D3")),
 ]
 
+# --- schema 0.5: Femora's retry and substep recovery (the attributes exist since 0.0) ---
+I32 = np.int32
+RECOVERY_CASES = [
+    ("recovery", "implicit", "valid", "",
+     m_attrs({"max_retries": I32(1), "num_sublevels": I32(2), "num_substeps": I32(2)})),
+    ("recovery_static_retries", "implicit", "valid", "", m_static(extra={"max_retries": I32(10)})),
+    ("recovery_negative_retries", "implicit", "invalid", "max_retries' must be non-negative",
+     m_attrs({"max_retries": I32(-1)})),
+    ("recovery_sublevels_alone", "implicit", "invalid", "num_sublevels and num_substeps must be given together",
+     m_attrs({"num_sublevels": I32(2)})),
+    ("recovery_sublevels_zero", "implicit", "invalid", "num_sublevels' must be at least 1",
+     m_attrs({"num_sublevels": I32(0), "num_substeps": I32(2)})),
+    ("recovery_substeps_one", "implicit", "invalid", "num_substeps' must be at least 2",
+     m_attrs({"num_sublevels": I32(1), "num_substeps": I32(1)})),
+    ("recovery_substeps_static", "implicit", "invalid", "apply only to Transient analyses",
+     m_static(extra={"num_sublevels": I32(1), "num_substeps": I32(2)})),
+]
+
 S = "/process/{explicit}"  # placeholder resolved below
 
 CASES = [
@@ -497,7 +515,7 @@ CASES = [
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 0.x files", m_version(1, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 5)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 6)),
     # --- schema 0.3: Static / LoadControl, ModifiedNewton, solver attributes ---------
     ("static_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
      m_static(version=[0, 2])),
@@ -628,7 +646,7 @@ def main() -> int:
     out = Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
     rows = []
-    for name, base, expect, text, mutate in CASES + SOIL_CASES:
+    for name, base, expect, text, mutate in CASES + SOIL_CASES + RECOVERY_CASES:
         path = out / f"{name}.femorax.h5"
         if base is None:
             path.write_text("this is not an HDF5 file\n")

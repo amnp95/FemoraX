@@ -48,6 +48,9 @@ struct StageReport {
   double seconds = 0;  // wall time of the time loop (device work included)
   // Implicit stages: Newton iterations and Krylov iterations in total, and the solver.
   std::int64_t newton_iterations = 0, krylov_iterations = 0;
+  // Implicit stages, Femora's recovery: retries, steps split into substeps, and commits
+  // (steps plus substeps).
+  std::int64_t retries = 0, substepped = 0, commits = 0;
   std::string solver;
 };
 

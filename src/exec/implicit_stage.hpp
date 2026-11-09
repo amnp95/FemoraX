@@ -17,10 +17,16 @@
 //   LoadControl.cpp: lambda += dlambda (dlambda scaled by numIter / iterations of the last
 //     step, clamped to [min, max]); the domain time is lambda. Static residual
 //     B = P - f_int(U) (StaticIntegrator: no damping, no inertia); tangent K_t.
-//   Linear.cpp, NewtonRaphson.cpp, ModifiedNewton.cpp: Linear solves once per step;
-//     Newton: B, test start, then (tangent, solve, update, B, test) until the test passes;
-//     ModifiedNewton: the tangent once per step (factor_once: once per stage; initial: the
-//     initial tangent).
+//   Linear.cpp, NewtonRaphson.cpp: Linear solves once per step; Newton: B, test start, then
+//     (tangent, solve, update, B, test) until the test passes. ModifiedNewton (any options)
+//     runs as Newton: it saves factorizations, and the matrix-free path has none
+//     (docs/deviations.md).
+//   Femora's recovery (schema 0.5, its FemoraAnalyzeTransientStep): a failed step reverts
+//     to the committed state (Domain::revertToLastCommit, Newmark::revertToLastStep; the
+//     solver's initial guess too) and is retried max_retries times at the same size, then
+//     split into num_substeps steps per level down to num_sublevels; each commit records.
+//     Static stages retry only (LoadControl rescales its increment by the failed attempt's
+//     iterations, as OpenSees' newStep does).
 //   CTestNormUnbalance / CTestNormDispIncr / CTestEnergyIncr: ||B||_2, ||dU||_2,
 //     |dU . B_new| / 2 against the tolerance; failure after max iterations. Default test,
 //     as OpenSees' analysis without one: NormUnbalance 1e-6, 25 iterations.
@@ -53,6 +59,11 @@ struct ImplicitStageReport {
   std::string preconditioner;          // "jacobi", "chebyshev"
   int max_newton_iterations = 0;       // in one step
   bool fell_back = false;              // a CG solve needed GMRES
+  // Recovery (schema 0.5): steps counts the stage's steps (Femora's loop counter); commits
+  // also counts substeps. retries: attempts repeated at the same size; substepped: steps
+  // split into substeps (at any level); failed_attempts: attempts that did not converge.
+  std::int64_t commits = 0, retries = 0, substepped = 0, failed_attempts = 0;
+  bool modified_newton_as_newton = false;  // the model asked for ModifiedNewton
 };
 
 class ImplicitStage {

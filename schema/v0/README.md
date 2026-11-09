@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 0.4
+# FemoraX model file, schema version 0.5
 
-Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 approved 2026-11-09**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -47,6 +47,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.1 | VTKHDF recorder: optional `elements` dataset (the element tags to record); `region` stays rejected |
 | 0.2 | equalDOF: optional `command` dataset (which `equalDOF` command each row comes from) |
 | 0.4 | nD materials `PressureDependMultiYield` and `PressureIndependMultiYield` (with the optional `pairs` dataset); process step `update_material_stage`; VTKHDF responses `stress3D6`, `strain3D6` |
+| 0.5 | Femora's retry and substep recovery defined: `max_retries`, `num_sublevels`, `num_substeps` (attributes since 0.0) with their rules; ModifiedNewton runs as Newton |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
@@ -103,7 +104,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `schema_version` | `[2]` int32 | `[0, 4]` (a reader of 0.4 also reads 0.0 to 0.3) |
+| `schema_version` | `[2]` int32 | `[0, 5]` (a reader of 0.5 also reads 0.0 to 0.4) |
 | `ndm` | int32 | spatial dimension; must be `3` in v0 |
 | `generator` | string | e.g. `"femora 0.9.1"`; informational |
 | `model_name` | string | Femora `model_name`; informational |
@@ -358,21 +359,40 @@ step has attrs `kind` (string) and `label` (string, *optional*, Femora's descrip
 | `num_iter` | int32 *(optional)* | LoadControl `<numIter>` (default 1) |
 | `min_increment`, `max_increment` | float64 *(optional)* | LoadControl `<minIncr> <maxIncr>` (default: `load_increment`) |
 | `algorithm` | string | `"Linear"` (required for the explicit integrators), `"Newton"` or `"ModifiedNewton"` *(since 0.3)* |
-| `modified_newton_initial`, `modified_newton_factor_once` | uint8 *(optional, since 0.3)* | ModifiedNewton `-initial`, `-factoronce`. FemoraX is matrix-free: `-initial` keeps the initial tangent, `-factoronce` keeps the first tangent of the stage, otherwise the tangent of each step's first iteration is kept |
+| `modified_newton_initial`, `modified_newton_factor_once` | uint8 *(optional, since 0.3)* | ModifiedNewton `-initial`, `-factoronce`. FemoraX is matrix-free and runs every ModifiedNewton stage as Newton, with or without these options (a note is printed; `docs/deviations.md`) |
 | `constraint_handler` | string | `"Transformation"`; `"Plain"` only when there are no MP constraints |
 | `numberer` | string | recorded, ignored (FemoraX numbers its own equations) |
 | `system` | string | recorded, ignored (explicit: lumped diagonal; 1b: Eigen) |
 | `test_type` | string *(optional)* | `"NormUnbalance"`, `"NormDispIncr"`, `"EnergyIncr"` (1b) |
 | `test_tol` | float64 *(optional)* | |
 | `test_max_iter` | int32 *(optional)* | |
-| `max_retries`, `num_sublevels`, `num_substeps` | int32 *(optional)* | Femora's retry and substep recovery (1b; an explicit step with the Linear algorithm never fails, so 1a ignores them) |
+| `max_retries`, `num_sublevels`, `num_substeps` | int32 *(optional; defined since 0.5)* | Femora's retry and substep recovery, below |
 | `initialize` | uint8 *(optional)* | `initialize` after `analysis` |
 | `allow_unstable_dt` | uint8 *(optional)* | FemoraX only: warn instead of stop when `dt` exceeds the stable step |
 | `solver_tolerance` | float64 *(optional, since 0.3)* | FemoraX only: relative tolerance of each Krylov solve, in (0, 1). Absent: FemoraX chooses (1e-12) |
 | `solver_max_iterations` | int32 *(optional, since 0.3)* | FemoraX only: maximum Krylov iterations per solve. Absent: FemoraX chooses (the number of equations, between 200 and 10000) |
 | `preconditioner` | string *(optional, since 0.3)* | FemoraX only: `"auto"` (default: FemoraX chooses; Jacobi today) or `"jacobi"`. The solver itself (CG or GMRES) follows from the declared tangent symmetry and is never chosen in the file |
 
-Users and exporters need not set any of the three: absent, FemoraX chooses. They exist for
+Femora's retry and substep recovery (defined in 0.5; the three attributes exist since 0.0
+and keep this meaning in every 0.x file). An implicit step fails when its convergence test
+is not met within `test_max_iter` iterations or a linear solve fails. A failed step goes
+back to the committed state and time (and the solver's initial guess) and:
+
+1. is retried at the same size, up to `max_retries` times (absent: 0);
+2. then, in Transient stages while its level is below `num_sublevels` (absent: no
+   substeps), is replaced by `num_substeps` steps of `dt / num_substeps` one level down,
+   each committed and recorded and each with the same recovery; the domain time adds each
+   substep's size in double precision, as OpenSees does;
+3. else stops the run, naming the step, the time and the last failure.
+
+Rules (Femora's own): `max_retries >= 0`; `num_sublevels` and `num_substeps` together,
+`num_sublevels >= 1`, `num_substeps >= 2`, Transient stages only. Static stages retry only
+(LoadControl rescales its increment by the failed attempt's iterations, as OpenSees does).
+Explicit stages ignore all three: a Linear explicit step never fails. FemoraX runs
+ModifiedNewton as Newton, so a retry repeats the failed attempt exactly; it is kept for the
+event record (the stage summary counts retries and substepped steps).
+
+Users and exporters need not set any of the three solver attributes: absent, FemoraX chooses. They exist for
 studies and for cases where the automatic choice needs overriding.
 
 Rules for explicit stages (decided for milestone 1a):

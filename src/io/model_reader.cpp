@@ -729,6 +729,16 @@ AnalysisStep read_analysis(Group& g, const Model& m) {
   a.max_retries = g.opt_attr_int("max_retries");
   a.num_sublevels = g.opt_attr_int("num_sublevels");
   a.num_substeps = g.opt_attr_int("num_substeps");
+  // Femora's recovery (defined in 0.5; the attributes exist since 0.0): Femora's own checks.
+  if (a.max_retries && *a.max_retries < 0) invalid(g.attr_item("max_retries") + " must be non-negative");
+  if (a.num_sublevels.has_value() != a.num_substeps.has_value()) {
+    invalid(g.path() + ": num_sublevels and num_substeps must be given together");
+  }
+  if (a.num_sublevels && *a.num_sublevels < 1) invalid(g.attr_item("num_sublevels") + " must be at least 1");
+  if (a.num_substeps && *a.num_substeps < 2) invalid(g.attr_item("num_substeps") + " must be at least 2");
+  if (a.num_sublevels && a.type == AnalysisType::Static) {
+    invalid(g.path() + ": num_sublevels and num_substeps apply only to Transient analyses");
+  }
   a.initialize = g.opt_attr_bool("initialize").value_or(false);
   a.allow_unstable_dt = g.opt_attr_bool("allow_unstable_dt").value_or(false);
 
