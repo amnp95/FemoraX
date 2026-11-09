@@ -34,9 +34,10 @@ add_executable(femorax_unit_tests
   unit/test_cg.cpp
   unit/test_gmres.cpp
   unit/test_implicit.cpp
-  unit/test_runtime.cpp)
+  unit/test_runtime.cpp
+  unit/test_drm_setup.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest
-                      Eigen3::Eigen)
+                      Eigen3::Eigen HDF5::HDF5)
 target_compile_definitions(femorax_unit_tests PRIVATE
   FEMORAX_REFERENCE_DATA="${PROJECT_SOURCE_DIR}/tests/reference/data")
 femorax_set_warnings(femorax_unit_tests)

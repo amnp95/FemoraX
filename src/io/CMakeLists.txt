@@ -3,7 +3,8 @@ add_library(femorax_io
   h5.cpp
   vtkhdf_writer.cpp
   model_reader.cpp
-  support.cpp)
+  support.cpp
+  drm_file.cpp)
 add_library(femorax::io ALIAS femorax_io)
 target_include_directories(femorax_io PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(femorax_io PRIVATE HDF5::HDF5)
