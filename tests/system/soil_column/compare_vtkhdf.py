@@ -79,7 +79,7 @@ def check_layout(pa: str, pb: str) -> list[str]:
                 elif da.dtype.kind in "iu" and not np.array_equal(da[()], db[()]):
                     errors.append(f"{name}: integer values differ")
                 elif da.dtype.kind == "f" and not name.startswith("VTKHDF/PointData/") \
-                        and not np.array_equal(da[()], db[()]):
+                        and not name.startswith("VTKHDF/CellData/") and not np.array_equal(da[()], db[()]):
                     errors.append(f"{name}: values differ (max {np.abs(da[()] - db[()]).max():.3e})")
     return errors
 
@@ -115,6 +115,21 @@ def check_results(pa: str, pb: str, tol: float) -> tuple[list[str], list[str]]:
                 if not np.array_equal(fa, fb):
                     errors.append(f"{resp}: values differ")
                 report.append(f"{resp:13s} {str(fa.shape):16s} identical" if np.array_equal(fa, fb) else "")
+                continue
+            scale = np.abs(fa).max()
+            rel = float(np.abs(fa - fb).max() / scale) if scale > 0 else 0.0
+            report.append(f"{resp:13s} {str(fa.shape):16s} max |OpenSees| {scale:.6e}  relative diff {rel:.3e}")
+            if rel > tol:
+                errors.append(f"{resp}: relative difference {rel:.3e} > {tol:.1e}")
+        if ra.available_cell_responses != rb.available_cell_responses:
+            errors.append(f"cell responses {ra.available_cell_responses} vs {rb.available_cell_responses}")
+        for resp in ra.available_cell_responses:
+            if resp == "eleTags":
+                continue
+            fa = np.stack([reader_a.cell_frame(resp, k) for k in range(ra.number_of_steps)])
+            fb = np.stack([reader_b.cell_frame(resp, k) for k in range(rb.number_of_steps)])
+            if fa.shape != fb.shape:
+                errors.append(f"{resp}: shape {fa.shape} vs {fb.shape}")
                 continue
             scale = np.abs(fa).max()
             rel = float(np.abs(fa - fb).max() / scale) if scale > 0 else 0.0

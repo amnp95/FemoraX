@@ -169,6 +169,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   Kokkos::deep_copy(u, 0.0);
   GroundMotions motions(model);
   Recorders recorders(model, c);
+  recorders.attach(force);
   rep.setup_seconds = now() - t_setup;
   if (opt.verbose) {
     std::printf("femorax: %lld elements, %lld equations, force kernel %s (%s), device %s\n",

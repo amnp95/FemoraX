@@ -560,6 +560,20 @@ struct StdBrick {
                         trial, fe, Ke, work);
   }
 
+  // Element output (Brick::getResponse 6 and 7, the stress3D6 / strain3D6 responses of the
+  // VTKHDF recorder): stress as the sum of sigma * 0.125, strain as the sum divided by 8.
+  FEMORAX_HD static void average_stress(const double (*sig)[NSTRESS], double out[NSTRESS]) {
+    for (int c = 0; c < NSTRESS; ++c) out[c] = 0.0;
+    for (int i = 0; i < NGP; i++)
+      for (int c = 0; c < NSTRESS; ++c) out[c] += sig[i][c] * 0.125;
+  }
+  FEMORAX_HD static void average_strain(const double (*eps)[NSTRESS], double out[NSTRESS]) {
+    for (int c = 0; c < NSTRESS; ++c) out[c] = 0.0;
+    for (int i = 0; i < NGP; i++)
+      for (int c = 0; c < NSTRESS; ++c) out[c] += eps[i][c];
+    for (int c = 0; c < NSTRESS; ++c) out[c] /= 8.0;
+  }
+
   // Brick::formInertiaTerms with tangFlag = 1: the full 24x24 mass matrix (row-major,
   // Me[a * NDOF + c]), consistent or lumped per p.massType.
   FEMORAX_HD static void mass(const Params& p, const double (*xe)[NDM], double* Me) {

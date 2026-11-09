@@ -1,10 +1,12 @@
 #include "exec/internal_force.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <sstream>
 #include <string>
 
 #include "compile/registry.hpp"
+#include "io/h5.hpp"
 #include "exec/device_memory.hpp"
 #include "exec/element_kernels.hpp"
 #include "exec/operator_kernels.hpp"
@@ -106,6 +108,9 @@ struct InternalForce::Batch {
   // updateMaterialStage for the parameter sets of model material `material` (an index into
   // model.materials); returns whether any set of this batch uses it.
   virtual bool set_material_stage(std::int32_t material, int stage) = 0;
+  virtual void element_output(int which, const Kokkos::View<Index*, Space>& elems,
+                              const Kokkos::View<Index*, Space>& rows, const Vec& out, std::int64_t offset,
+                              const Vec& coords, Index N, const Vec& u) = 0;
 };
 
 namespace {
@@ -255,6 +260,10 @@ struct TypedBatch final : InternalForce::Batch {
   }
   TangentSymmetry tangent_symmetry() const override { return Elem::TANGENT; }
   bool has_state() const override { return Elem::Material::NSTATE > 0; }
+  void element_output(int which, const Kokkos::View<Index*, Space>& elems, const Kokkos::View<Index*, Space>& rows,
+                      const Vec& out, std::int64_t offset, const Vec& coords, Index N, const Vec& u) override {
+    if (elems.extent(0) > 0) kernels::launch_element_output<Elem>(b, which, elems, rows, out, offset, coords, N, u);
+  }
   void commit_state() override { b.current = 1 - b.current; }
   bool set_material_stage(std::int32_t material, int stage) override {
     using MP = typename Elem::Material::Params;
@@ -330,6 +339,7 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
     has_cache_ = cache == GeometryCache::On && cache_bytes_ > 0;
   }
 
+  for (const auto& hb : c.batches) batch_tags_.push_back(hb.tag);
   for (std::size_t i = 0; i < c.batches.size(); ++i) {
     const auto& hb = c.batches[i];
     registry::for_each_pair([&]<class E, class M>(int index) {
@@ -425,6 +435,33 @@ bool InternalForce::constant_tangents() const {
   for (const auto& b : batches_)
     if (!b->constant_tangent()) return false;
   return true;
+}
+
+int InternalForce::select_elements(const std::vector<std::int32_t>& tags) {
+  std::unordered_map<std::int32_t, std::pair<std::size_t, Index>> where;
+  for (std::size_t bi = 0; bi < batch_tags_.size(); ++bi)
+    for (std::size_t e = 0; e < batch_tags_[bi].size(); ++e)
+      if (batch_tags_[bi][e] >= 0) where[batch_tags_[bi][e]] = {bi, static_cast<Index>(e)};
+  std::vector<std::vector<Index>> elems(batches_.size()), rows(batches_.size());
+  for (std::size_t r = 0; r < tags.size(); ++r) {
+    const auto it = where.find(tags[r]);
+    if (it == where.end()) throw io::ModelError("element output: element " + std::to_string(tags[r]) + " is not in the model");
+    elems[it->second.first].push_back(it->second.second);
+    rows[it->second.first].push_back(static_cast<Index>(r));
+  }
+  Selection s;
+  for (std::size_t bi = 0; bi < batches_.size(); ++bi) {
+    s.elems.push_back(upload("output_elements", elems[bi]));
+    s.rows.push_back(upload("output_rows", rows[bi]));
+  }
+  selections_.push_back(std::move(s));
+  return static_cast<int>(selections_.size()) - 1;
+}
+
+void InternalForce::element_output(int selection, int which, const Vec& out, std::int64_t offset) {
+  const auto& s = selections_.at(static_cast<std::size_t>(selection));
+  for (std::size_t bi = 0; bi < batches_.size(); ++bi)
+    batches_[bi]->element_output(which, s.elems[bi], s.rows[bi], out, offset, coords_, nnodes_, u);
 }
 
 bool InternalForce::has_state() const {

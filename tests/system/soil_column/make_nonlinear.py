@@ -4,6 +4,7 @@
     .venv/bin/python tests/system/soil_column/make_nonlinear.py <out_dir> [nx ny nz] [duration] [dt]
         [--element stdBrick|SSPbrick] [--soil dense|loose|layered] [--amp A] [--tol T]
         [--shaking implicit|explicit]
+        [--vtkhdf DT]  (also a VTKHDF recorder: disp vel accel stress3D6 strain3D6 every DT)
 
 The mesh of make_models.py (base fixed, the laminar boundary as Femora writes it), with
 Femora's soils of examples/site_response/nonlinear_layered_soil_column.py (dense Ottawa,
@@ -87,15 +88,16 @@ def tcl_stage(a: dict) -> list[str]:
     if a["integrator"] == "ExplicitDifference":
         return ["wipeAnalysis", "constraints Transformation", "numberer RCM", "system Diagonal", "algorithm Linear",
                 "integrator ExplicitDifference", "analysis Transient",
-                f"while {{[getTime] < {a['final_time']:f}}} {{ analyze 1 {a['dt']!r} }}"]
-    loop = (f"while {{[getTime] < {a['final_time']:f}}} {{ analyze 1 {a['dt']!r} }}" if "final_time" in a
-            else f"analyze {a['num_steps']} {a['dt']!r}")
+                f"while {{[getTime] < {a['final_time']:f}}} {{ if {{[analyze 1 {a['dt']!r}] != 0}} {{ exit 2 }} }}"]
+    # A failed step stops the script (the bare while loop would repeat it forever).
+    loop = (f"while {{[getTime] < {a['final_time']:f}}} {{ if {{[analyze 1 {a['dt']!r}] != 0}} {{ exit 2 }} }}"
+            if "final_time" in a else f"if {{[analyze {a['num_steps']} {a['dt']!r}] != 0}} {{ exit 2 }}")
     return ["wipeAnalysis", "constraints Transformation", "numberer RCM", "system BandGeneral",
             f"test {a['test_type']} {a['test_tol']!r} {a['test_max_iter']}", f"algorithm {alg}",
             f"integrator Newmark {a['gamma']!r} {a['beta']!r}", "analysis Transient", loop]
 
 
-def write_tcl(m, soils, path: Path, g, q, s, amp):
+def write_tcl(m, soils, path: Path, g, q, s, amp, vtkhdf=None):
     out = ["wipe", "model BasicBuilder -ndm 3 -ndf 3"]
     for i, name in enumerate(soils):
         p = soil_params(name)
@@ -121,11 +123,13 @@ def write_tcl(m, soils, path: Path, g, q, s, amp):
     nodes = " ".join(map(str, m["rec_nodes"]))
     for resp in ("disp", "vel", "accel"):
         out.append(f"recorder Node -file opensees_{resp}.txt -precision 17 -time -node {nodes} -dof 1 2 3 {resp}")
+    if vtkhdf is not None:
+        out.append(f"recorder vtkhdf opensees.vtkhdf -dT {vtkhdf!r} disp vel accel stress3D6 strain3D6")
     out += ["setTime 0.0"] + tcl_stage(s) + ["wipe"]
     path.write_text("\n".join(out) + "\n")
 
 
-def write_femorax(m, soils, path: Path, g, q, s, amp):
+def write_femorax(m, soils, path: Path, g, q, s, amp, vtkhdf=None):
     nodes = m["nodes"]
     materials = {}
     for i, name in enumerate(soils):
@@ -153,6 +157,9 @@ def write_femorax(m, soils, path: Path, g, q, s, amp):
                                      "time": w.u8(True), "precision": w.i32(17)},
                               data={"nodes": w.i32(m["rec_nodes"]), "dofs": w.i32([1, 2, 3])})
                  for resp in ("disp", "vel", "accel")}
+    if vtkhdf is not None:
+        recorders["vtkhdf"] = w.node(attrs={"type": "VTKHDF", "file": "femorax.vtkhdf", "dT": w.f64(vtkhdf),
+                                            "responses": "disp vel accel stress3D6 strain3D6"})
 
     def attrs(a: dict) -> dict:
         typed = {}
@@ -171,7 +178,7 @@ def write_femorax(m, soils, path: Path, g, q, s, amp):
     steps = [("update_material_stage", {"stage": w.i32(0)}, {"materials": mats}), ("analysis", attrs(g), {}),
              ("update_material_stage", {"stage": w.i32(1)}, {"materials": mats}), ("analysis", attrs(q), {}),
              ("pattern", {"tag": w.i32(2)}, {})]
-    steps += [("recorder", {"name": r}, {}) for r in ("disp", "vel", "accel")]
+    steps += [("recorder", {"name": r}, {}) for r in recorders]
     steps += [("set_time", {"time": w.f64(0.0)}, {}), ("analysis", attrs(s), {})]
     tree = w.node(attrs=w.root_attrs("system_soil_column_nonlinear"), groups={
         "nodes": w.node(data={"tags": w.i32([n[0] for n in nodes]), "coords": w.f64([n[1:] for n in nodes]),
@@ -200,7 +207,7 @@ def write_femorax(m, soils, path: Path, g, q, s, amp):
 def main() -> int:
     argv = sys.argv[1:]
     mm.take_element_option(argv)
-    opts = {"--soil": "layered", "--amp": "3.0", "--tol": "1e-10", "--shaking": "implicit"}
+    opts = {"--soil": "layered", "--amp": "3.0", "--tol": "1e-10", "--shaking": "implicit", "--vtkhdf": ""}
     for k in list(opts):
         if k in argv:
             i = argv.index(k)
@@ -221,8 +228,9 @@ def main() -> int:
     if soil != "layered":
         m["elements"] = [(e, c, 0) for (e, c, _k) in m["elements"]]
     g, q, s = stages(duration, dt, float(opts["--tol"]), opts["--shaking"] == "explicit")
-    write_tcl(m, soils, out / "model.tcl", g, q, s, amp)
-    write_femorax(m, soils, out / "model.femorax.h5", g, q, s, amp)
+    vt = float(opts["--vtkhdf"]) if opts["--vtkhdf"] else None
+    write_tcl(m, soils, out / "model.tcl", g, q, s, amp, vt)
+    write_femorax(m, soils, out / "model.femorax.h5", g, q, s, amp, vt)
     print(f"{nx}x{ny}x{nz} {mm.ELEMENT} column, PressureDependMultiYield ({soil}), shaking {duration} s at dt {dt}, "
           f"motion x{amp} -> {out}")
     return 0

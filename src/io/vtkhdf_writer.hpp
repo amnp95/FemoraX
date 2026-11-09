@@ -10,11 +10,12 @@
 //     Points [n, 3] f64, Connectivity [c] i32, Offsets [m + 1] i32, Types [m] u8
 //     NumberOfPoints, NumberOfCells, NumberOfConnectivityIds [steps] i32 (one per step)
 //     PointData/  nodeTags [n] i32, displacement / velocity / acceleration [steps * n, 3] f64
-//     CellData/   eleTags [m] i32
+//     CellData/   eleTags [m] i32, stress3D6 / strain3D6 [steps * m, 6] f64 (when recorded)
 //     Steps/      attr NSteps; Values [steps] f64 (the times); NumberOfParts, PartOffsets,
 //                 PointOffsets [steps] i32; CellOffsets, ConnectivityIdOffsets [steps, 1] i32;
 //                 PointDataOffsets/<field> [steps] i32 (row of each step's block; nodeTags: 0);
-//                 CellDataOffsets/eleTags [steps] i32 (0); FieldDataOffsets/, FieldDataSizes/
+//                 CellDataOffsets/eleTags [steps] i32 (0), CellDataOffsets/<field> [steps]
+//                 i32 (row of each step's block); FieldDataOffsets/, FieldDataSizes/
 //
 // Datasets are created empty with the same element types, chunk shapes and unlimited first
 // dimension as OpenSees, and grow as OpenSees grows them. The mesh is written by
@@ -43,14 +44,17 @@ class VtkhdfWriter {
  public:
   // Create (truncate) `file` with the empty layout. `fields` are the PointData names, in
   // the order write_step() receives them: any of "displacement", "velocity",
-  // "acceleration". Throws ModelError if the file cannot be created.
-  VtkhdfWriter(const std::string& file, const std::vector<std::string>& fields);
+  // "acceleration"; `cell_fields` the CellData names (6 values per element): any of
+  // "stress3D6", "strain3D6". Throws ModelError if the file cannot be created.
+  VtkhdfWriter(const std::string& file, const std::vector<std::string>& fields,
+               const std::vector<std::string>& cell_fields = {});
   ~VtkhdfWriter();
   VtkhdfWriter(const VtkhdfWriter&) = delete;
   VtkhdfWriter& operator=(const VtkhdfWriter&) = delete;
 
   void write_mesh(const VtkhdfMesh& mesh);
-  // One recorded step: values[f] holds n * 3 doubles of field f (point-major).
+  // One recorded step: values[f] holds n * 3 doubles of field f (point-major), then one
+  // pointer per cell field with m * 6 doubles (cell-major).
   void write_step(double time, const std::vector<const double*>& values);
   void close();
 

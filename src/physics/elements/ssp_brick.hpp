@@ -1181,6 +1181,14 @@ struct SSPbrick {
                         Ke, work);
   }
 
+  // Element output (SSPbrick::getResponse, stress3D6 / strain3D6): the one point's values.
+  FEMORAX_HD static void average_stress(const double (*sig)[NSTRESS], double out[NSTRESS]) {
+    for (int c = 0; c < NSTRESS; ++c) out[c] = sig[0][c];
+  }
+  FEMORAX_HD static void average_strain(const double (*eps)[NSTRESS], double out[NSTRESS]) {
+    for (int c = 0; c < NSTRESS; ++c) out[c] = eps[0][c];
+  }
+
   // getMass: the diagonal massTerm at every DOF of node i (row-major 24 x 24).
   FEMORAX_HD static void mass(const Params& p, const double (*xe)[NDM], double* Me) {
     for (int a = 0; a < NDOF * NDOF; ++a) Me[a] = 0.0;

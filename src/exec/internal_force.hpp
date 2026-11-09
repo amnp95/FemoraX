@@ -129,6 +129,13 @@ class InternalForce {
   // model.materials) in every parameter set that uses it. Returns false if none does.
   bool set_material_stage(std::int32_t material, int stage);
 
+  // Element output for recorders (VTKHDF stress3D6 / strain3D6): select_elements fixes the
+  // elements (by tag) and their output rows, once; element_output writes, for the current
+  // u and the committed state, each element's 6 values (which 0: stress, 1: strain) to
+  // out(offset + row * 6 + c), averaged over its points as the element does.
+  int select_elements(const std::vector<std::int32_t>& tags);
+  void element_output(int selection, int which, const Vec& out, std::int64_t offset);
+
   // Smallest stable explicit step over all elements (docs/design.md, "Stable time step").
   double min_critical_dt(ExplicitScheme scheme) const;
 
@@ -146,6 +153,11 @@ class InternalForce {
   Kokkos::View<std::int8_t*, Space> eq_dof_;
   SlotGather gather_;
   std::vector<std::unique_ptr<Batch>> batches_;
+  std::vector<std::vector<std::int32_t>> batch_tags_;  // element tags per batch (-1: padding)
+  struct Selection {
+    std::vector<Kokkos::View<std::int32_t*, Space>> elems, rows;  // per batch
+  };
+  std::vector<Selection> selections_;
 };
 
 }  // namespace femorax::exec

@@ -200,6 +200,28 @@ struct PressureDependMultiYield {
     w.getTangent(D);
   }
 
+  // What a recorder reads after a commit (element output): getStress, which redoes the
+  // update from the committed state with a zero strain increment (commitState zeroes
+  // strainRate), and getStrain, the committed strain. `scratch` receives the trial state
+  // of that update (NSTATE values); eps (the strain of the displacement) is not used.
+  FEMORAX_HD static void recorded_stress(const Params& p, Strided<const double> committed, Strided<double> scratch,
+                                         const double eps[NSTRAIN], double sig[NSTRAIN]) {
+    (void)eps;
+    double e[NSTRAIN], D[NSTRAIN][NSTRAIN];
+    soil::T2 strain;
+    strain.load(committed, STATE::STRAIN);
+    strain.t2_engr(e);
+    update(p, committed, scratch, e, sig, D);
+  }
+  FEMORAX_HD static void recorded_strain(const Params& p, Strided<const double> committed, const double eps[NSTRAIN],
+                                         double out[NSTRAIN]) {
+    (void)p;
+    (void)eps;
+    soil::T2 strain;
+    strain.load(committed, STATE::STRAIN);
+    strain.t2_engr(out);
+  }
+
   // setTrialStrain(eps) + getStress() + getTangent(): sig and D at the trial strain, trial
   // state written in full.
   FEMORAX_HD static void update(const Params& p, Strided<const double> committed, Strided<double> trial,

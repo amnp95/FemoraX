@@ -18,6 +18,7 @@ for c in "${NONLINEAR_CASES[@]}"; do
   (cd "$D" && "$OS" model.tcl > opensees.log 2>&1)
   mkdir -p "$DATA/$name"
   cp "$D"/opensees_{disp,vel,accel}.txt "$DATA/$name/"
+  if [ -f "$D/opensees.vtkhdf" ]; then cp "$D/opensees.vtkhdf" "$DATA/$name/"; fi
   sha256sum "$D/model.tcl" | cut -d' ' -f1 > "$DATA/$name/model.tcl.sha256"
   echo "$name: stored"
 done

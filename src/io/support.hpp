@@ -16,7 +16,7 @@ struct Capabilities {
   bool pressure_depend_multi_yield = true;
   bool pressure_independ_multi_yield = false;
   bool material_stages = true;            // the update_material_stage action
-  bool vtkhdf_element_responses = false;  // VTKHDF stress3D6, strain3D6
+  bool vtkhdf_element_responses = true;   // VTKHDF stress3D6, strain3D6
 };
 
 // Throws UnsupportedComponent naming the first thing the build cannot run, or ModelError

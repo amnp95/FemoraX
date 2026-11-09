@@ -113,11 +113,16 @@ Recorders::Recorders(const io::Model& m, const compile::Compiled& c) {
     } else if (const auto* vr = std::get_if<io::VtkhdfRecorder>(&rec.data)) {
       r.kind = Kind::Vtkhdf;
       r.file = vr->file;
-      for (const auto& s : vr->responses) r.responses.push_back(parse_response(s));
+      for (const auto& s : vr->responses) {
+        if (s == "stress3D6") r.cell_responses.push_back(0);
+        else if (s == "strain3D6") r.cell_responses.push_back(1);
+        else r.responses.push_back(parse_response(s));
+      }
       r.dT = vr->dT.value_or(0.0);
       r.rtol = std::max(0.0, vr->rTolDt.value_or(1e-5));
       std::vector<std::int32_t> point_nodes;
       r.mesh = std::make_shared<io::VtkhdfMesh>(build_mesh(m, vr->elements, point_nodes));
+      r.cells = static_cast<std::int64_t>(r.mesh->ele_tags.size());
       // Node::getDisp() components 0..2 of each point (OpenSees reads up to the node's ndm).
       for (const auto tag : point_nodes) {
         const std::int32_t n = internal.at(tag);
@@ -145,6 +150,12 @@ Recorders::~Recorders() {
     finish();
   } catch (...) {
   }
+}
+
+void Recorders::attach(InternalForce& force) {
+  force_ = &force;
+  for (auto& r : recorders_)
+    if (!r.cell_responses.empty()) r.selection = force.select_elements(r.mesh->ele_tags);
 }
 
 bool Recorders::activate(const std::string& name) {
@@ -204,6 +215,12 @@ void Recorders::record(double time, const Vec& disp, const Vec& vel, const Vec& 
             stage(off + j) = q >= 0 ? src(q) : 0.0;  // fixed DOFs: 0
           });
     }
+    for (std::size_t k = 0; k < r.cell_responses.size(); ++k) {
+      if (!force_ || r.selection < 0) throw io::ModelError("recorder " + r.name + ": element output without a source");
+      const std::int64_t off = r.stage_offset + static_cast<std::int64_t>(r.responses.size()) * r.columns +
+                               static_cast<std::int64_t>(k) * r.cells * 6;
+      force_->element_output(r.selection, r.cell_responses[k], stage, off);
+    }
     const std::pair<std::int64_t, std::int64_t> range{r.stage_offset, r.stage_offset + size_of(r)};
     // Asynchronous on device backends: only this recorder's values cross to the host.
     Kokkos::deep_copy(Space(), Kokkos::subview(pinned_[slot], range), Kokkos::subview(stage_, range));
@@ -246,9 +263,10 @@ void Recorders::write(Job& job) {
       files_[i] = std::make_unique<std::ofstream>(r.file, std::ios::trunc);
       if (!*files_[i]) throw io::ModelError("cannot open recorder file " + r.file);
     } else {
-      std::vector<std::string> fields;
+      std::vector<std::string> fields, cells;
       for (const auto resp : r.responses) fields.emplace_back(vtkhdf_field(resp));
-      vtkhdf_[i] = std::make_unique<io::VtkhdfWriter>(r.file, fields);
+      for (const int c : r.cell_responses) cells.emplace_back(c == 0 ? "stress3D6" : "strain3D6");
+      vtkhdf_[i] = std::make_unique<io::VtkhdfWriter>(r.file, fields, cells);
     }
     return;
   }
@@ -260,6 +278,9 @@ void Recorders::write(Job& job) {
     std::vector<const double*> fields;
     for (std::size_t k = 0; k < r.responses.size(); ++k)
       fields.push_back(job.values.data() + static_cast<std::int64_t>(k) * r.columns);
+    for (std::size_t k = 0; k < r.cell_responses.size(); ++k)
+      fields.push_back(job.values.data() + static_cast<std::int64_t>(r.responses.size()) * r.columns +
+                       static_cast<std::int64_t>(k) * r.cells * 6);
     vtkhdf_[i]->write_step(job.time, fields);
     ++records_;
     return;

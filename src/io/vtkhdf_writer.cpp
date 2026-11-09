@@ -74,18 +74,22 @@ void int_attr(hid_t obj, const char* name, const int* values, hsize_t n) {
 struct VtkhdfWriter::Impl {
   hid_t file = -1, root = -1, point_data = -1, cell_data = -1, steps = -1, point_offsets = -1,
         cell_offsets = -1;
-  std::vector<std::string> fields;
+  std::vector<std::string> fields, cell_fields;
   std::vector<int> field_offset;  // CurrentDispOffset, CurrentVelOffset, ...
+  std::vector<int> cell_offset;   // current_Stress3D6Offset, current_Strain3D6Offset
   int num_steps = 0;
   int num_node = 0, num_element = 0, num_conn = 0;
   bool mesh = false;
 };
 
-VtkhdfWriter::VtkhdfWriter(const std::string& path, const std::vector<std::string>& fields)
+VtkhdfWriter::VtkhdfWriter(const std::string& path, const std::vector<std::string>& fields,
+                           const std::vector<std::string>& cell_fields)
     : impl_(new Impl) {
   auto& s = *impl_;
   s.fields = fields;
   s.field_offset.assign(fields.size(), 0);
+  s.cell_fields = cell_fields;
+  s.cell_offset.assign(cell_fields.size(), 0);
   // OpenSees: H5F_LIBVER_LATEST for both bounds (SWMR-compatible format).
   const hid_t fapl = H5Pcreate(H5P_FILE_ACCESS);
   H5Pset_libver_bounds(fapl, H5F_LIBVER_LATEST, H5F_LIBVER_LATEST);
@@ -139,6 +143,10 @@ VtkhdfWriter::VtkhdfWriter(const std::string& path, const std::vector<std::strin
   for (const auto& f : fields) {
     create(s.point_offsets, f.c_str(), H5T_NATIVE_INT, 0, 100);
     create(s.point_data, f.c_str(), H5T_NATIVE_DOUBLE, 3, 100);
+  }
+  for (const auto& f : cell_fields) {  // stress3D6, strain3D6: [rows, 6], chunks of 500 rows
+    create(s.cell_data, f.c_str(), H5T_NATIVE_DOUBLE, 6, 500);
+    create(s.cell_offsets, f.c_str(), H5T_NATIVE_INT, 0, 500);
   }
   create(s.point_data, "nodeTags", H5T_NATIVE_INT, 0, 500);
   create(s.point_offsets, "nodeTags", H5T_NATIVE_INT, 0, 500);
@@ -195,6 +203,13 @@ void VtkhdfWriter::write_step(double time, const std::vector<const double*>& val
     append(s.point_data, s.fields[f].c_str(), H5T_NATIVE_DOUBLE, values[f], static_cast<hsize_t>(s.num_node));
     append(s.point_offsets, s.fields[f].c_str(), H5T_NATIVE_INT, &s.field_offset[f], 1);
     s.field_offset[f] += s.num_node;
+  }
+  // writeStrees3D6, writeStrain3D6
+  for (std::size_t f = 0; f < s.cell_fields.size(); ++f) {
+    append(s.cell_data, s.cell_fields[f].c_str(), H5T_NATIVE_DOUBLE, values[s.fields.size() + f],
+           static_cast<hsize_t>(s.num_element));
+    append(s.cell_offsets, s.cell_fields[f].c_str(), H5T_NATIVE_INT, &s.cell_offset[f], 1);
+    s.cell_offset[f] += s.num_element;
   }
   H5Fflush(s.file, H5F_SCOPE_GLOBAL);
 }

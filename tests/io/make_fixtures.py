@@ -439,8 +439,7 @@ SOIL_CASES = [
     ("pimy_pairs", "explicit", "unsupported", "is not available yet",
      m_soil("PressureIndependMultiYield", {"noYieldSurf": np.int32(-5)}, pairs=PAIRS)),
     ("stage_action", "explicit", "valid", "", m_stage([1], 1)),
-    ("vtkhdf_stress", "explicit", "unsupported", 'VTKHDF response "stress3D6" (/recorders/site) is not available',
-     m_responses("disp stress3D6 strain3D6")),
+    ("vtkhdf_stress", "explicit", "valid", "", m_responses("disp stress3D6 strain3D6")),
     # invalid
     ("pdmy_in_0_3_file", "explicit", "invalid", "was added in schema 0.4",
      m_soil("PressureDependMultiYield", version=[0, 3])),

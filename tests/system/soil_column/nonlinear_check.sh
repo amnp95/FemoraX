@@ -25,5 +25,8 @@ for c in "${NONLINEAR_CASES[@]}"; do
   (cd "$D" && OMP_NUM_THREADS=2 "$FX" run model.femorax.h5 --quiet 2> femorax.log)
   echo "== $name (tolerance $tol)"
   "$PY" "$HERE/compare.py" "$D" --tol "$tol" || status=1
+  if [ -f "$DATA/$name/opensees.vtkhdf" ]; then  # VTKHDF with element output, through femora.results
+    "$PY" "$HERE/compare_vtkhdf.py" "$DATA/$name/opensees.vtkhdf" "$D/femorax.vtkhdf" --tol "$tol" || status=1
+  fi
 done
 exit $status

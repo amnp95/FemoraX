@@ -401,3 +401,78 @@ void init_state(DevBatch<Elem>& b) {
 }
 
 }  // namespace femorax::exec::kernels
+
+namespace femorax::exec::kernels {
+
+// What a recorder reads of a material after a commit: getStress and getStrain. Materials
+// with history state define recorded_stress / recorded_strain (from the committed state);
+// for the others the stress is the update at the strain of the displacement and the strain
+// is that strain.
+template <class Mat>
+KOKKOS_INLINE_FUNCTION void recorded_value(int which, const typename Mat::Params& p, Strided<const double> committed,
+                                           const double* eps, double* out) {
+  constexpr int NS = Mat::NSTRAIN;
+  if (which == 0) {
+    if constexpr (requires(Strided<double> s, const double* e, double* o) {
+                    Mat::recorded_stress(p, committed, s, e, o);
+                  }) {
+      double scratch[Mat::NSTATE > 0 ? Mat::NSTATE : 1];
+      Mat::recorded_stress(p, committed, Strided<double>{scratch, 1}, eps, out);
+    } else {
+      static_assert(Mat::NSTATE == 0, "a material with history state needs recorded_stress");
+      double D[NS][NS];
+      Mat::update(p, committed, {}, eps, out, D);
+    }
+  } else {
+    if constexpr (requires(const double* e, double* o) { Mat::recorded_strain(p, committed, e, o); }) {
+      Mat::recorded_strain(p, committed, eps, out);
+    } else {
+      for (int c = 0; c < NS; ++c) out[c] = eps[c];
+    }
+  }
+}
+
+// Element output (VTKHDF stress3D6 = which 0, strain3D6 = which 1) of the listed elements
+// at displacement u and the committed state: out(offset + rows(i) * 6 + c), averaged over
+// the points as the element does (Elem::average_stress / average_strain).
+template <class Elem>
+void launch_element_output(const DevBatch<Elem>& b, int which, const Kokkos::View<Index*, Space>& elems,
+                           const Kokkos::View<Index*, Space>& rows, const Vec& out, std::int64_t offset,
+                           const Vec& coords, Index N, const Vec& u) {
+  using Mat = typename Elem::Material;
+  constexpr int NNODE = Elem::NNODE, NDOF = Elem::NDOF, NDM = Elem::NDM, NS = Mat::NSTRAIN, NGP = Elem::NGP;
+  const auto node = b.node, eq = b.eq, param = b.param;
+  const auto params = b.params;
+  const auto sc = b.state[b.current];
+  const Index P = b.padded;
+  Kokkos::parallel_for(
+      "element_output", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, static_cast<Index>(elems.extent(0))),
+      KOKKOS_LAMBDA(const Index i) {
+        const Index e = elems(i);
+        double ue[NDOF], xel[NNODE][NDM], xl[3][8];
+        for (int a = 0; a < NDOF; ++a) {
+          const Index q = eq(a * P + e);
+          ue[a] = q >= 0 ? u(q) : 0.0;
+        }
+        for (int a = 0; a < NNODE; ++a) {
+          const Index n = node(a * P + e);
+          for (int d = 0; d < NDM; ++d) xel[a][d] = coords(d * N + n);
+        }
+        Elem::local_coords(xel, xl);
+        const auto& p = params(param(e)).p;
+        double vals[NGP][NS];
+        for (int gp = 0; gp < NGP; ++gp) {
+          typename Elem::PointShape s;
+          Elem::point_geometry(xl, gp, s);
+          double eps[NS];
+          Elem::point_strain(s, ue, eps);
+          recorded_value<Mat>(which, p.mat, state_of<Elem>(sc, e, P).point(gp), eps, vals[gp]);
+        }
+        double avg[NS];
+        if (which == 0) Elem::average_stress(vals, avg);
+        else Elem::average_strain(vals, avg);
+        for (int c = 0; c < NS; ++c) out(offset + static_cast<std::int64_t>(rows(i)) * NS + c) = avg[c];
+      });
+}
+
+}  // namespace femorax::exec::kernels

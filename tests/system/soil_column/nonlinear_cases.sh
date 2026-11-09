@@ -7,4 +7,5 @@ NONLINEAR_CASES=(
   "element_ssp_implicit|1 1 1 0.5 5e-3 --element SSPbrick --soil dense|5e-5|2e-4"
   "element_ssp_explicit|1 1 1 0.5 5e-4 --element SSPbrick --soil dense --shaking explicit|1e-12|5e-6"
   "element_ssp_loose_explicit|1 1 1 0.5 5e-4 --element SSPbrick --soil loose --shaking explicit|1e-12|5e-6"
+  "column4_ssp_explicit_vtkhdf|1 1 4 0.5 5e-4 --element SSPbrick --soil layered --shaking explicit --vtkhdf 0.01|1e-12|5e-6"
 )

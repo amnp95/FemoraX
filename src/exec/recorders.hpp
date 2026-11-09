@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "compile/batches.hpp"
+#include "exec/internal_force.hpp"
 #include "io/model.hpp"
 #include "io/vtkhdf_writer.hpp"
 
@@ -47,6 +48,11 @@ class Recorders {
   ~Recorders();
   Recorders(const Recorders&) = delete;
   Recorders& operator=(const Recorders&) = delete;
+
+  // The source of element output (VTKHDF stress3D6 / strain3D6): its current u and
+  // committed material state at each record. Needed before the first record if any
+  // recorder has element output.
+  void attach(InternalForce& force);
 
   // Start recording `name` (a process step). Returns false if there is no such recorder.
   bool activate(const std::string& name);
@@ -71,6 +77,9 @@ class Recorders {
     Kokkos::View<std::int32_t*, Space> eq;  // per column, -1 = fixed (value 0)
     std::int64_t stage_offset = 0;          // responses.size() * columns values
     std::shared_ptr<io::VtkhdfMesh> mesh;   // VTKHDF only
+    std::vector<int> cell_responses;        // VTKHDF element output: 0 stress3D6, 1 strain3D6
+    std::int64_t cells = 0;                 // elements of the mesh
+    int selection = -1;                     // InternalForce::select_elements
   };
   struct Job {
     enum class Type { Open, Mesh, Frame } type = Type::Frame;
@@ -84,7 +93,8 @@ class Recorders {
   };
 
   std::int64_t size_of(const Recorder& r) const {
-    return static_cast<std::int64_t>(r.responses.size()) * r.columns;
+    return static_cast<std::int64_t>(r.responses.size()) * r.columns +
+           static_cast<std::int64_t>(r.cell_responses.size()) * r.cells * 6;
   }
   void enqueue(std::vector<Job> jobs);
   void flush_pending();
@@ -92,6 +102,7 @@ class Recorders {
   void write(Job& job);
 
   std::vector<Recorder> recorders_;
+  InternalForce* force_ = nullptr;
   Vec stage_;
   Kokkos::View<double*, Kokkos::SharedHostPinnedSpace> pinned_[2];
   int next_slot_ = 0;
