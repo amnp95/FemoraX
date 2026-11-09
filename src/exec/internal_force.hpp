@@ -119,6 +119,16 @@ class InternalForce {
   TangentSymmetry tangent_symmetry() const;
   bool constant_tangents() const;  // every material has CONSTANT_TANGENT
 
+  // Material history state (committed and trial buffers per batch). The force kernels
+  // read the committed state and write the trial one; commit_state makes the trial state
+  // committed (a swap: the update writes every trial value). Nothing to revert: the next
+  // force evaluation starts from the committed state again.
+  bool has_state() const;
+  void commit_state();
+  // updateMaterialStage: sets the stage of model material `material` (index into
+  // model.materials) in every parameter set that uses it. Returns false if none does.
+  bool set_material_stage(std::int32_t material, int stage);
+
   // Smallest stable explicit step over all elements (docs/design.md, "Stable time step").
   double min_critical_dt(ExplicitScheme scheme) const;
 

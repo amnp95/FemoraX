@@ -18,6 +18,7 @@ add_executable(femorax_unit_tests
   unit/test_ssp_brick_reference.cpp
   unit/test_pdmy.cpp
   unit/test_pdmy_reference.cpp
+  unit/test_material_state.cpp
   unit/test_memory_contract.cpp
   unit/test_dof_numbering.cpp
   unit/test_renumber.cpp
@@ -160,4 +161,18 @@ if(EXISTS "${FEMORAX_OPENSEES}" AND EXISTS "${FEMORAX_VENV_PYTHON}")
                    $<TARGET_FILE:femorax> ${FEMORAX_OPENSEES} ${FEMORAX_VENV_PYTHON}
                    ${CMAKE_CURRENT_BINARY_DIR}/system_implicit)
   set_tests_properties(system.implicit_vs_opensees PROPERTIES TIMEOUT 600)
+endif()
+# Nonlinear (PressureDependMultiYield) cases against stored OpenSees output: OpenSees does
+# not run (tests/system/soil_column/nonlinear_references.sh stores it).
+if(EXISTS "${FEMORAX_VENV_PYTHON}")
+  if(Kokkos_ENABLE_CUDA)
+    set(femorax_backend gpu)
+  else()
+    set(femorax_backend host)
+  endif()
+  add_test(NAME system.nonlinear_vs_stored_opensees
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/nonlinear_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_nonlinear
+                   ${femorax_backend})
+  set_tests_properties(system.nonlinear_vs_stored_opensees PROPERTIES TIMEOUT 300)
 endif()

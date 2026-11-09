@@ -42,6 +42,7 @@ struct Batch {
   int pair = -1;  // registry pair index (element entry, material entry)
   io::ElementType element = io::ElementType::StdBrick;
   int nnode = 0, ndof = 0;
+  int nstate = 0;           // material history doubles per element (Elem::NSTATE), per buffer
   std::int32_t count = 0;   // real elements
   std::int32_t padded = 0;  // count rounded up to the SIMD width
   std::vector<std::int32_t> tag;    // [padded]; -1 for padding

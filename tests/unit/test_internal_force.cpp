@@ -56,7 +56,15 @@ void element_force(const Compiled& c, const femorax::compile::Batch& b, std::int
       ve[k] = q >= 0 ? v[q] : 0.0;
     }
     const auto& ps = b.params[b.param[e]];
-    Elem::template compute<false>(ps.params<Elem>(), ps.damping, xe, ue, ve, {}, {}, fe, nullptr);
+    // The initial state (these tests run elastic models; a material with state starts fresh).
+    using Mat = typename Elem::Material;
+    std::vector<double> sc(Elem::NSTATE > 0 ? Elem::NSTATE : 1, 0.0), st = sc;
+    const auto p = ps.params<Elem>();
+    if constexpr (Mat::NSTATE > 0)
+      for (int gp = 0; gp < Elem::NGP; ++gp) Mat::initial_state(p.mat, {sc.data() + gp * Mat::NSTATE, 1});
+    const femorax::PointArray<const double> co{sc.data(), 1, Mat::NSTATE};
+    const femorax::PointArray<double> tr{st.data(), 1, Mat::NSTATE};
+    Elem::template compute<false>(p, ps.damping, xe, ue, ve, co, tr, fe, nullptr);
   });
 }
 

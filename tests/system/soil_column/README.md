@@ -21,6 +21,18 @@ files. Tolerance and observed differences: `docs/deviations.md` ("System tests")
 `--integrator CentralDifference` writes the alphaM-only variant; FemoraX deliberately
 differs from OpenSees there (docs/deviations.md, "CentralDifference with lumped stdBrick").
 
+## Nonlinear soil (PressureDependMultiYield)
+
+`make_nonlinear.py` writes the column with Femora's soils and staging (stage 0, gravity,
+stage 1, ModifiedNewton re-equilibration, shaking, implicit or explicit). OpenSees with
+nonlinear materials is slow, so its output is stored: `nonlinear_references.sh <OpenSees>
+<python>` runs the cases of `nonlinear_cases.sh` once and keeps the output (and the model's
+SHA-256) in `tests/reference/data/system/<case>/`; `nonlinear_check.sh` (ctest
+`system.nonlinear_vs_stored_opensees`) compares FemoraX with it and refuses an out-of-date
+reference. Tolerances: docs/deviations.md. `FEMORAX_TRACE_ITERATIONS=1` makes FemoraX print
+every Newton iteration's test value (developer switch), to compare with OpenSees' test
+print flag 1.
+
 ## Implicit stages
 
 `make_implicit.py` writes the same column with consistent mass and Femora's staging:

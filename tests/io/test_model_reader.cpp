@@ -200,7 +200,8 @@ TEST_F(ReaderFixtures, VtkhdfElementList) {
 // ---------------------------------------------------------------------------
 Capabilities milestone2() {
   Capabilities c;
-  c.soil_materials = c.material_stages = c.vtkhdf_element_responses = true;
+  c.pressure_depend_multi_yield = c.pressure_independ_multi_yield = c.material_stages = true;
+  c.vtkhdf_element_responses = true;
   return c;
 }
 
@@ -225,7 +226,9 @@ TEST_F(ReaderFixtures, ReadsPressureDependMultiYield) {
   EXPECT_TRUE(has_material_stage(m.materials[0]));
   EXPECT_STREQ(material_type_name(m.materials[0]), "PressureDependMultiYield");
   EXPECT_NO_THROW(check_supported(m, milestone2()));
-  EXPECT_THROW(check_supported(m, Capabilities{}), UnsupportedComponent);
+  Capabilities without;
+  without.pressure_depend_multi_yield = false;
+  EXPECT_THROW(check_supported(m, without), UnsupportedComponent);
 
   // Absent optional items take OpenSees' Tcl-parser defaults.
   const Model mo = read_model(path("pdmy_defaults.femorax.h5"));

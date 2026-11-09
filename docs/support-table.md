@@ -19,7 +19,7 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
 | ElasticIsotropic | **supported** | `ThreeDimensional` form; bit-identical to OpenSees `955ceb0` on 76,650 stress/tangent values (`test_elastic_isotropic_reference`) |
-| PressureDependMultiYield | in progress (milestone 2): material verified | 3D port of OpenSees `955ceb0` (`physics/materials/pressure_depend_multi_yield.hpp`); bit-identical to OpenSees on 208,152 stress and tangent values along 32 strain paths (Femora's three soils and a user backbone; stage switches, discarded trials; `test_pdmy_reference`). Next: state in the kernels, the stage action, single elements, the system test. `pa` per material (docs/deviations.md) |
+| PressureDependMultiYield | in progress (milestone 2): material verified | 3D port of OpenSees `955ceb0` (`physics/materials/pressure_depend_multi_yield.hpp`); bit-identical to OpenSees on 208,152 stress and tangent values along 32 strain paths (Femora's three soils and a user backbone; stage switches, discarded trials; `test_pdmy_reference`). In the kernels (committed and trial state, commit as a swap, the stage action) and run end to end: one stdBrick and one SSPbrick through Femora's staging against stored OpenSees output, explicit shaking within 2.4e-13, implicit within 2.8e-7 (stdBrick) and 1.9e-5 (SSPbrick; rounding-amplified plastic decisions, docs/deviations.md). Next: the compacted corrector kernel, element output, the system column. `pa` per material (docs/deviations.md) |
 | DruckerPrager, J2CyclicBoundingSurface, LinearElasticGGmax, PressureIndependMultiYield | planned | PressureIndependMultiYield next in milestone 2 |
 
 ## Uniaxial materials and sections

@@ -136,6 +136,15 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     throw io::UnsupportedComponent("unsupported component: ModifiedNewton -initial with a material whose tangent "
                                    "is not constant (stage \"" + an.name + "\")");
   const bool stored = s.os.tangent == TangentSource::Stored;
+  // Linear: OpenSees commits the stress of the state determination before the solve with
+  // the strain after it (Linear::solveCurrentStep updates the domain without another
+  // getStress); for a material with history that pair is inconsistent, so FemoraX refuses
+  // it rather than reproduce it.
+  if (an.algorithm == io::Algorithm::Linear && force.has_state())
+    throw io::UnsupportedComponent("unsupported component: the Linear algorithm in stage \"" + an.name +
+                                   "\" with a material that has history state (OpenSees would commit a stress "
+                                   "inconsistent with the strain); use Newton or ModifiedNewton. Run this model "
+                                   "with the OpenSees backend.");
 
   // Solver: automatic unless the model sets it.
   solvers::SolveOptions so;
@@ -220,6 +229,9 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
 
   const double final_time = an.final_time ? as_tcl_time(*an.final_time) : 0.0;
   auto more = [&] { return an.final_time ? as_tcl_time(time) < final_time : rep.steps < *an.num_steps; };
+  // Developer switch for comparisons with OpenSees' test print flag: every Newton
+  // iteration's test value (not a user setting).
+  const bool trace_iterations = std::getenv("FEMORAX_TRACE_ITERATIONS") != nullptr;
   const bool stage_tangent_once =
       an.algorithm == io::Algorithm::ModifiedNewton && (an.modified_newton_factor_once || an.modified_newton_initial);
 
@@ -255,6 +267,8 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
         form_unbalance();
         const double value = test_value();
         iterations = iter;
+        if (trace_iterations) std::printf("femorax-trace: %s step %lld iteration %d %.17g\n", an.name.c_str(),
+                                          static_cast<long long>(rep.steps + 1), iter, value);
         if (value <= tol) break;
         if (iter >= max_iter) {
           char msg[320];
@@ -278,7 +292,9 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     rep.newton_iterations += iterations;
     rep.max_newton_iterations = std::max(rep.max_newton_iterations, iterations);
     ++rep.steps;
-    // commit (materials without state: nothing to swap), then record.
+    // commit (the materials' trial state, from the last state determination at the
+    // converged displacement), then record.
+    force.commit_state();
     recorders.record(time, u, is_static ? s.v_committed : v, a);
   }
   if (!is_static) Kokkos::deep_copy(s.v_committed, v);

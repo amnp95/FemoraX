@@ -30,6 +30,26 @@ Default tolerances (until a component states otherwise):
   and Linear 2.5e-10, static gravity and Newton 2.9e-10 (acceleration; 4.4e-12
   displacement), CPU (renumbering off and on) and GPU.
 
+- Nonlinear system tests (PressureDependMultiYield; stored OpenSees output,
+  `tests/system/soil_column/nonlinear_check.sh`): explicit stages relative 1e-12 (observed
+  1.4e-13 and 2.4e-13 on one SSPbrick of dense and of loose sand, 1000 steps with plastic
+  flow); implicit stages per case from the first runs: one stdBrick 1e-6 (observed
+  2.8e-7), one SSPbrick 5e-5 (observed 1.9e-5, acceleration; displacement 4.7e-7). The
+  implicit cases agree to 1e-16 for the first 45 shaking steps, then a rounding-level
+  difference changes a plastic decision and the Newton iterates converge, within the
+  NormDispIncr 1e-10 test, to slightly different answers. It is not FemoraX-specific: a
+  host replica of OpenSees' algorithm with FemoraX's physics and exact 3 x 3 solves
+  differs from itself by 4.7e-7 (SSPbrick) and 1.8e-7 (stdBrick) in displacement when only
+  the pivoting of the linear solve changes, and from OpenSees by 1.8e-7 and 2.5e-7. The
+  Newton iteration counts agree step by step for the stdBrick case (482 in 100 steps) and
+  differ in one step of the SSPbrick case (95: 6 against 5). The explicit cases, with no
+  linear solve, stay at rounding: the material, state, commit and stage logic are those of
+  OpenSees. On the GPU (fused multiply-adds, CUDA's pow, exp and log) the same rounding
+  sensitivity changes plastic decisions in every case: explicit 7.1e-7 and 1.2e-6,
+  implicit 1.9e-4 (stdBrick) and 7.3e-5 (SSPbrick); tolerances 5e-6 (explicit), 5e-4 and
+  2e-4 (implicit). The Gauss-point paths (test_pdmy_reference, DeviceBackend) separate
+  rounding from branch flips: 31 of 32 within 2.3e-11, one flipped.
+
 ## Entry format
 
 ```

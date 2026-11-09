@@ -42,6 +42,12 @@ struct DevBatch {
   // Element constants (ElementTermElement), per element: value[k * padded + e], k < NCONST.
   // Built with the geometry cache; without it the kernels recompute them.
   Vec constants;
+  // Material history state, two buffers (committed and trial) of Mat::NSTATE values per
+  // Gauss point: value[k * (NGP * padded) + e * NGP + gp]. state[current] is committed;
+  // commit swaps the roles (the update writes every trial value). Empty for materials
+  // without state.
+  Vec state[2];
+  int current = 0;
   // Slot of element e's k-th value: slot_offset + k * padded + e.
   std::int64_t slot_offset = 0;
 };
@@ -67,6 +73,12 @@ struct TeamScratch {
 template <class Elem>
 KOKKOS_INLINE_FUNCTION PointArray<const double> cache_of(const Vec& g, Index e, Index padded) {
   return {g.data() + static_cast<std::ptrdiff_t>(e) * Elem::NGP, Elem::NGP * padded, 1};
+}
+
+// Element e's points in a state buffer (the per-point layout of the geometry cache).
+template <class Elem>
+KOKKOS_INLINE_FUNCTION PointArray<double> state_of(const Vec& s, Index e, Index padded) {
+  return {s.data() + static_cast<std::ptrdiff_t>(e) * Elem::NGP, Elem::NGP * padded, 1};
 }
 
 KOKKOS_INLINE_FUNCTION Strided<const double> constants_of(const Vec& c, Index e, Index padded) {
@@ -156,6 +168,7 @@ void launch_flat(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
   const auto node = b.node, eq = b.eq, param = b.param, colors = b.color_elements;
   const auto params = b.params;
   const auto geo = b.geometry, cst = b.constants;
+  const auto sc = b.state[b.current], st = b.state[1 - b.current];
   const Index P = b.padded;
   const std::int64_t base = b.slot_offset;
   Kokkos::parallel_for(
@@ -172,14 +185,16 @@ void launch_flat(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
         if (Cached) {  // a constant (template argument); nvcc cannot capture inside if constexpr
           typename Elem::Work work;
           Elem::template compute_with<false>(SerialInner{}, cached_geometry<Elem>(geo, cst, e, P), pr.p, pr.damp,
-                                             ue, ve, {}, {}, fe, nullptr, work);
+                                             ue, ve, state_of<Elem>(sc, e, P), state_of<Elem>(st, e, P), fe,
+                                             nullptr, work);
         } else {
           double xe[NNODE][NDM];
           for (int a = 0; a < NNODE; ++a) {
             const Index n = node(a * P + e);
             for (int d = 0; d < NDM; ++d) xe[a][d] = coords(d * N + n);
           }
-          Elem::template compute<false>(pr.p, pr.damp, xe, ue, ve, {}, {}, fe, nullptr);
+          Elem::template compute<false>(pr.p, pr.damp, xe, ue, ve, state_of<Elem>(sc, e, P), state_of<Elem>(st, e, P),
+                                        fe, nullptr);
         }
         for (int k = 0; k < NDOF; ++k)
           emit(out, f, slots, base + static_cast<std::int64_t>(k) * P + e, eq(k * P + e), fe[k]);
@@ -205,6 +220,7 @@ void launch_team(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
   const auto node = b.node, eq = b.eq, param = b.param, colors = b.color_elements;
   const auto params = b.params;
   const auto geo = b.geometry, cst = b.constants;
+  const auto sc = b.state[b.current], st = b.state[1 - b.current];
   const Index P = b.padded;
   const std::int64_t base = b.slot_offset;
   constexpr bool HAS_TERM = kHasTerm<Elem>;
@@ -265,7 +281,8 @@ void launch_team(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
           if (pr.damp.betaKinit != 0.0) Elem::Material::initial_tangent(pr.p.mat, D0);
           typename Elem::PointResult r;
           double dd[NSTRESS][NSTRESS];
-          Elem::point_update_shape(pr.p, pr.damp, s, ue, ve, {}, {}, D0, r, dd);
+          Elem::point_update_shape(pr.p, pr.damp, s, ue, ve, state_of<Elem>(sc, e, P).point(gp),
+                                   state_of<Elem>(st, e, P).point(gp), D0, r, dd);
           double* c = g + S::C + gp * NNODE * 3 * NDFN;
           for (int j = 0; j < NNODE; ++j)
             Elem::point_node_contribution(pr.p, pr.damp, r, ve, j, c + 3 * NDFN * j,
@@ -326,12 +343,13 @@ void launch_team(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
       });
 }
 
-// Smallest stable explicit step over the batch's elements (Elem::critical_dt; committed
-// state empty: elements without history state so far).
+// Smallest stable explicit step over the batch's elements (Elem::critical_dt at the
+// committed state).
 template <class Elem>
 double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, ExplicitScheme scheme) {
   const auto node = b.node, param = b.param;
   const auto params = b.params;
+  const auto sc = b.state[b.current];
   const Index P = b.padded;
   double result = 0.0;
   Kokkos::parallel_reduce(
@@ -343,11 +361,43 @@ double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, Expl
           for (int d = 0; d < Elem::NDM; ++d) xe[a][d] = coords(d * N + n);
         }
         const DevParams<Elem>& pr = params(param(e));
-        const double dt = Elem::critical_dt(pr.p, pr.damp, scheme, xe, {});
+        const double dt = Elem::critical_dt(pr.p, pr.damp, scheme, xe, state_of<Elem>(sc, e, P));
         if (dt < m) m = dt;
       },
       Kokkos::Min<double>(result));
   return result;
+}
+
+}  // namespace femorax::exec::kernels
+
+namespace femorax::exec::kernels {
+
+// The default state of every point (Material::initial_state if the material has one,
+// zeros otherwise) in both buffers.
+template <class Elem>
+void init_state(DevBatch<Elem>& b) {
+  using Mat = typename Elem::Material;
+  if constexpr (Mat::NSTATE > 0) {
+    const std::size_t n = static_cast<std::size_t>(Mat::NSTATE) * Elem::NGP * b.padded;
+    for (auto& s : b.state) s = Vec("material_state", n);
+    if constexpr (requires(const typename Mat::Params& q, Strided<double> v) { Mat::initial_state(q, v); }) {
+      const auto params = b.params;
+      const auto param = b.param;
+      const auto s0 = b.state[0], s1 = b.state[1];
+      const Index P = b.padded;
+      Kokkos::parallel_for(
+          "material_initial_state", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count),
+          KOKKOS_LAMBDA(const Index e) {
+            const auto& p = params(param(e)).p.mat;
+            for (int gp = 0; gp < Elem::NGP; ++gp) {
+              Mat::initial_state(p, state_of<Elem>(s0, e, P).point(gp));
+              Mat::initial_state(p, state_of<Elem>(s1, e, P).point(gp));
+            }
+          });
+    }
+  } else {
+    (void)b;
+  }
 }
 
 }  // namespace femorax::exec::kernels

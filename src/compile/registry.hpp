@@ -10,15 +10,18 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <type_traits>
 #include <variant>
 #include <vector>
 
+#include "io/h5.hpp"
 #include "io/model.hpp"
 #include "physics/contracts.hpp"
 #include "physics/elements/ssp_brick.hpp"
 #include "physics/elements/std_brick.hpp"
 #include "physics/materials/elastic_isotropic.hpp"
+#include "physics/materials/pressure_depend_multi_yield.hpp"
 
 namespace femorax::registry {
 
@@ -35,6 +38,65 @@ struct ElasticIsotropicEntry {
   static Material::Params params(const io::NDMaterial& m) {
     const auto& d = std::get<io::ElasticIsotropicData>(m.data);
     return {d.E, d.nu, d.rho};
+  }
+};
+
+// PressureDependMultiYield in surface buckets: the batch of a material is the smallest
+// bucket that holds its surfaces. Another bucket is one more line in Materials below.
+template <int NS>
+struct PressureDependMultiYieldEntry {
+  using Material = PressureDependMultiYield<NS>;
+  static constexpr const char* name = NS == 20 ? "PressureDependMultiYield20" : "PressureDependMultiYield40";
+  static int surfaces(const io::NDMaterial& m) {
+    const auto* d = std::get_if<io::PressureDependMultiYieldData>(&m.data);
+    if (!d) return -1;
+    return d->noYieldSurf < 0 ? -d->noYieldSurf : d->noYieldSurf;
+  }
+  static bool matches(const io::NDMaterial& m);  // defined below the type list
+  static typename Material::Params params(const io::NDMaterial& m) {
+    const auto& d = std::get<io::PressureDependMultiYieldData>(m.data);
+    if (d.nd != 3) throw io::UnsupportedComponent("unsupported component: PressureDependMultiYield nd = 2");
+    PressureDependMultiYieldInput in{};
+    in.rho = d.rho;
+    in.refShearModul = d.refShearModul;
+    in.refBulkModul = d.refBulkModul;
+    in.frictionAng = d.frictionAng;
+    in.peakShearStra = d.peakShearStra;
+    in.refPress = d.refPress;
+    in.pressDependCoe = d.pressDependCoe;
+    in.phaseTransformAng = d.PTAng;
+    in.contractionParam1 = d.contrac;
+    in.dilationParam1 = d.dilat1;
+    in.dilationParam2 = d.dilat2;
+    in.liquefactionParam1 = d.liquefac1;
+    in.liquefactionParam2 = d.liquefac2;
+    in.liquefactionParam4 = d.liquefac3;
+    in.numberOfYieldSurf = surfaces(m);
+    in.gredu = d.noYieldSurf < 0 ? d.pairs.data() : nullptr;
+    in.e = d.e;
+    in.volLimit1 = d.cs1;
+    in.volLimit2 = d.cs2;
+    in.volLimit3 = d.cs3;
+    in.atm = d.pa;
+    in.cohesi = d.c;
+    in.hv = 0.0;  // Femora never sets hv, pv (OpenSees' defaults)
+    in.pv = 1.0;
+    typename Material::Params p{};
+    const int r = Material::setup(in, p);
+    const std::string where = "/materials/nd/" + std::to_string(m.tag);
+    switch (r) {
+      case Material::Ok: return p;
+      case Material::InvalidFrictionAngle:
+        throw io::ModelError(where + ": the G/Gmax curve and refPress give sin(friction angle) outside [0, 1] "
+                             "(OpenSees: \"Invalid friction angle, please modify ref. pressure or G/Gmax curve\")");
+      case Material::NegativeModulus:
+        throw io::ModelError(where + ": the G/Gmax curve gives a yield surface with a plastic modulus <= 0 "
+                             "(OpenSees: \"has plastic modulus < 0. Please modify G/Gmax curve\")");
+      case Material::TooFewPairs:
+        throw io::ModelError(where + ": a user-defined backbone needs at least two (gamma, G/Gmax) pairs");
+      default:
+        throw io::ModelError(where + ": invalid PressureDependMultiYield parameters");
+    }
   }
 };
 
@@ -64,7 +126,16 @@ struct SSPbrickEntry {
 };
 
 // The registered entries: one line each.
-using Materials = TypeList<ElasticIsotropicEntry>;
+using Materials = TypeList<ElasticIsotropicEntry, PressureDependMultiYieldEntry<20>, PressureDependMultiYieldEntry<40>>;
+
+// The smallest bucket that holds the material's surfaces.
+template <int NS>
+bool PressureDependMultiYieldEntry<NS>::matches(const io::NDMaterial& m) {
+  const int n = surfaces(m);
+  if (n < 0) return false;
+  if constexpr (NS == 20) return n <= 20;
+  else return n > 20 && n <= NS;
+}
 using Elements = TypeList<StdBrickEntry, SSPbrickEntry>;
 
 // --- Dispatch ------------------------------------------------------------------------------

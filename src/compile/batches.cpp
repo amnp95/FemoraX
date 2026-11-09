@@ -114,6 +114,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
       b.element = E::type;
       b.nnode = Elem::NNODE;
       b.ndof = Elem::NDOF;
+      b.nstate = Elem::NSTATE;
       b.count = static_cast<std::int32_t>(list.size());
       b.padded = round_up(b.count, opt.simd_width);
       const auto P = static_cast<std::size_t>(b.padded);
@@ -196,6 +197,7 @@ std::int64_t memory_estimate_bytes(const Compiled& c) {
   for (const auto& b : c.batches) {
     const std::int64_t P = b.padded;
     bytes += P * 4 * (1 + b.nnode + b.ndof + 1);  // tag, nodes, equations, param index
+    bytes += 2 * P * b.nstate * 8;                // material state, committed and trial
     for (const auto& ps : b.params) bytes += static_cast<std::int64_t>(ps.element.bytes.size()) + 64;
     bytes += static_cast<std::int64_t>(b.color_elements.size() + b.color_start.size()) * 4;
   }

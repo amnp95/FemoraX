@@ -426,20 +426,19 @@ def m_responses(text, version=None):
 
 
 SOIL_CASES = [
-    # Read correctly (test_model_reader checks the values), then refused by this build until
-    # the material, the stage action and the element responses are available.
-    ("pdmy", "explicit", "unsupported", "nD material PressureDependMultiYield (/materials/nd/1) is not "
-     "available yet", m_soil("PressureDependMultiYield")),
-    ("pdmy_defaults", "explicit", "unsupported", "is not available yet",
+    # Read correctly (test_model_reader checks the values); PressureIndependMultiYield and the
+    # element responses are refused by this build until they are available.
+    ("pdmy", "explicit", "valid", "", m_soil("PressureDependMultiYield")),
+    ("pdmy_defaults", "explicit", "valid", "",
      m_soil("PressureDependMultiYield", drop=("noYieldSurf", "e", "cs1", "cs2", "cs3", "pa", "c"))),
-    ("pdmy_pairs", "explicit", "unsupported", "is not available yet",
+    ("pdmy_pairs", "explicit", "valid", "",
      m_soil("PressureDependMultiYield", {"noYieldSurf": np.int32(-5)}, pairs=PAIRS)),
-    ("pdmy_pt_above_friction", "explicit", "unsupported", "is not available yet",
+    ("pdmy_pt_above_friction", "explicit", "warning", "the phase transformation angle is set to the friction angle",
      m_soil("PressureDependMultiYield", {"PTAng": np.float64(45.0)})),
     ("pimy", "explicit", "unsupported", "nD material PressureIndependMultiYield", m_soil("PressureIndependMultiYield")),
     ("pimy_pairs", "explicit", "unsupported", "is not available yet",
      m_soil("PressureIndependMultiYield", {"noYieldSurf": np.int32(-5)}, pairs=PAIRS)),
-    ("stage_action", "explicit", "unsupported", "nD material PressureDependMultiYield", m_stage([1], 1)),
+    ("stage_action", "explicit", "valid", "", m_stage([1], 1)),
     ("vtkhdf_stress", "explicit", "unsupported", 'VTKHDF response "stress3D6" (/recorders/site) is not available',
      m_responses("disp stress3D6 strain3D6")),
     # invalid

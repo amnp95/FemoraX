@@ -13,8 +13,9 @@ struct Capabilities {
   std::vector<ElementType> elements = {ElementType::StdBrick, ElementType::SSPbrick};
   bool implicit = true;  // Newmark, LoadControl, Newton, ModifiedNewton, load_const (1b)
   // Milestone 2 (schema 0.4), switched on as each part is ported and verified:
-  bool soil_materials = false;            // PressureDependMultiYield, PressureIndependMultiYield
-  bool material_stages = false;           // the update_material_stage action
+  bool pressure_depend_multi_yield = true;
+  bool pressure_independ_multi_yield = false;
+  bool material_stages = true;            // the update_material_stage action
   bool vtkhdf_element_responses = false;  // VTKHDF stress3D6, strain3D6
 };
 

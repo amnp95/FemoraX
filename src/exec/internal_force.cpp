@@ -100,6 +100,12 @@ struct InternalForce::Batch {
   virtual std::int64_t enable_stored_tangents() = 0;  // returns the bytes allocated
   virtual TangentSymmetry tangent_symmetry() const = 0;
   virtual bool constant_tangent() const = 0;
+  // Material history state (none for materials without it).
+  virtual bool has_state() const = 0;
+  virtual void commit_state() = 0;
+  // updateMaterialStage for the parameter sets of model material `material` (an index into
+  // model.materials); returns whether any set of this batch uses it.
+  virtual bool set_material_stage(std::int32_t material, int stage) = 0;
 };
 
 namespace {
@@ -108,6 +114,9 @@ template <class Elem>
 struct TypedBatch final : InternalForce::Batch {
   kernels::DevBatch<Elem> b;
   kernels::DevTangents<Elem> t;
+
+  std::vector<kernels::DevParams<Elem>> host_params;
+  std::vector<std::int32_t> param_material;
 
   TypedBatch(const compile::Batch& hb, std::int64_t slot_offset, bool cache, const Vec& coords,
              Index N) {
@@ -119,9 +128,13 @@ struct TypedBatch final : InternalForce::Batch {
     b.color_elements = upload("batch_colors", hb.color_elements);
     b.color_start = hb.color_start;
     b.slot_offset = slot_offset;
-    std::vector<kernels::DevParams<Elem>> ps;
-    for (const auto& p : hb.params) ps.push_back({p.template params<Elem>(), p.damping});
+    std::vector<kernels::DevParams<Elem>>& ps = host_params;
+    for (const auto& p : hb.params) {
+      ps.push_back({p.template params<Elem>(), p.damping});
+      param_material.push_back(p.material);
+    }
     b.params = upload("batch_params", ps);
+    kernels::init_state<Elem>(b);
     using Mat = typename Elem::Material;
     if constexpr (Mat::CONSTANT_TANGENT) {
       constexpr int NS = Mat::NSTRAIN;
@@ -175,7 +188,7 @@ struct TypedBatch final : InternalForce::Batch {
                                      b.color_elements.extent(0)) * 4 +
            static_cast<std::int64_t>(b.params.extent(0) * sizeof(kernels::DevParams<Elem>)) +
            static_cast<std::int64_t>(b.geometry.extent(0) + b.constants.extent(0) + t.constant.extent(0) +
-                                     t.stored.extent(0)) * 8;
+                                     t.stored.extent(0) + b.state[0].extent(0) + b.state[1].extent(0)) * 8;
   }
   double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const override {
     return kernels::min_critical_dt<Elem>(b, coords, N, s);
@@ -241,6 +254,29 @@ struct TypedBatch final : InternalForce::Batch {
     return static_cast<std::int64_t>(n) * 8;
   }
   TangentSymmetry tangent_symmetry() const override { return Elem::TANGENT; }
+  bool has_state() const override { return Elem::Material::NSTATE > 0; }
+  void commit_state() override { b.current = 1 - b.current; }
+  bool set_material_stage(std::int32_t material, int stage) override {
+    using MP = typename Elem::Material::Params;
+    if constexpr (requires(MP q) { q.loadStage = 0; }) {
+      bool any = false;
+      for (std::size_t i = 0; i < host_params.size(); ++i)
+        if (param_material[i] == material) {
+          host_params[i].p.mat.loadStage = stage;
+          any = true;
+        }
+      if (any) {
+        auto m = Kokkos::create_mirror_view(b.params);
+        for (std::size_t i = 0; i < host_params.size(); ++i) m(i) = host_params[i];
+        Kokkos::deep_copy(b.params, m);
+      }
+      return any;
+    } else {
+      (void)material;
+      (void)stage;
+      return false;
+    }
+  }
   bool constant_tangent() const override { return Elem::Material::CONSTANT_TANGENT; }
 
   int max_elements_per_team() const override {
@@ -391,8 +427,27 @@ bool InternalForce::constant_tangents() const {
   return true;
 }
 
+bool InternalForce::has_state() const {
+  for (const auto& b : batches_)
+    if (b->has_state()) return true;
+  return false;
+}
+
+void InternalForce::commit_state() {
+  for (auto& b : batches_) b->commit_state();
+}
+
+bool InternalForce::set_material_stage(std::int32_t material, int stage) {
+  bool any = false;
+  for (auto& b : batches_) any = b->set_material_stage(material, stage) || any;
+  Kokkos::fence();
+  return any;
+}
+
 OperatorSettings InternalForce::resolve(const OperatorSettings& s) const {
   OperatorSettings r = s;
+  // The recomputed tangent would call the material without its history.
+  if (r.tangent == TangentSource::Recomputed && has_state()) r.tangent = TangentSource::Stored;
   if (r.geometry == Geometry::Cached && !has_cache_) r.geometry = Geometry::Recompute;
   if (r.tangent == TangentSource::Auto) r.tangent = constant_tangents() ? TangentSource::Constant : TangentSource::Stored;
   if (r.tangent == TangentSource::Constant && !constant_tangents()) r.tangent = TangentSource::Stored;

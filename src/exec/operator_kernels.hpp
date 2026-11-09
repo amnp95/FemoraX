@@ -10,8 +10,8 @@
 //   Constant    one D per parameter set (materials with CONSTANT_TANGENT), set up once
 //   Stored      D written per Gauss point by store_tangents (packed when declared symmetric)
 //   Recomputed  the material is called again at the current displacement
-// Materials with history state get it with the first such material (milestone 2); the
-// kernels pass an empty state today, like the explicit force kernels.
+// Materials with history state: the stored source writes the trial state as the force
+// kernel does; the recomputed source is only for materials without state.
 //
 // Included only by exec .cpp files (it contains device lambdas).
 
@@ -38,14 +38,16 @@ KOKKOS_INLINE_FUNCTION PointArray<const double> tangents_of(const Vec& t, Index 
   return {t.data() + static_cast<std::ptrdiff_t>(e) * Elem::NGP, Elem::NGP * padded, 1};
 }
 
-// D of the material at the strain of ue at point s (empty state).
+// D of the material at the strain of ue at point s, from the point's committed state; the
+// trial state is written (the same values the force kernel writes at this displacement).
 template <class Elem>
 KOKKOS_INLINE_FUNCTION void material_tangent(const typename Elem::Params& p, const typename Elem::PointShape& s,
-                                             const double* ue, double (*D)[Elem::Material::NSTRAIN]) {
+                                             const double* ue, Strided<const double> committed, Strided<double> trial,
+                                             double (*D)[Elem::Material::NSTRAIN]) {
   using Mat = typename Elem::Material;
   double eps[Mat::NSTRAIN], sig[Mat::NSTRAIN];
   Elem::point_strain(s, ue, eps);
-  Mat::update(p.mat, {}, {}, eps, sig, D);
+  Mat::update(p.mat, committed, trial, eps, sig, D);
 }
 
 // One element: gather, operator or diagonal, emit. Diagonal = true writes diag(K_eff).
@@ -63,6 +65,7 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
   const auto params = b.params;
   const auto geo = b.geometry, cst = b.constants;
   const auto tc = t.constant, ts = t.stored;
+  const auto sc = b.state[b.current];
   const Index P = b.padded;
   const std::int64_t base = b.slot_offset;
   Kokkos::parallel_for(
@@ -94,12 +97,14 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
               for (int c = 0; c < NS; ++c) D[a][c] = tc((static_cast<std::int64_t>(pi) * NS + a) * NS + c);
           } else if (SourceI == static_cast<int>(Source::Stored)) {
             Storage<Elem>::load(tangents_of<Elem>(ts, e, P).point(gp), D);
-          } else {
-            material_tangent<Elem>(pr.p, s, ue, D);
+          } else {  // Recomputed: materials without history state only (InternalForce::resolve)
+            material_tangent<Elem>(pr.p, s, ue, {}, {}, D);
           }
         };
-        // Committed tangent (betaKcomm): from the committed state, empty today.
-        auto committed_at = [&](int, double (*D)[NS]) { Mat::committed_tangent(pr.p.mat, {}, D); };
+        // Committed tangent (betaKcomm): from the point's committed state.
+        auto committed_at = [&](int gp, double (*D)[NS]) {
+          Mat::committed_tangent(pr.p.mat, state_of<Elem>(sc, e, P).point(gp), D);
+        };
         // Cached is a template constant (plain if: nvcc cannot capture inside if constexpr).
         // Only the source in use is built (a recomputed source may compute element constants).
         if (Cached) {
@@ -126,6 +131,7 @@ void launch_store_tangents(const DevBatch<Elem>& b, const DevTangents<Elem>& t, 
   const auto params = b.params;
   const auto geo = b.geometry;
   const auto ts = t.stored;
+  const auto sc = b.state[b.current], st = b.state[1 - b.current];
   const Index P = b.padded;
   Kokkos::parallel_for(
       "element_store_tangents", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count),
@@ -150,7 +156,7 @@ void launch_store_tangents(const DevBatch<Elem>& b, const DevTangents<Elem>& t, 
           if (Cached) Elem::point_load_geometry(gp, cache_of<Elem>(geo, e, P).point(gp), s);
           else Elem::point_geometry(xl, gp, s);
           double D[NS][NS];
-          material_tangent<Elem>(pr.p, s, ue, D);
+          material_tangent<Elem>(pr.p, s, ue, state_of<Elem>(sc, e, P).point(gp), state_of<Elem>(st, e, P).point(gp), D);
           Storage<Elem>::store(D, out.point(gp));
         }
       });

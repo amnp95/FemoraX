@@ -192,6 +192,12 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       if (!recorders.activate(r->name)) throw io::ModelError("process step names an unknown recorder " + r->name);
     } else if (const auto* s = std::get_if<io::SetTimeStep>(&step.step)) {
       time = s->time;
+    } else if (const auto* ms = std::get_if<io::UpdateMaterialStageStep>(&step.step)) {
+      // updateMaterialStage -material <tag> -stage <stage>, for each listed material. The
+      // switch to the plastic stage (elast2Plast) happens in the next state determination.
+      for (const auto tag : ms->materials)
+        for (std::size_t i = 0; i < model.materials.size(); ++i)
+          if (model.materials[i].tag == tag) force.set_material_stage(static_cast<std::int32_t>(i), ms->stage);
     } else if (const auto* lc = std::get_if<io::LoadConstStep>(&step.step)) {
       // loadConst [-time t]: the supported patterns (UniformExcitation) have no load
       // factor to freeze; the body force is constant anyway. Only the time changes.
@@ -254,6 +260,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
           time += dt;  // CentralDifference::commit
         }
         ++k;
+        force.commit_state();  // Domain::commit: the materials' trial state becomes committed
         recorders.record(time, u, v_rec, a);
         if (opt.nan_check_interval > 0 && k % opt.nan_check_interval == 0 && !all_finite(u)) {
           throw io::ModelError("stage \"" + an->name + "\": displacements are not finite at step " +

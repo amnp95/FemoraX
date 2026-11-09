@@ -32,7 +32,9 @@ void check_supported(const Model& m, const Capabilities& caps) {
     }
   }
   for (const auto& mat : m.materials) {
-    if (has_material_stage(mat) && !caps.soil_materials) {
+    const bool pdmy = std::holds_alternative<PressureDependMultiYieldData>(mat.data);
+    const bool pimy = std::holds_alternative<PressureIndependMultiYieldData>(mat.data);
+    if ((pdmy && !caps.pressure_depend_multi_yield) || (pimy && !caps.pressure_independ_multi_yield)) {
       unsupported(std::string("nD material ") + material_type_name(mat) + " (/materials/nd/" +
                   std::to_string(mat.tag) + ") is not available yet (milestone 2)");
     }
