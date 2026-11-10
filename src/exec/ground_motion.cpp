@@ -1,5 +1,7 @@
 #include "exec/ground_motion.hpp"
 
+#include "exec/drm_load.hpp"
+
 #include <cmath>
 #include <string>
 
@@ -142,6 +144,10 @@ void GroundMotions::evaluate(double t) {
           accel(slot) = fact * a;  // UniformExcitation: R = fact in its DOF
         });
   }
+}
+
+void GroundMotions::apply_drm(double t, const Kokkos::View<double*, Space>& f) const {
+  for (auto* d : drm_) d->apply(t, f);
 }
 
 }  // namespace femorax::exec

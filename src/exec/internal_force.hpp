@@ -149,6 +149,12 @@ class InternalForce {
   int select_elements(const std::vector<std::int32_t>& tags);
   void element_output(int selection, int which, const Vec& out, std::int64_t offset);
 
+  // H5DRM effective forces of the DRM elements of batch `batch` (exec/drm_load.hpp,
+  // kernels::launch_drm_forces) into slots(base + a * n + i).
+  void drm_forces(int batch, const Kokkos::View<std::int32_t*, Space>& elems,
+                  const Kokkos::View<std::uint32_t*, Space>& masks, const Kokkos::View<std::int32_t*, Space>& node_slot,
+                  const Vec& du, const Vec& da, const Vec& slots, std::int64_t base);
+
   // Smallest stable explicit step over all elements (docs/design.md, "Stable time step").
   double min_critical_dt(ExplicitScheme scheme) const;
 

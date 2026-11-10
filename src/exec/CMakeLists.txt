@@ -3,6 +3,7 @@ add_library(femorax_exec
   assembly.cpp
   device_memory.cpp
   explicit_analysis.cpp
+  drm_load.cpp
   ground_motion.cpp
   implicit_stage.cpp
   recorders.cpp

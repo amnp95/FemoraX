@@ -40,3 +40,7 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
 9. **Output size.** VTKHDF of every node and element every 0.05 s is 160 MB for 30 x 30 x 25
    and 632 MB for 60 x 60 x 25 over 2 s. Options: single-precision VTKHDF output (optional;
    femora.results must read it), and recording a region only.
+10. **H5DRM in implicit stages.** `form_unbalance` applies the DRM forces at the load time, but
+    only the explicit path is verified (`tests/unit/test_drm_free_field.cpp`). Verify with a
+    free field computed by the same Newmark recurrence, and against the stored OpenSees DRM
+    box (milestone 4, step 5).

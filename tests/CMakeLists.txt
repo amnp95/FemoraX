@@ -35,7 +35,8 @@ add_executable(femorax_unit_tests
   unit/test_gmres.cpp
   unit/test_implicit.cpp
   unit/test_runtime.cpp
-  unit/test_drm_setup.cpp)
+  unit/test_drm_setup.cpp
+  unit/test_drm_free_field.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest
                       Eigen3::Eigen HDF5::HDF5)
 target_compile_definitions(femorax_unit_tests PRIVATE

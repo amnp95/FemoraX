@@ -548,10 +548,11 @@ def write_drm_file(path: Path) -> None:
 
 
 DRM_CASES = [
-    # valid in the schema; this build refuses it until the H5DRM pattern runs
-    ("h5drm", "explicit", "unsupported", "the H5DRM pattern", m_h5drm()),
-    ("h5drm_no_transform", "explicit", "unsupported", "the H5DRM pattern",
+    ("h5drm", "explicit", "valid", "", m_h5drm()),
+    ("h5drm_no_transform", "explicit", "valid", "",
      m_h5drm({"do_coordinate_transformation": np.int32(0)}, transform=False)),
+    # valid in the schema; refused: OpenSees stores the factor but never applies it
+    ("h5drm_factor", "explicit", "unsupported", "never applies it", m_h5drm({"factor": np.float64(2.0)})),
     ("h5drm_in_0_5_file", "explicit", "invalid", "was added in schema 0.6", m_h5drm(version=[0, 5])),
     ("h5drm_missing_file", "explicit", "invalid", "does not exist", m_h5drm(file="no_such_file.h5drm")),
     ("h5drm_tolerance", "explicit", "invalid", "distance_tolerance' must be positive",

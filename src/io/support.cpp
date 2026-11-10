@@ -37,6 +37,11 @@ void check_supported(const Model& m, const Capabilities& caps) {
   for (const auto& p : m.drm_patterns) {
     const std::string where = "/patterns/" + std::to_string(p.tag);
     if (!caps.h5drm) unsupported("the H5DRM pattern (" + where + ") is not available yet (milestone 4)");
+    if (p.factor != 1.0) {
+      unsupported("H5DRM factor " + std::to_string(p.factor) + " (" + where +
+                  "): OpenSees stores the factor but never applies it (H5DRMLoadPattern), so a factor other "
+                  "than 1 would make the two programs differ. Scale the DRM file instead");
+    }
   }
   for (const auto& mat : m.materials) {
     const bool pdmy = std::holds_alternative<PressureDependMultiYieldData>(mat.data);

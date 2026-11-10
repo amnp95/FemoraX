@@ -17,6 +17,8 @@
 
 namespace femorax::exec {
 
+class DrmLoad;
+
 class GroundMotions {
  public:
   using Space = Kokkos::DefaultExecutionSpace;
@@ -38,6 +40,12 @@ class GroundMotions {
   // Initial velocities (vel0) of the active patterns, host side.
   std::vector<std::pair<int, double>> initial_velocities() const;
 
+  // Active H5DRM patterns (exec/drm_load.hpp, owned elsewhere): apply_drm subtracts their
+  // forces at time t from f, where the integrator applies loads.
+  void activate_drm(DrmLoad* d) { drm_.push_back(d); }
+  void apply_drm(double t, const Kokkos::View<double*, Space>& f) const;
+  bool has_drm() const { return !drm_.empty(); }
+
  private:
   struct Series {
     bool uniform = true;
@@ -57,6 +65,7 @@ class GroundMotions {
   Kokkos::View<double*, Space> accel_;
   Kokkos::View<int*, Space> dof_;
   Kokkos::View<int*, Space> time_loc_;  // PathTimeSeries::currentTimeLoc, per active pattern
+  std::vector<DrmLoad*> drm_;
 };
 
 }  // namespace femorax::exec

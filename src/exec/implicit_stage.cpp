@@ -200,6 +200,7 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
 
   auto form_unbalance = [&] {
     force.compute(s.fs);  // f_int(u) + Rayleigh damping forces at v (v = 0 in static stages)
+    motions.apply_drm(time, force.f);  // H5DRM forces (external loads) at the load time
     if (!is_static) force.apply_operator({0.0, 0.0, 1.0}, s.os, u, a, s.tmp);
     form_residual(s.b, force.f, s.tmp, !is_static, motions.accel(), motions.dof(), motions.num_active(), s.mr[0],
                   s.mr[1], s.mr[2]);

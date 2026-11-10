@@ -117,6 +117,10 @@ struct InternalForce::Batch {
   // updateMaterialStage for the parameter sets of model material `material` (an index into
   // model.materials); returns whether any set of this batch uses it.
   virtual bool set_material_stage(std::int32_t material, int stage) = 0;
+  virtual void drm_forces(bool cached, const Vec& coords, Index N, const Kokkos::View<Index*, Space>& elems,
+                          const Kokkos::View<std::uint32_t*, Space>& masks,
+                          const Kokkos::View<Index*, Space>& node_slot, const Vec& du, const Vec& da,
+                          const Vec& slots, std::int64_t base) = 0;
   virtual void element_output(int which, const Kokkos::View<Index*, Space>& elems,
                               const Kokkos::View<Index*, Space>& rows, const Vec& out, std::int64_t offset,
                               const Vec& coords, Index N, const Vec& u) = 0;
@@ -336,6 +340,19 @@ struct TypedBatch final : InternalForce::Batch {
                       const Vec& out, std::int64_t offset, const Vec& coords, Index N, const Vec& u) override {
     if (elems.extent(0) > 0) kernels::launch_element_output<Elem>(b, which, elems, rows, out, offset, coords, N, u);
   }
+  void drm_forces(bool cached, const Vec& coords, Index N, const Kokkos::View<Index*, Space>& elems,
+                  const Kokkos::View<std::uint32_t*, Space>& masks, const Kokkos::View<Index*, Space>& node_slot,
+                  const Vec& du, const Vec& da, const Vec& slots, std::int64_t base) override {
+    if constexpr (MatrixFreeElement<Elem> && Elem::Material::CONSTANT_TANGENT) {
+      if (cached && b.geometry.extent(0) > 0)
+        kernels::launch_drm_forces<Elem, true>(b, t, coords, N, elems, masks, node_slot, du, da, slots, base);
+      else kernels::launch_drm_forces<Elem, false>(b, t, coords, N, elems, masks, node_slot, du, da, slots, base);
+    } else {
+      (void)cached, (void)coords, (void)N, (void)elems, (void)masks, (void)node_slot, (void)du, (void)da,
+          (void)slots, (void)base;
+      Kokkos::abort("H5DRM: a DRM element needs an elastic material (compile/drm.cpp refuses the others)");
+    }
+  }
   void commit_state() override { b.current = 1 - b.current; }
   bool set_material_stage(std::int32_t material, int stage) override {
     using MP = typename Elem::Material::Params;
@@ -483,6 +500,14 @@ void InternalForce::compute(const ForceSettings& settings) {
   last_plastic_points_ = 0;
   for (auto& b : batches_) last_plastic_points_ += b->run(s, out, coords_, nnodes_, u, v, f, gather_.slots());
   if (out == Out::Slots) gather_.gather(f);
+}
+
+void InternalForce::drm_forces(int batch, const Kokkos::View<std::int32_t*, Space>& elems,
+                               const Kokkos::View<std::uint32_t*, Space>& masks,
+                               const Kokkos::View<std::int32_t*, Space>& node_slot, const Vec& du, const Vec& da,
+                               const Vec& slots, std::int64_t base) {
+  batches_[static_cast<std::size_t>(batch)]->drm_forces(has_cache_, coords_, nnodes_, elems, masks, node_slot, du, da,
+                                                        slots, base);
 }
 
 bool InternalForce::has_split_material() const {

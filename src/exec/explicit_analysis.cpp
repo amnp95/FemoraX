@@ -12,6 +12,7 @@
 
 #include "compile/batches.hpp"
 #include "exec/device_memory.hpp"
+#include "exec/drm_load.hpp"
 #include "exec/force_settings.hpp"
 #include "exec/ground_motion.hpp"
 #include "exec/internal_force.hpp"
@@ -156,6 +157,13 @@ std::int64_t estimate_device_bytes(const io::Model& model, const compile::Compil
     if (gmres) bytes += (2 * 30 + 3) * neq * 8;  // GMRES(30): basis V, Z, w, r
   }
   bytes += Recorders::device_bytes_estimate(model, c);
+  for (const auto& p : model.drm_patterns) {  // host work only: the header and the matching
+    const io::DrmFile f = io::read_drm_header(p.path);
+    const compile::DrmSetup s = compile::setup_drm(p, f, c);
+    std::int64_t dofs = 0;
+    for (const auto& e : s.elements) dofs += c.batches[static_cast<std::size_t>(e.batch)].ndof;
+    bytes += DrmLoad::device_bytes(static_cast<std::int64_t>(s.node.size()), dofs, f.samples, c.dofs.num_equations);
+  }
   return bytes;
 }
 
@@ -200,6 +208,8 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   Vec um("previous_displacement", static_cast<std::size_t>(neq));
   Kokkos::deep_copy(u, 0.0);
   GroundMotions motions(model);
+  std::vector<std::unique_ptr<DrmLoad>> drm;
+  for (const auto& p : model.drm_patterns) drm.push_back(std::make_unique<DrmLoad>(p, c, force));
   Recorders recorders(model, c);
   recorders.attach(force);
   rep.setup_seconds = now() - t_setup;
@@ -213,6 +223,13 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   std::unique_ptr<ImplicitStage> implicit;  // created at the first implicit stage
   for (const auto& step : model.process) {
     if (const auto* p = std::get_if<io::PatternStep>(&step.step)) {
+      bool drm_pattern = false;
+      for (auto& d : drm)
+        if (d->tag() == p->tag) {
+          motions.activate_drm(d.get());
+          drm_pattern = true;
+        }
+      if (drm_pattern) continue;
       motions.activate(p->tag);
       for (const auto& [dof, vel0] : motions.initial_velocities()) {
         // UniformExcitation::setDomain: committed velocity vel0 in the pattern's DOF.
@@ -288,12 +305,14 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
           time += dt;
           motions.evaluate(time);
           force.compute(choice.settings);
+          motions.apply_drm(time, force.f);
           ed_correct(force.f, m, eq_dof, motions.accel(), motions.dof(), motions.num_active(), v_elem, a,
                      v_rec, dt, n);
         } else {
           motions.evaluate(time);  // loads at t(n)
           cd_garbage_velocity(v_elem, um, c2, n);
           force.compute(choice.settings);
+          motions.apply_drm(time, force.f);
           cd_solve(force.f, m, cm, eq_dof, motions.accel(), motions.dof(), motions.num_active(), u, um, v_rec,
                    a, c2, c3, dt, n);
           time += dt;  // CentralDifference::commit

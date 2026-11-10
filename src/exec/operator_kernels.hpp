@@ -136,6 +136,87 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
       });
 }
 
+// H5DRM effective forces of the DRM elements of a batch (exec/drm_load.hpp): for element
+// elems(i) with boundary-node mask masks(i), the free-field motion of its nodes (du, da at
+// node_slot(node)), split into the exterior part (u_e, a_e) and the boundary part (u_b,
+// a_b); y_e = K u_e + M a_e and y_b = K u_b + M a_b through the element's own operator;
+// boundary nodes get -y_e, exterior nodes +y_b (OpenSees: Peff_b = -M_be a_e - K_be u_e,
+// Peff_e = M_eb a_b + K_eb u_b). Written to slots(base + a * n + i), local DOF a; elastic
+// materials only (the constant tangent).
+template <class Elem, bool Cached>
+void launch_drm_forces(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const Vec& coords, Index N,
+                       const Kokkos::View<Index*, Space>& elems, const Kokkos::View<std::uint32_t*, Space>& masks,
+                       const Kokkos::View<Index*, Space>& node_slot, const Vec& du, const Vec& da, const Vec& slots,
+                       std::int64_t base) {
+  static_assert(MatrixFreeElement<Elem>, "DRM forces need a MatrixFreeElement");
+  using Mat = typename Elem::Material;
+  constexpr int NNODE = Elem::NNODE, NDOF = Elem::NDOF, NDM = Elem::NDM, NS = Mat::NSTRAIN;
+  const auto node = b.node, param = b.param;
+  const auto params = b.params;
+  const auto geo = b.geometry, cst = b.constants;
+  const auto tc = t.constant;
+  const auto sc = b.state[b.current];
+  const Index P = b.padded;
+  const Index n = static_cast<Index>(elems.extent(0));
+  if (n == 0) return;
+  Kokkos::parallel_for(
+      "element_drm_forces", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, n), KOKKOS_LAMBDA(const Index i) {
+        const Index e = elems(i);
+        const std::uint32_t mask = masks(i);
+        const Index pi = param(e);
+        const DevParams<Elem>& pr = params(pi);
+        double ue_x[NDOF], ae_x[NDOF], ue_b[NDOF], ae_b[NDOF];
+        for (int a = 0; a < NNODE; ++a) {
+          const Index sl = node_slot(node(a * P + e));
+          const bool boundary = ((mask >> a) & 1u) != 0;
+          for (int c = 0; c < 3; ++c) {
+            const double uu = du(3 * static_cast<std::int64_t>(sl) + c), aa = da(3 * static_cast<std::int64_t>(sl) + c);
+            ue_x[3 * a + c] = boundary ? 0.0 : uu;
+            ae_x[3 * a + c] = boundary ? 0.0 : aa;
+            ue_b[3 * a + c] = boundary ? uu : 0.0;
+            ae_b[3 * a + c] = boundary ? aa : 0.0;
+          }
+        }
+        double xel[NNODE][NDM], xl[3][8] = {};
+        if (!Cached) {
+          for (int a = 0; a < NNODE; ++a) {
+            const Index nd = node(a * P + e);
+            for (int d = 0; d < NDM; ++d) xel[a][d] = coords(d * N + nd);
+          }
+          Elem::local_coords(xel, xl);
+        }
+        auto tangent_at = [&](int, const typename Elem::PointShape&, double (*D)[NS]) {
+          for (int a = 0; a < NS; ++a)
+            for (int c = 0; c < NS; ++c) D[a][c] = tc((static_cast<std::int64_t>(pi) * NS + a) * NS + c);
+        };
+        auto committed_at = [&](int gp, double (*D)[NS]) {
+          Mat::committed_tangent(pr.p.mat, state_of<Elem>(sc, e, P).point(gp), D);
+        };
+        const Rayleigh none{};
+        const OperatorCoefficients K{1.0, 0.0, 0.0}, M{0.0, 0.0, 1.0};
+        double kx[NDOF], mx[NDOF], kb[NDOF], mb[NDOF];
+        if (Cached) {
+          const auto g = cached_geometry<Elem>(geo, cst, e, P);
+          element_operator_apply<Elem>(pr.p, none, K, g, tangent_at, committed_at, ue_x, kx);
+          element_operator_apply<Elem>(pr.p, none, M, g, tangent_at, committed_at, ae_x, mx);
+          element_operator_apply<Elem>(pr.p, none, K, g, tangent_at, committed_at, ue_b, kb);
+          element_operator_apply<Elem>(pr.p, none, M, g, tangent_at, committed_at, ae_b, mb);
+        } else {
+          const auto g = Elem::recomputed_geometry(xl, pr.p);
+          element_operator_apply<Elem>(pr.p, none, K, g, tangent_at, committed_at, ue_x, kx);
+          element_operator_apply<Elem>(pr.p, none, M, g, tangent_at, committed_at, ae_x, mx);
+          element_operator_apply<Elem>(pr.p, none, K, g, tangent_at, committed_at, ue_b, kb);
+          element_operator_apply<Elem>(pr.p, none, M, g, tangent_at, committed_at, ae_b, mb);
+        }
+        for (int a = 0; a < NDOF; ++a) {
+          const bool boundary = ((mask >> (a / 3)) & 1u) != 0;
+          // OpenSees' order: Peff_b = 0 - M_be a_e, then - K_be u_e; Peff_e = M_eb a_b + K_eb u_b.
+          const double v = boundary ? (-mx[a] - kx[a]) : (mb[a] + kb[a]);
+          slots(base + static_cast<std::int64_t>(a) * n + i) = v;
+        }
+      });
+}
+
 // State determination for the Stored source: D at every point at displacement u.
 template <class Elem, bool Cached>
 void launch_store_tangents(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const Vec& coords, Index N,
