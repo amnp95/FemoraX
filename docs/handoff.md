@@ -94,23 +94,27 @@ ARM and Grace-Hopper.
   machines at once.
 - Python: a venv per machine; Femora reached read-only through a `.pth` file as on the
   laptop (`docs/dependencies.md`), not `pip install -e` (it writes into the clone).
-- Builds are per machine and node type (x86 and ARM objects do not mix): the laptop presets
-  (`cpu-*`, `cuda-ampere86`) do not fit; add TACC presets (for example `s3-cpu-release`,
-  `s3-cpu-asan`, `s3-cuda-hopper90`) and a TACC mode of `scripts/check.sh`.
-- First tasks on Stampede3, in order:
-  1. Build and test: the last commit passed only cpu-debug and cpu-release on the laptop
-     (C: ran out of space); run the asan preset's tests on Stampede3 (and the CUDA tests on
-     an `h100` node; the laptop's `cuda-ampere86` when it has space).
-  2. Build `tests/reference` (the serial OpenSees and the drivers) and run the system tests
-     that need OpenSees.
-  3. Then milestone 4, step 4 (above).
+- Builds are per machine and node type (x86 and ARM objects do not mix).
+- Done on Stampede3 (2026-11-10, `spr` node): `scripts/stampede3_env.sh`; the presets
+  `s3-cpu-debug` (197 tests), `s3-cpu-release` (198, the laptop's full set) and
+  `s3-cpu-ubsan` (197), all passing, through `scripts/check.sh`; the Intel OpenSees reference
+  build (`scripts/stampede3_opensees.sh`, `tests/reference/README.md`), with the two live
+  OpenSees comparisons passing. Pitfalls met: TACC sets `OMP_NUM_THREADS=1`, which `nproc`
+  obeys (check.sh now counts cores without it); TACC's XALT preloads a library that
+  AddressSanitizer refuses (the env script unloads it); the compute nodes use strict memory
+  accounting (`vm.overcommit_memory = 2`), so ASan cannot reserve its shadow memory there at
+  all: Stampede3 runs UBSan only, ASan stays on the laptop (and maybe Vista); a `module load`
+  inside a pipe (`module load x | tail`) runs in a subshell and changes nothing.
+- Next on Stampede3: a `s3-cuda-hopper90` preset and the tests on an `h100` node; the first
+  Stampede3 benchmark baselines (`benchmarks/run_all.sh`); then milestone 4 (above): the
+  plastic basin, steps 4-7, the implicit basin, and FemoraX against the user's 96-rank
+  OpenSees basin run.
 
 - `benchmarks/run_all.sh` already detects Vista and Stampede3 nodes and configures the
   build: Grace CPUs with `-DKokkos_ARCH_ARMV9_GRACE=ON`, Hopper GPUs with
   `-DKokkos_ARCH_HOPPER90=ON` (Kokkos 5.1.0 has both), Sapphire Rapids with
   `Kokkos_ARCH_SPR`. It builds without tests (`FEMORAX_BUILD_TESTS=OFF`) and has not been run
-  yet. There are no CMake presets for TACC; `scripts/check.sh` knows only the laptop presets.
-  Before benchmarks there: build with tests on a `gg` (Grace-Grace) and a `gh` node and run
+  yet. Before benchmarks on Vista: build with tests on a `gg` (Grace-Grace) and a `gh` node and run
   the unit and system tests once (CPU and GPU results agree to rounding only; GPU tests
   compare at a tolerance).
 - Compute nodes may have no internet access: fetch the dependencies on a login node first

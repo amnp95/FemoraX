@@ -131,6 +131,14 @@ ctest --preset cpu-debug
   `scripts/check.sh` adds this preset when `nvidia-smi` sees a GPU. The card's FP64 rate is
   1/64 of FP32: its FP64 timings do not represent data-center GPUs; its memory behaviour
   does. HIP: not set up yet.
+- Stampede3 (TACC; development moved there 2026-11-10): `source scripts/stampede3_env.sh`
+  (TACC modules: GCC 13.2, HDF5 1.14.6, Eigen 3.4.0, Python 3.12; unloads TACC's XALT
+  preload), then on a compute node (`idev -p spr` or `skx-dev`) the presets `s3-cpu-debug`,
+  `s3-cpu-release`, `s3-cpu-ubsan` (generic x86-64; Kokkos and GoogleTest from
+  `build/_kokkos`, `build/_gtest`, fetched once on a login node). `scripts/check.sh` picks
+  them on Stampede3. AddressSanitizer cannot run on its compute nodes (strict memory
+  accounting), so ASan stays on the laptop's `cpu-asan`. The OpenSees reference build there:
+  `scripts/stampede3_opensees.sh` (Intel compilers, `tests/reference/README.md`).
 - Determinism is per backend: every layout, scatter and geometry mode gives the same bits
   run after run on one backend. CPU and GPU results agree to rounding only, because nvcc
   fuses multiply-adds (`--fmad=true`); GPU tests compare with host references at a
@@ -223,6 +231,7 @@ Correctness before every commit; performance on TACC:
 
 ## Current milestone
 
-Milestone 2: nonlinear layered soil column (SSPbrick, PressureDependMultiYield and
-PressureIndependMultiYield, material stages, Femora's retry and substep recovery; see
-design.md, Roadmap, for the approved plan). Update this line when the milestone changes.
+Milestone 4: DRM basin (H5DRM, absorbing boundaries; next: streaming the DRM histories,
+a stored OpenSees DRM box, implicit DRM, then Femora's basin example; docs/handoff.md and
+design.md, Roadmap). Milestone 2 (nonlinear layered soil column) is done. Update this line
+when the milestone changes.

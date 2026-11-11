@@ -30,6 +30,23 @@ cmake --build build/reference -j8          # OpenSees executable and all drivers
 OpenSees compiles its HDF5 recorders (VTKHDF, MPCO) only with HDF5 1.12 or newer; with the
 system HDF5 1.10 `recorder vtkhdf` is "not found".
 
+### Stampede3 (TACC)
+
+`scripts/stampede3_opensees.sh` (on a compute node, about 3 minutes) builds the same project
+in `build/reference-s3-intel` with the Intel compilers, following the user's own Stampede3
+OpenSees build: `icx`/`icpx`/`ifx`, MKL linked statically as BLAS/LAPACK, Tcl 8.6.11 from
+Conan (`~/.conan`), TACC's HDF5 1.14.6 and Eigen 3.4.0, and `-fp-model=precise` so the
+compiler keeps the order of floating-point operations. It writes a launcher,
+`build/reference-s3-intel/OpenSees.sh`, that sets the Intel runtime, HDF5 and Tcl paths;
+the `s3-*` presets use it for the live comparisons (`system.vtkhdf_vs_opensees`,
+`system.implicit_vs_opensees`, both passing).
+
+The stored data stays the GCC data from the laptop. The Intel drivers agree with it to
+rounding (2026-11-10): constraints 11 of 11 files identical; elements 22 of 32 identical,
+the others within 8.4e-15 of each file's largest value; materials 57 of 86 identical, the
+others within 5.8e-14, with no plastic path taking a different branch. The remaining
+differences are most likely Intel's own math library (`exp`, `pow`, ...).
+
 ## Regenerate reference data
 
 ```
