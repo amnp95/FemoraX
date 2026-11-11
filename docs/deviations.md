@@ -118,6 +118,35 @@ Default tolerances (until a component states otherwise):
 
 ## Entries
 
+### Tolerances of other compilers and GPUs — Intel's math library, borderline retries (decided 2026-11-11)
+
+**What.** Two checks are looser outside the GCC host builds, and only there:
+
+1. The PressureDependMultiYield strain-path test (`tests/unit/test_pdmy_reference.cpp`)
+   allows a relative difference of 1e-13 (instead of 1e-14) when compiled with Intel's
+   compilers (`__INTEL_LLVM_COMPILER`, the `s3-sycl-pvc` preset's host code).
+2. The Femora example system test (`tests/system/femora_example/femora_example_check.sh`)
+   compares the retry and substep events exactly on host builds and only reports a
+   difference on GPU builds; its field tolerances are unchanged on every backend.
+
+**Why.** Both checks are bug detectors that rely on GCC builds reproducing OpenSees bit for
+bit; no physical result depends on these last digits.
+
+1. Intel's compilers, even with `-fp-model=precise`, call Intel's own math library (`pow`,
+   `exp`, ...), whose last bits differ from glibc's. The differences are at rounding level
+   and change no plastic branch.
+2. A Newton iteration whose convergence test lands on the edge of its tolerance passes or
+   fails on the last bits of the residual, so a retry can appear on one backend and not on
+   another while every field stays within tolerance.
+
+**Evidence.** (1) The Intel-built OpenSees against the stored GCC data: up to 5.8e-14 of a
+file's largest value (`tests/reference/README.md`); FemoraX built with `icpx`: up to 5.8e-14
+on the same paths, most files still bit-identical. (2) Intel GPU (Data Center GPU Max 1550,
+2026-11-11): OpenSees retries once at step 10 of the re-equilibration and FemoraX converges
+without the retry, while displacement agrees within 1.9e-6, stress within 1.9e-5, strain
+within 4.8e-5, the surface PGA within 6.0e-6 and the 5 % surface spectrum within 4.1e-5 of
+its peak (tolerance 5e-4). CPU and CUDA builds reproduced the event sequence exactly.
+
 ### CentralDifference with lumped stdBrick — lumped mass in the residual too
 - OpenSees: `SRC/analysis/integrator/CentralDifference.cpp`,
   `SRC/analysis/integrator/TransientIntegrator.cpp` (`formEleResidual`),

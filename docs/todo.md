@@ -46,3 +46,18 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     only the explicit path is verified (`tests/unit/test_drm_free_field.cpp`). Verify with a
     free field computed by the same Newmark recurrence, and against the stored OpenSees DRM
     box (milestone 4, step 5).
+11. **Intel GPU: an intermittent GPU memory fault in `bench.smoke`** (2026-11-11, preset
+    `s3-sycl-pvc`, Data Center GPU Max 1550). Once, with 8 test processes sharing one GPU
+    tile, the benchmark smoke run stopped with "Segmentation fault from GPU ... type
+    NotPresent ... access Write" right after the `explicit_force_pdmy_ssp` cases; the same
+    binary passed alone 4 times out of 4, and the whole suite otherwise passes. Either a rare
+    out-of-bounds write or race in a kernel (which would matter on every backend) or the
+    Intel runtime with several processes on one tile. Next: run the benchmark kernels one by
+    one under Intel's memory checking (`ONEAPI_DEVICE_SELECTOR`, Level Zero validation layer)
+    and the CUDA build under `compute-sanitizer --tool memcheck`. Until then `s3-sycl-pvc`
+    is not part of `scripts/check.sh`.
+12. **Constant-Q damping (Qs, Qp)**, as SW4 uses for the DRM inputs: a viscoelastic law with
+    a few relaxation mechanisms per integration point (deviatoric with Qs, volumetric with
+    Qp), which barely reduces the explicit stable step, unlike Rayleigh stiffness damping.
+    OpenSees' `damping Uniform` does not work correctly according to the user; not ported.
+    Plan first (formulation, verification, schema addition).

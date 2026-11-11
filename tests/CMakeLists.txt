@@ -39,6 +39,10 @@ add_executable(femorax_unit_tests
   unit/test_drm_free_field.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest
                       Eigen3::Eigen HDF5::HDF5)
+# test_contracts.cpp declares mock elements and materials whose traits only the concepts
+# read; Clang-based compilers (Intel icpx) report them as unused constants.
+set_source_files_properties(unit/test_contracts.cpp PROPERTIES COMPILE_OPTIONS
+  "$<$<CXX_COMPILER_ID:Clang,IntelLLVM>:-Wno-unused-const-variable;-Wno-unneeded-internal-declaration>")
 target_compile_definitions(femorax_unit_tests PRIVATE
   FEMORAX_REFERENCE_DATA="${PROJECT_SOURCE_DIR}/tests/reference/data")
 femorax_set_warnings(femorax_unit_tests)
@@ -50,7 +54,14 @@ femorax_set_warnings(femorax_unit_tests)
 gtest_discover_tests(femorax_unit_tests
   TEST_PREFIX "unit."
   DISCOVERY_MODE PRE_TEST
+  TEST_FILTER "-MemoryEstimate.*"
   PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
+# The memory estimate compares with the device's free memory: alone on the machine, because
+# other tests on the same GPU change what it reports (Intel's runtime then reported 0 bytes).
+add_test(NAME unit.MemoryEstimate.WithinTenPercentOfTheAllocatedPeak
+         COMMAND femorax_unit_tests --gtest_filter=MemoryEstimate.*)
+set_tests_properties(unit.MemoryEstimate.WithinTenPercentOfTheAllocatedPeak PROPERTIES
+  RUN_SERIAL TRUE ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 
 # OpenMP builds: the whole binary again with 1 and 8 threads (thread-count dependence).
 if(Kokkos_ENABLE_OPENMP)
@@ -111,6 +122,9 @@ if(Kokkos_ENABLE_OPENMP)
 endif()
 if(Kokkos_ENABLE_CUDA)
   string(APPEND expected_spaces ".*Cuda")
+endif()
+if(Kokkos_ENABLE_SYCL)
+  string(APPEND expected_spaces ".*SYCL")
 endif()
 set_tests_properties(app.info PROPERTIES
   PASS_REGULAR_EXPRESSION "Kokkos ${FEMORAX_KOKKOS_VERSION}.*execution spaces:.*${expected_spaces}")
@@ -177,7 +191,13 @@ endif()
 # Nonlinear (PressureDependMultiYield) cases against stored OpenSees output: OpenSees does
 # not run (tests/system/soil_column/nonlinear_references.sh stores it).
 if(EXISTS "${FEMORAX_VENV_PYTHON}")
-  if(Kokkos_ENABLE_CUDA)
+  # A device build (CUDA, HIP or SYCL) compares at the GPU tolerances.
+  if(Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP OR Kokkos_ENABLE_SYCL)
+    set(femorax_device_build TRUE)
+  else()
+    set(femorax_device_build FALSE)
+  endif()
+  if(femorax_device_build)
     set(femorax_backend gpu)
   else()
     set(femorax_backend host)
@@ -192,12 +212,12 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
   # columns"). 30 x 30 on GPUs (about 2 minutes on the laptop); 6 x 6 in host Release builds
   # (about 2 minutes; the 30 x 30 run takes 15). Not in Debug builds (cpu-debug, cpu-asan),
   # where it would take far longer than the rest of the suite.
-  if(Kokkos_ENABLE_CUDA)
+  if(femorax_device_build)
     set(femorax_wide_n 30)
   else()
     set(femorax_wide_n 6)
   endif()
-  if(Kokkos_ENABLE_CUDA OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+  if(femorax_device_build OR NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
   add_test(NAME system.wide_column_vs_stored_opensees
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/wide_column_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_wide_column

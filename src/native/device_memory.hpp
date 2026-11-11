@@ -8,8 +8,10 @@
 namespace femorax::native {
 
 // Free bytes on the current device from the vendor runtime (cudaMemGetInfo,
-// hipMemGetInfo); -1 on error. Each is built only with its backend.
+// hipMemGetInfo, the SYCL Intel extension ext_intel_free_memory); -1 when unknown or on
+// error. Each is built only with its backend.
 std::int64_t cuda_free_memory_bytes();
 std::int64_t hip_free_memory_bytes();
+std::int64_t sycl_free_memory_bytes();
 
 }  // namespace femorax::native

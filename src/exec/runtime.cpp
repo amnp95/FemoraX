@@ -30,6 +30,9 @@ std::vector<std::string> enabled_execution_spaces() {
 #ifdef KOKKOS_ENABLE_HIP
   spaces.emplace_back(Kokkos::HIP::name());
 #endif
+#ifdef KOKKOS_ENABLE_SYCL
+  spaces.emplace_back(Kokkos::SYCL::name());
+#endif
   return spaces;
 }
 
@@ -48,6 +51,12 @@ int simd_width() {
 #if defined(KOKKOS_ENABLE_HIP)
   if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::HIP>)
     return Kokkos::Impl::HIPTraits::WarpSize;  // 64 on CDNA (MI series), 32 on RDNA
+#endif
+#if defined(KOKKOS_ENABLE_SYCL)
+  // Intel GPUs: the largest sub-group size the device offers (32 on Data Center GPU Max,
+  // which also runs 16), the vector length Kokkos' SYCL team policies use at most.
+  if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::SYCL>)
+    return Kokkos::TeamPolicy<Kokkos::SYCL>::vector_length_max();
 #endif
   return 1;  // host backends: one lane per thread
 }

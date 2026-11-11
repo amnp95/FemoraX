@@ -31,7 +31,14 @@ namespace {
 
 using namespace femorax::test;
 constexpr int N = 6;
+// Intel's compilers call Intel's own math library (pow, exp, ...), whose last bits differ
+// from glibc's: up to 5.8e-14 along these paths, as the Intel-built OpenSees shows against
+// the stored (GCC) data (docs/deviations.md, "Tolerances of other compilers and GPUs").
+#if defined(__INTEL_LLVM_COMPILER)
+constexpr double kRelTol = 1e-13;
+#else
 constexpr double kRelTol = 1e-14;
+#endif
 
 template <int NS>
 typename femorax::PressureDependMultiYield<NS>::Params params_of(const ReferenceFile& ref, std::vector<double>& pairs) {

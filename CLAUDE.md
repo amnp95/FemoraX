@@ -139,6 +139,11 @@ ctest --preset cpu-debug
   them on Stampede3. AddressSanitizer cannot run on its compute nodes (strict memory
   accounting), so ASan stays on the laptop's `cpu-asan`. The OpenSees reference build there:
   `scripts/stampede3_opensees.sh` (Intel compilers, `tests/reference/README.md`).
+- Intel GPUs (Stampede3 `pvc` nodes, Data Center GPU Max 1550): `source
+  scripts/stampede3_sycl_env.sh` (oneAPI 2026.0), then the preset `s3-sycl-pvc` (Kokkos'
+  SYCL backend). Intel's compilers default to fast floating-point math: every Intel build
+  (FemoraX or OpenSees) uses `-fp-model=precise`. Tolerances that differ from the GCC builds
+  are in `docs/deviations.md` ("Tolerances of other compilers and GPUs").
 - Determinism is per backend: every layout, scatter and geometry mode gives the same bits
   run after run on one backend. CPU and GPU results agree to rounding only, because nvcc
   fuses multiply-adds (`--fmad=true`); GPU tests compare with host references at a

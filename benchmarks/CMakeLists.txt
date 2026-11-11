@@ -20,6 +20,11 @@ add_executable(femorax_bench
 target_link_libraries(femorax_bench PRIVATE femorax::exec femorax::solvers femorax::compile femorax_bench_kernels)
 target_compile_definitions(femorax_bench PRIVATE FEMORAX_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
 femorax_set_warnings(femorax_bench)
+# flop_count.cpp redefines the keyword double on purpose (it counts the floating-point
+# operations of the physics headers through a counting type); Clang-based compilers
+# (Intel icpx) warn about a keyword macro.
+set_source_files_properties(flop_count.cpp PROPERTIES COMPILE_OPTIONS
+  "$<$<CXX_COMPILER_ID:Clang,IntelLLVM>:-Wno-keyword-macro>")
 
 if(FEMORAX_BUILD_TESTS)
   # Smoke run: every benchmark runs and writes valid JSON. Not a timing check.

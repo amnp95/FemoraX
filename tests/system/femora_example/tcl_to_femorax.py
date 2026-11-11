@@ -12,6 +12,8 @@ several partitions are kept once (their coordinates must agree). Recognised:
 
   set NAME VALUE                     (only to resolve $NAME in fixX / fixY / fixZ)
   nDMaterial PressureDependMultiYield tag nd rho ... c   (Femora's 22 values)
+  nDMaterial PressureIndependMultiYield tag nd rho G K cohesi peakShearStra frictionAng
+             refPress pressDependCoe noYieldSurf             (Femora's 10 values, no pairs)
   nDMaterial ElasticIsotropic tag E nu rho
   node tag x y z -ndf 3
   element stdBrick tag n1 .. n8 mat b1 b2 b3
@@ -55,6 +57,8 @@ import writer as w  # noqa: E402
 PDMY_ORDER = ["nd", "rho", "refShearModul", "refBulkModul", "frictionAng", "peakShearStra", "refPress",
               "pressDependCoe", "PTAng", "contrac", "dilat1", "dilat2", "liquefac1", "liquefac2", "liquefac3",
               "noYieldSurf", "e", "cs1", "cs2", "cs3", "pa", "c"]
+PIMY_ORDER = ["nd", "rho", "refShearModul", "refBulkModul", "cohesi", "peakShearStra", "frictionAng", "refPress",
+              "pressDependCoe", "noYieldSurf"]
 
 
 class Unsupported(Exception):
@@ -171,6 +175,9 @@ def convert(tcl: Path) -> dict:
         elif head == "nDMaterial":
             if tok[1] == "PressureDependMultiYield" and len(tok) == 3 + len(PDMY_ORDER):
                 materials[int(tok[2])] = dict(zip(PDMY_ORDER, (float(x) for x in tok[3:])))
+            elif tok[1] == "PressureIndependMultiYield" and len(tok) == 3 + len(PIMY_ORDER):
+                materials[int(tok[2])] = {"type": "PressureIndependMultiYield",
+                                          **dict(zip(PIMY_ORDER, (float(x) for x in tok[3:])))}
             elif tok[1] == "ElasticIsotropic" and len(tok) == 6:
                 materials[int(tok[2])] = {"type": "ElasticIsotropic", "E": float(tok[3]), "nu": float(tok[4]),
                                           "rho": float(tok[5])}
@@ -258,8 +265,9 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", exp
             mats[str(tag)] = w.node(attrs={"type": "ElasticIsotropic", "E": w.f64(p["E"]), "nu": w.f64(p["nu"]),
                                            "rho": w.f64(p["rho"])})
             continue
-        attrs = {"type": "PressureDependMultiYield"}
-        for k in PDMY_ORDER:
+        kind = p.get("type", "PressureDependMultiYield")
+        attrs = {"type": kind}
+        for k in (PIMY_ORDER if kind == "PressureIndependMultiYield" else PDMY_ORDER):
             attrs[k] = w.i32(int(p[k])) if k in ("nd", "noYieldSurf") else w.f64(p[k])
         mats[str(tag)] = w.node(attrs=attrs)
     groups = {}

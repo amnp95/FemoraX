@@ -22,6 +22,19 @@ this file.
 - The development machine has CUDA 13.1 installed (no GPU). Compile check result:
   see "CUDA compile check" below.
 
+### Kokkos 5.1.0 and SYCL (Intel GPUs)
+
+2026-11-11, Stampede3 `pvc` node (Intel Data Center GPU Max 1550, "Ponte Vecchio"; 4 cards
+of 2 tiles, one tile used): Intel oneAPI 2026.0.0 (`icpx -fsycl`, module `intel/26.0`),
+`-DKokkos_ENABLE_SYCL=ON -DKokkos_ARCH_INTEL_PVC=ON` (ahead-of-time code for the GPU),
+`-fp-model=precise`; preset `s3-sycl-pvc`, environment `scripts/stampede3_sycl_env.sh`.
+Kokkos 5.1.0 wants oneAPI 2025.1.1 or newer for SYCL; `intel/24.0` (TACC's default) is too
+old. Pitfalls: TACC's `python/3.12.11` module carries an older SYCL runtime library
+(`libur_loader`) ahead of the compiler's, which breaks linking (the environment script puts
+the compiler's library directory first); Intel's compilers default to fast floating-point
+math, never acceptable here (`-fp-model=precise` in the preset). The first build takes about
+15 minutes (the largest kernel files compile for the GPU on one core each).
+
 ### CUDA compile check
 
 2026-11-05, compile only (no GPU on the machine): CUDA 13.1.115, GCC 13.3 as host compiler,

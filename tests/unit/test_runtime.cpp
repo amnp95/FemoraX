@@ -44,6 +44,9 @@ TEST(Runtime, ReportsEveryEnabledBackend) {
 #ifdef KOKKOS_ENABLE_CUDA
   EXPECT_TRUE(has_space("Cuda"));
 #endif
+#ifdef KOKKOS_ENABLE_SYCL
+  EXPECT_TRUE(has_space("SYCL"));
+#endif
 }
 
 TEST(Runtime, DefaultSpaceMatchesTheBuild) {
@@ -51,6 +54,8 @@ TEST(Runtime, DefaultSpaceMatchesTheBuild) {
   EXPECT_EQ(femorax::default_execution_space(), "Cuda");
 #elif defined(KOKKOS_ENABLE_HIP)
   EXPECT_EQ(femorax::default_execution_space(), "HIP");
+#elif defined(KOKKOS_ENABLE_SYCL)
+  EXPECT_EQ(femorax::default_execution_space(), "SYCL");
 #elif defined(KOKKOS_ENABLE_OPENMP)
   EXPECT_EQ(femorax::default_execution_space(), "OpenMP");
 #else

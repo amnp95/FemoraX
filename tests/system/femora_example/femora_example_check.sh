@@ -26,7 +26,13 @@ status=0
 grep "^femorax-event|RETRY|" "$W/femorax.log" | cut -d"|" -f3-6 > "$W/femorax_events.txt" || true
 cut -d'|' -f1-4 "$DATA/opensees_events.txt" > "$W/opensees_events.txt"
 echo "== events: OpenSees $(wc -l < "$W/opensees_events.txt"), FemoraX $(wc -l < "$W/femorax_events.txt")"
-if ! diff "$W/opensees_events.txt" "$W/femorax_events.txt"; then echo "  FAIL retry events differ"; status=1; fi
+if ! diff "$W/opensees_events.txt" "$W/femorax_events.txt"; then
+  # On GPUs a convergence test on the edge of its tolerance can pass or fail on the last bits,
+  # so a retry may appear or not; the fields below decide (docs/deviations.md, "Tolerances of
+  # other compilers and GPUs"). Host builds compare the events exactly.
+  if [ "$BACKEND" = gpu ]; then echo "  retry events differ (reported only on GPUs)"
+  else echo "  FAIL retry events differ"; status=1; fi
+fi
 echo "== fields (tolerance $TOL)"
 "$PY" "$HERE/../soil_column/compare_vtkhdf.py" "$DATA/opensees.vtkhdf" "$W/femorax.vtkhdf" --tol "$TOL" \
   --only displacement,stress3D6,strain3D6 || status=1
