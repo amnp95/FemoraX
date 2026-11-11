@@ -15,6 +15,7 @@
 
 #include "compile/uniform_damping_fit.hpp"
 #include "physics/damping/element_damping.hpp"
+#include "physics/damping/uniform_damped.hpp"
 #include "physics/damping/uniform_damping.hpp"
 #include "physics/elements/ssp_brick.hpp"
 #include "physics/elements/std_brick.hpp"
@@ -454,6 +455,138 @@ TEST(UniformDampingElement, RigidMotionGivesNoDampingForce) {
   fmax = 0;
   for (double v : f) fmax = std::max(fmax, std::fabs(v));
   EXPECT_LE(fmax, 1e-9);
+}
+
+// ---------------------------------------------------------------------------------------
+// Step 2b-2 (ii)-a: the damped-material wrapper, through the element's own compute (the path
+// every kernel uses) with the step context in the Rayleigh struct.
+using DampedEI = UniformDamped<ElasticIsotropic, 8>;
+using DampedBrick = StdBrick<DampedEI>;
+static_assert(Material<DampedEI>);
+
+DampedBrick::Params damped_brick_params(const UniformDampingFilters& fl) {
+  const auto pb = brick_params();
+  DampedBrick::Params p{};
+  p.mat.mat = pb.mat;
+  p.mat.fl = fl;
+  p.mat.eta = uniform_damping_eta(0.05);
+  p.b[0] = p.b[1] = p.b[2] = 0.0;
+  p.massType = pb.massType;
+  return p;
+}
+
+TEST(UniformDampedMaterial, StaticStepsAreTheUndampedElement) {
+  const auto fl = fit_0p1_10();
+  const auto pd = damped_brick_params(fl);
+  const auto pb = brick_params();
+  double u[24], fe_d[24], fe_b[24], K_d[24][24], K_b[24][24];
+  for (int a = 0; a < 24; ++a) u[a] = 1e-3 * std::sin(1.0 + a);
+  const double v[24] = {};
+  constexpr int NS = DampedEI::NSTATE;
+  std::vector<double> C(8 * NS, 0.0), T(8 * NS, 0.0);
+  Rayleigh damp;  // static: step.dynamic = 0
+  DampedBrick::compute<true>(pd, damp, kXe, u, v, {C.data(), 1, NS}, {T.data(), 1, NS}, fe_d, K_d);
+  Brick::compute<true>(pb, damp, kXe, u, v, {}, {}, fe_b, K_b);
+  for (int a = 0; a < 24; ++a) {
+    EXPECT_EQ(fe_d[a], fe_b[a]) << a;
+    for (int c = 0; c < 24; ++c) EXPECT_EQ(K_d[a][c], K_b[a][c]);
+  }
+  // the filters took the stresses (static tracking), the damping stress stayed 0
+  for (int gp = 0; gp < 8; ++gp) EXPECT_EQ(T[gp * NS + 6], 0.0);
+}
+
+TEST(UniformDampedMaterial, ADampedStdBrickModeDecaysLikeTheSingleModeSpring) {
+  // The test of step 2b-1, now through DampedBrick::compute<true> (force with the damping,
+  // tangent with the multiplier) and the step context, for both fits.
+  const auto pb = brick_params();
+  constexpr int NF = 12, NS = DampedEI::NSTATE;
+  Eigen::MatrixXd K(NF, NF), M = Eigen::MatrixXd::Zero(NF, NF);
+  {
+    double u0[24] = {}, v0[24] = {}, fe[24], Ke[24][24];
+    Brick::compute<true>(pb, Rayleigh{}, kXe, u0, v0, {}, {}, fe, Ke);
+    for (int a = 0; a < NF; ++a)
+      for (int b = 0; b < NF; ++b) K(a, b) = Ke[12 + a][12 + b];
+    double Me[24 * 24];
+    Brick::mass(pb, kXe, Me);
+    for (int a = 0; a < NF; ++a) M(a, a) = Me[(12 + a) * 24 + (12 + a)];
+  }
+  Eigen::GeneralizedSelfAdjointEigenSolver<Eigen::MatrixXd> eig(K, M);
+  Eigen::VectorXd phi = eig.eigenvectors().col(0);
+  phi /= std::sqrt(phi.dot(M * phi));
+  const double f0 = std::sqrt(eig.eigenvalues()(0)) / (2 * kPi), dt = 1.0 / f0 / 400.0;
+  for (const bool femorax_fit : {false, true}) {
+    UniformDampingFilters fl;
+    if (femorax_fit) ASSERT_TRUE(uniform_damping_fit_femorax(0.05, 0.1, 10.0, 0.05, fl));
+    else fl = fit_0p1_10();
+    const auto pd = damped_brick_params(fl);
+    std::vector<double> C(8 * NS, 0.0), T(8 * NS, 0.0);
+    auto element = [&](const Eigen::VectorXd& U, const StepContext& step, Eigen::VectorXd* F, Eigen::MatrixXd* Kt) {
+      double u[24] = {}, v[24] = {}, fe[24], Ke[24][24];
+      for (int a = 0; a < NF; ++a) u[12 + a] = U(a);
+      Rayleigh damp;
+      damp.step = step;
+      DampedBrick::compute<true>(pd, damp, kXe, u, v, {C.data(), 1, NS}, {T.data(), 1, NS}, fe, Ke);
+      if (F) {
+        F->resize(NF);
+        for (int a = 0; a < NF; ++a) (*F)(a) = fe[12 + a];
+      }
+      if (Kt) {
+        Kt->resize(NF, NF);
+        for (int a = 0; a < NF; ++a)
+          for (int b = 0; b < NF; ++b) (*Kt)(a, b) = Ke[12 + a][12 + b];
+      }
+    };
+    Eigen::VectorXd U = phi, V = Eigen::VectorXd::Zero(NF), A = Eigen::VectorXd::Zero(NF);
+    element(U, StepContext{}, nullptr, nullptr);  // the static state: the filters take phi's stresses
+    C = T;
+    const double g = 0.5, b = 0.25, c2 = g / (b * dt), c3 = 1.0 / (b * dt * dt);
+    const int steps = 2400;
+    std::vector<double> amp;
+    double t = 0;
+    for (int n = 0; n < steps; ++n) {
+      const StepContext step{t + dt, dt, 1};
+      Eigen::VectorXd Ud = (1 - g / b) * V + dt * (1 - 0.5 * g / b) * A;
+      Eigen::VectorXd Udd = -1.0 / (b * dt) * V + (1 - 0.5 / b) * A;
+      Eigen::VectorXd Un = U;
+      for (int it = 0; it < 20; ++it) {
+        Eigen::VectorXd F;
+        Eigen::MatrixXd Kt;
+        element(Un, step, &F, &Kt);
+        const Eigen::VectorXd R = -(M * Udd) - F;
+        const Eigen::VectorXd dU = (c3 * M + Kt).ldlt().solve(R);
+        Un += dU;
+        Ud += c2 * dU;
+        Udd += c3 * dU;
+        if (dU.lpNorm<Eigen::Infinity>() <= 1e-14) break;
+      }
+      element(Un, step, nullptr, nullptr);
+      C = T;
+      U = Un;
+      V = Ud;
+      A = Udd;
+      t += dt;
+      amp.push_back(phi.dot(M * U));
+    }
+    const auto ref = simulate(f0, fl, steps);
+    double worst = 0;
+    for (int n = 0; n < steps; ++n)
+      worst = std::max(worst, std::fabs(amp[static_cast<std::size_t>(n)] - ref[static_cast<std::size_t>(n)]));
+    std::printf("[ damped stdBrick through compute, mode at %.3f Hz, %s fit: within %.1e of the single-mode spring ]\n",
+                f0, femorax_fit ? "FemoraX" : "OpenSees", worst);
+    EXPECT_LE(worst, 1e-9);
+  }
+}
+
+TEST(UniformDampedMaterial, RecordersSeeTheMaterialsOwnStress) {
+  const auto fl = fit_0p1_10();
+  const auto pd = damped_brick_params(fl);
+  const double eps[6] = {1e-4, -2e-4, 3e-5, 1e-4, 0, -5e-5};
+  constexpr int NS = DampedEI::NSTATE;
+  std::vector<double> C(NS, 0.0), scratch(NS, 0.0);
+  double rec[6], ref[6], D[6][6];
+  DampedEI::recorded_stress(pd.mat, {C.data(), 1}, {scratch.data(), 1}, eps, rec);
+  ElasticIsotropic::update(pd.mat.mat, {}, {}, eps, ref, D);
+  for (int a = 0; a < 6; ++a) EXPECT_EQ(rec[a], ref[a]);
 }
 
 }  // namespace

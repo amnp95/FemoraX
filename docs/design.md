@@ -645,6 +645,19 @@ which passes the step to a material whose `update` takes one and calls the other
 before; no element, material or kernel signature changed. All tests unchanged, and the
 explicit force kernels within run-to-run noise (40^3 stdBrick, 96 threads: flat_gather
 1261 / 1116 us, flat_atomic 1335 / 1347 us before / after);
+(ii)-a the wrapper as physics. Done (2026-11-11): `physics/damping/uniform_damped.hpp`,
+`UniformDamped<Mat, NF>` (state: the material's, then the filters'; the update with the step:
+the material's stress plus the damping stress and its tangent times the multiplier; static
+without a step; the stability tangent with the bound `1 + 2 eta sum alpha_i`; the recorded
+stress is the material's own). Tests through the element's own `compute<true>` with the step
+in the `Rayleigh` struct: static steps equal the undamped stdBrick bit for bit (force and
+tangent), a damped stdBrick mode decays like the single-mode spring within 9e-15 (both fits),
+and recorders read the material's stress.
+(ii)-b next: the model's Uniform damping regions (io::Model, before the schema 0.7 reader),
+the registry and batch building that put damped elements of a region into `UniformDamped`
+batches (the registry's `matches` sees only the material today), the parameter sets with the
+fit, and the free-vibration tests through the real kernels (every variant, bit-identical
+across layouts);
 (ii) the wrapper for ElasticIsotropic with the free-vibration tests through the real
 kernels; (iii) the stable step and the stiffness correction; (iv) PressureIndependMultiYield
 and PressureDependMultiYield.
