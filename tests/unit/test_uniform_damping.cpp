@@ -13,7 +13,11 @@
 // - FemoraX's fit (step 2a) and the oscillation formula; inside solid elements (step 2b-1):
 //   a stdBrick mode decays exactly like the single-mode spring, rigid motion is undamped.
 
+#include "../common/synthetic_models.hpp"
+#include "compile/batches.hpp"
 #include "compile/uniform_damping_fit.hpp"
+#include "exec/force_settings.hpp"
+#include "exec/internal_force.hpp"
 #include "physics/damping/element_damping.hpp"
 #include "physics/damping/uniform_damped.hpp"
 #include "physics/damping/uniform_damping.hpp"
@@ -23,9 +27,11 @@
 #include "reference_data.hpp"
 
 #include <Eigen/Dense>
+#include <Kokkos_Core.hpp>
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -587,6 +593,79 @@ TEST(UniformDampedMaterial, RecordersSeeTheMaterialsOwnStress) {
   DampedEI::recorded_stress(pd.mat, {C.data(), 1}, {scratch.data(), 1}, eps, rec);
   ElasticIsotropic::update(pd.mat.mat, {}, {}, eps, ref, D);
   for (int a = 0; a < 6; ++a) EXPECT_EQ(rec[a], ref[a]);
+}
+
+// ---------------------------------------------------------------------------------------
+// Step 2b-2 (ii)-b: damped batches from the model's Uniform damping regions, through the
+// real force kernels.
+io::Model damped_column(bool damped, io::ElementType type) {
+  femorax::testing::ColumnSpec spec;
+  spec.nx = 2;
+  spec.ny = 2;
+  spec.nz = 3;
+  spec.damping = false;
+  spec.element = type;
+  io::Model m = femorax::testing::soil_column(spec);
+  if (damped) {
+    io::UniformDampingRegion r;
+    r.id = "soil";
+    r.ratio = 0.05;
+    r.freq1 = 0.1;
+    r.freq2 = 10.0;
+    for (const auto& g : m.elements) r.elements.insert(r.elements.end(), g.tags.begin(), g.tags.end());
+    m.uniform.push_back(r);
+  }
+  return m;
+}
+
+std::vector<double> force_at(exec::InternalForce& k, const std::vector<double>& u, const StepContext& step,
+                             const exec::ForceSettings& s) {
+  auto hu = Kokkos::create_mirror_view(k.u);
+  for (std::size_t q = 0; q < u.size(); ++q) hu(q) = u[q];
+  Kokkos::deep_copy(k.u, hu);
+  Kokkos::deep_copy(k.v, 0.0);
+  k.step = step;
+  k.compute(s);
+  auto hf = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, k.f);
+  return std::vector<double>(hf.data(), hf.data() + hf.extent(0));
+}
+
+TEST(UniformDampedKernels, DampedBatchesStaticEqualUndampedAndEveryVariantAgrees) {
+  for (const auto type : {io::ElementType::StdBrick, io::ElementType::SSPbrick}) {
+    SCOPED_TRACE(io::to_string(type));
+    const auto cd = compile::compile_model(damped_column(true, type), compile::CompileOptions{});
+    const auto cu = compile::compile_model(damped_column(false, type), compile::CompileOptions{});
+    ASSERT_EQ(cd.batches.size(), 1u);
+    EXPECT_GT(cd.batches[0].nstate, 0);  // the wrapper's filter state
+    exec::InternalForce kd(cd, exec::GeometryCache::On), ku(cu, exec::GeometryCache::On);
+    std::vector<double> u(static_cast<std::size_t>(kd.num_equations()));
+    for (std::size_t q = 0; q < u.size(); ++q) u[q] = 1e-3 * std::sin(0.7 + 1.3 * static_cast<double>(q));
+    const auto def = exec::default_force_settings();
+    // static: the damped column is the undamped one, bit for bit
+    const auto fs = force_at(kd, u, StepContext{}, def), fu = force_at(ku, u, StepContext{}, def);
+    ASSERT_EQ(fs.size(), fu.size());
+    for (std::size_t q = 0; q < fs.size(); ++q) EXPECT_EQ(fs[q], fu[q]) << q;
+    // dynamic, at a changed displacement: the damping force appears (the stresses changed
+    // since the committed state), the same in every variant
+    kd.commit_state();  // the static evaluation's filter state becomes committed
+    std::vector<double> u2(u.size());
+    for (std::size_t q = 0; q < u.size(); ++q) u2[q] = 1.2 * u[q] + 1e-4 * std::cos(0.3 * static_cast<double>(q));
+    const StepContext step{0.001, 0.001, 1};
+    const auto fu2 = force_at(ku, u2, StepContext{}, def);
+    const auto variants = exec::tunable_variants(kd);
+    const auto first = force_at(kd, u2, step, variants[0]);
+    double diff = 0, scale = 0;
+    for (std::size_t q = 0; q < first.size(); ++q) {
+      diff = std::max(diff, std::fabs(first[q] - fu2[q]));
+      scale = std::max(scale, std::fabs(fu2[q]));
+    }
+    EXPECT_GT(diff, 1e-6 * scale);
+    for (const auto& s : variants) {
+      SCOPED_TRACE(exec::to_string(s));
+      const auto f = force_at(kd, u2, step, s);
+      EXPECT_EQ(std::memcmp(f.data(), first.data(), f.size() * sizeof(double)), 0);
+    }
+  }
 }
 
 }  // namespace

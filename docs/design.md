@@ -653,11 +653,20 @@ stress is the material's own). Tests through the element's own `compute<true>` w
 in the `Rayleigh` struct: static steps equal the undamped stdBrick bit for bit (force and
 tangent), a damped stdBrick mode decays like the single-mode spring within 9e-15 (both fits),
 and recorders read the material's stress.
-(ii)-b next: the model's Uniform damping regions (io::Model, before the schema 0.7 reader),
-the registry and batch building that put damped elements of a region into `UniformDamped`
-batches (the registry's `matches` sees only the material today), the parameter sets with the
-fit, and the free-vibration tests through the real kernels (every variant, bit-identical
-across layouts);
+(ii)-b damped batches. Done (2026-11-11): `io::UniformDampingRegion` and `Model::uniform`
+(built by tests until the schema 0.7 reader, step 4); the registry's damped entries
+`UniformDampedEntry<Base, NF>` (ElasticIsotropic in the buckets 8 and 32 so far),
+`registry::pair_index(type, material, filters)` picking the smallest bucket that holds a
+region's fit (undamped entries for elements outside any region), and
+`registry::uniform_damping_filters` (the region's fit, once per region, `fit = "femorax"` by
+default); batches key their parameter sets by (group, Rayleigh region, Uniform region). Test
+through the real force kernels (stdBrick and SSPbrick columns): a static step of the damped
+column equals the undamped column bit for bit, a dynamic step at a changed displacement gives
+the damping force, and every tunable kernel variant gives the same bits.
+Open for the next steps: the DRM layer refuses materials with state, so a damped elastic DRM
+layer is refused today (decide what DRM forces do with Uniform damping); the H5DRM kernel and
+the constant-tangent operator need CONSTANT_TANGENT; a free-vibration run through
+`run_model` once the schema reader exists;
 (ii) the wrapper for ElasticIsotropic with the free-vibration tests through the real
 kernels; (iii) the stable step and the stiffness correction; (iv) PressureIndependMultiYield
 and PressureDependMultiYield.

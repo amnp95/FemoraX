@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <map>
+#include <tuple>
 #include <unordered_map>
 
 #include "io/h5.hpp"
@@ -80,6 +81,18 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   for (std::size_t r = 0; r < m.rayleigh.size(); ++r)
     for (const auto e : m.rayleigh[r].elements) region_of[e] = static_cast<std::int32_t>(r);
 
+  // Uniform damping region of every element tag (the last region wins, as for Rayleigh), and
+  // each region's filters, fitted once.
+  std::unordered_map<std::int32_t, std::int32_t> uniform_of;
+  for (std::size_t r = 0; r < m.uniform.size(); ++r)
+    for (const auto e : m.uniform[r].elements) uniform_of[e] = static_cast<std::int32_t>(r);
+  std::vector<UniformDampingFilters> uniform_filters;
+  for (const auto& r : m.uniform) uniform_filters.push_back(registry::uniform_damping_filters(r));
+  auto uniform_region = [&](std::int32_t tag) {
+    const auto it = uniform_of.find(tag);
+    return it == uniform_of.end() ? -1 : it->second;
+  };
+
   // Global element index (file order across groups) -> (group, index in group).
   std::vector<std::pair<std::int32_t, std::int32_t>> where;
   for (std::size_t g = 0; g < m.elements.size(); ++g)
@@ -91,7 +104,9 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   for (const auto ge : c.ordering.element_order) {
     const auto& g = m.elements[where[ge].first];
     const auto& mat = m.materials[material_index.at(g.material)];
-    const int pair = registry::pair_index(g.type, mat);
+    const std::int32_t ur = uniform_region(g.tags[where[ge].second]);
+    const int pair =
+        registry::pair_index(g.type, mat, ur < 0 ? 0 : uniform_filters[static_cast<std::size_t>(ur)].nFilter);
     if (pair < 0) {
       throw io::UnsupportedComponent(std::string("unsupported component: element type \"") +
                                      io::to_string(g.type) + "\" with material " +
@@ -134,15 +149,16 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
       b.eq.assign(static_cast<std::size_t>(b.ndof) * P, -1);
       b.param.assign(P, 0);
 
-      std::map<std::pair<std::int32_t, std::int32_t>, std::int32_t> param_of;  // (group, region)
+      std::map<std::tuple<std::int32_t, std::int32_t, std::int32_t>, std::int32_t> param_of;  // (group, region, uniform)
       for (std::int32_t e = 0; e < b.count; ++e) {
         const auto [gi, ei] = where[list[e]];
         const auto& g = m.elements[gi];
         b.tag[e] = g.tags[ei];
         const auto rit = region_of.find(g.tags[ei]);
         const std::int32_t region = rit == region_of.end() ? -1 : rit->second;
+        const std::int32_t uregion = uniform_region(g.tags[ei]);
         const auto [pit, fresh] =
-            param_of.emplace(std::make_pair(gi, region), static_cast<std::int32_t>(b.params.size()));
+            param_of.emplace(std::make_tuple(gi, region, uregion), static_cast<std::int32_t>(b.params.size()));
         if (fresh) {
           ParamSet ps;
           ps.group = gi;
@@ -152,8 +168,14 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
             const auto& r = m.rayleigh[region];
             ps.damping = Rayleigh{r.alphaM, r.betaK, r.betaKinit, r.betaKcomm};
           }
-          ps.element = registry::ParamBlob::of(
-              E::template params<typename M::Material>(g, M::params(m.materials[ps.material])));
+          if constexpr (registry::is_damped_entry<M>) {
+            const auto ur = static_cast<std::size_t>(uregion);
+            ps.element = registry::ParamBlob::of(E::template params<typename M::Material>(
+                g, M::params(m.materials[ps.material], m.uniform[ur], uniform_filters[ur])));
+          } else {
+            ps.element = registry::ParamBlob::of(
+                E::template params<typename M::Material>(g, M::params(m.materials[ps.material])));
+          }
           b.params.push_back(ps);
         }
         b.param[e] = pit->second;

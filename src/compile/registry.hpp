@@ -17,7 +17,9 @@
 
 #include "io/h5.hpp"
 #include "io/model.hpp"
+#include "compile/uniform_damping_fit.hpp"
 #include "physics/contracts.hpp"
+#include "physics/damping/uniform_damped.hpp"
 #include "physics/elements/ssp_brick.hpp"
 #include "physics/elements/std_brick.hpp"
 #include "physics/materials/elastic_isotropic.hpp"
@@ -171,8 +173,32 @@ struct SSPbrickEntry {
 };
 
 // The registered entries: one line each.
+// Uniform damping (docs/design.md): the material of an element in a Uniform damping region is
+// wrapped, UniformDamped<Base, NF>, in the smallest filter bucket NF that holds the region's
+// fit. Another material or bucket is one more line in Materials below.
+template <class BaseEntry, int NF>
+struct UniformDampedEntry {
+  using Material = UniformDamped<typename BaseEntry::Material, NF>;
+  static constexpr int filters = NF;
+  static constexpr const char* name = BaseEntry::name;
+  static bool matches(const io::NDMaterial& m) { return BaseEntry::matches(m); }
+  static typename Material::Params params(const io::NDMaterial& m, const io::UniformDampingRegion& r,
+                                          const UniformDampingFilters& fl) {
+    typename Material::Params p{};
+    p.mat = BaseEntry::params(m);
+    p.fl = fl;
+    p.eta = uniform_damping_eta(r.ratio);
+    p.ta = r.activate_time;
+    p.td = r.deactivate_time;
+    return p;
+  }
+};
+template <class M>
+inline constexpr bool is_damped_entry = requires { M::filters; };
+
 using Materials = TypeList<ElasticIsotropicEntry, PressureDependMultiYieldEntry<20>, PressureDependMultiYieldEntry<40>,
-                           PressureIndependMultiYieldEntry<20>, PressureIndependMultiYieldEntry<40>>;
+                           PressureIndependMultiYieldEntry<20>, PressureIndependMultiYieldEntry<40>,
+                           UniformDampedEntry<ElasticIsotropicEntry, 8>, UniformDampedEntry<ElasticIsotropicEntry, 32>>;
 
 // The smallest bucket that holds the material's surfaces.
 template <int NS>
@@ -226,13 +252,36 @@ void for_each_pair(F&& f) {
   for_elements(f, Elements{}, std::make_index_sequence<num_elements>{});
 }
 
-// The pair index of (element type, material), or -1 if no registered pair matches.
-inline int pair_index(io::ElementType type, const io::NDMaterial& m) {
-  int found = -1;
+// The pair index of (element type, material), or -1 if no registered pair matches. filters:
+// 0 for an element without Uniform damping; else the region's fitted filter count, which
+// picks the smallest damped bucket that holds it.
+inline int pair_index(io::ElementType type, const io::NDMaterial& m, int filters = 0) {
+  int found = -1, bucket = 1 << 30;
   for_each_pair([&]<class E, class M>(int index) {
-    if (E::type == type && M::matches(m)) found = index;
+    if (E::type != type || !M::matches(m)) return;
+    if constexpr (is_damped_entry<M>) {
+      if (filters > 0 && filters <= M::filters && M::filters < bucket) {
+        found = index;
+        bucket = M::filters;
+      }
+    } else {
+      if (filters == 0) found = index;
+    }
   });
   return found;
+}
+
+// The filters of a Uniform damping region: FemoraX's fit (the default) or OpenSees'.
+inline UniformDampingFilters uniform_damping_filters(const io::UniformDampingRegion& r) {
+  UniformDampingFilters fl;
+  const bool ok = r.fit == "opensees" ? uniform_damping_fit(r.freq1, r.freq2, 0.05, fl)
+                                      : uniform_damping_fit_femorax(r.ratio, r.freq1, r.freq2, 0.05, fl);
+  if (!ok) {
+    throw io::ModelError("Uniform damping region \"" + r.id + "\": no filter fit within " +
+                         std::to_string(kUniformDampingMaxFilters) + " filters for the band " + std::to_string(r.freq1) +
+                         "-" + std::to_string(r.freq2) + " Hz");
+  }
+  return fl;
 }
 
 // Typed element parameters stored as bytes in a parameter set (Params are trivially

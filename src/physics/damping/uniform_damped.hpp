@@ -86,6 +86,13 @@ struct UniformDamped {
     update(StepContext{}, p, committed, trial, eps, sig, D);
   }
 
+  // The material's initial state; the filters start at rest (OpenSees: revertToStart zeros).
+  FEMORAX_HD static void initial_state(const Params& p, Strided<double> s) {
+    if constexpr (requires { Mat::initial_state(p.mat, s); }) Mat::initial_state(p.mat, material_part(s));
+    const Strided<double> d = damping_part(s);
+    for (int k = 0; k < NDAMP; ++k) d[k] = 0.0;
+  }
+
   FEMORAX_HD static void initial_tangent(const Params& p, double (*D)[NSTRAIN]) { Mat::initial_tangent(p.mat, D); }
   FEMORAX_HD static void committed_tangent(const Params& p, Strided<const double> committed, double (*D)[NSTRAIN]) {
     Mat::committed_tangent(p.mat, material_part(committed), D);

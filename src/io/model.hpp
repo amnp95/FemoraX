@@ -114,6 +114,18 @@ struct RayleighRegion {
   Metadata meta;
 };
 
+// Uniform damping per element region (docs/design.md, "Frequency-independent damping"):
+// Femora's `damping Uniform` attached with `region ... -damp`. Built by tests until the
+// schema 0.7 reader (step 4) reads /damping/uniform.
+struct UniformDampingRegion {
+  std::string id;
+  double ratio = 0.0;           // the damping ratio over the band
+  double freq1 = 0.0, freq2 = 0.0;
+  double activate_time = 0.0, deactivate_time = 1e20;
+  std::string fit = "femorax";  // or "opensees"
+  std::vector<std::int32_t> elements;
+};
+
 // ---------------------------------------------------------------------------
 struct PathSeries {
   std::int32_t tag = 0;
@@ -258,6 +270,7 @@ struct Model {
   Fix fix;
   EqualDof equal_dof;
   std::vector<RayleighRegion> rayleigh;
+  std::vector<UniformDampingRegion> uniform;  // the last region of an element wins
   std::vector<PathSeries> time_series;
   std::vector<UniformExcitation> patterns;
   std::vector<H5DrmPattern> drm_patterns;  // schema 0.6
