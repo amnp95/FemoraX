@@ -754,6 +754,16 @@ and a Uniform region gets both (as OpenSees allows). Later, optional: per-group 
    change of the damping quantities since the damping was activated: applied to the full
    stress it would push on the gravity stresses when shaking starts.
 3. Implicit stages (operator, diagonal), tests against the reference assembly and OpenSees.
+   Done (2026-11-11), with no code change: the wrapper's tangent `D (km - kcorr)` is the exact
+   derivative of its stress, and the stored-tangent operator, its Jacobi diagonal and every
+   implicit attempt and substep already carry it and the step context. Test
+   (`Implicit.UniformDampingNewmarkMatchesTheHostRecurrence`): Newmark with Newton on the
+   damped column (Rayleigh damping and a base motion too) through `run_model` against the
+   host recurrence whose residual comes from the production force kernel: within 9e-14
+   (stdBrick) and 2.1e-13 (SSPbrick) of the peak, 1.6 Newton iterations per step (the
+   consistent tangent; 5-7 with the host's approximate matrix). The OpenSees comparison of an
+   implicit damped stdBrick is the single-mode test of step 2b (Newmark with Newton through
+   the element's own `compute<true>`, against the spring that matches OpenSees' records).
 4. Schema 0.7, reader and fixtures; the converter; support table.
 5. Tests 5-7; benchmarks of the damped kernels.
 Beams, shells and springs get it with their own milestones by declaring their damping

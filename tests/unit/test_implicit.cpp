@@ -29,6 +29,7 @@
 #include "../common/reference_assembly.hpp"
 #include "../common/synthetic_models.hpp"
 #include "compile/batches.hpp"
+#include "compile/registry.hpp"
 #include "exec/explicit_analysis.hpp"
 #include "exec/force_settings.hpp"
 #include "exec/internal_force.hpp"
@@ -41,11 +42,12 @@ using namespace femorax;
 
 const int kNx = 2, kNz = 8;
 
-io::Model column(bool lumped) {
+io::Model column(bool lumped, io::ElementType type = io::ElementType::StdBrick) {
   femorax::testing::ColumnSpec s;
   s.nx = s.ny = kNx;
   s.nz = kNz;
   s.lumped = lumped;
+  s.element = type;
   auto m = femorax::testing::soil_column(s);
   m.rayleigh[1].betaKcomm = 2e-5;  // every Rayleigh term somewhere
   return m;
@@ -286,6 +288,125 @@ TEST(Implicit, NewmarkMatchesTheHostRecurrence) {
         EXPECT_LE(worst, 1e-8 * scale);
       }
     }
+  }
+}
+
+// Uniform damping in an implicit stage (docs/design.md, "Frequency-independent damping",
+// step 3). The damped material's tangent is D (km - kcorr), the exact derivative of its
+// stress, so the stored-tangent operator is Newton's consistent tangent. Reference: the
+// Newmark recurrence on the host with the residual from the production force kernel (which
+// carries the damping) and Newton to a tight tolerance with an approximate matrix, the
+// elastic K_eff with K scaled by km - kcorr: the converged history does not depend on the
+// matrix used.
+TEST(Implicit, UniformDampingNewmarkMatchesTheHostRecurrence) {
+  for (const auto type : {io::ElementType::StdBrick, io::ElementType::SSPbrick}) {
+  SCOPED_TRACE(io::to_string(type));
+  const double dt = 2e-3;
+  const int steps = 40;
+  io::Model m = column(false, type);
+  io::UniformDampingRegion r;
+  r.id = "soil";
+  r.ratio = 0.05;
+  r.freq1 = 0.1;
+  r.freq2 = 10.0;
+  for (const auto& g : m.elements) r.elements.insert(r.elements.end(), g.tags.begin(), g.tags.end());
+  m.uniform.push_back(r);
+  add_motion(m);
+  m.process.push_back({"000000", "", io::PatternStep{2}});
+  auto a = newmark_step(io::Algorithm::Newton, dt, steps);
+  a.test_tol = 1e-10;
+  m.process.push_back({"000001", "", a});
+  compile::CompileOptions co;
+  co.renumbering = compile::Renumbering::Off;
+  const compile::Compiled c = compile::compile_model(m, co);
+  ASSERT_GT(c.batches[0].nstate, 0);  // damped batches
+
+  // the host recurrence
+  const auto ref = femorax::testing::assemble_reference(m, c);
+  const auto fl = registry::uniform_damping_filters(r);
+  UniformDampingStep st;
+  st.dynamic = true;
+  st.dT = dt;
+  st.t = dt;
+  const double km = uniform_damping_stiffness_multiplier(fl, uniform_damping_eta(r.ratio), st) - fl.kcorr;
+  const double gamma = 0.5, beta = 0.25, c2 = gamma / (beta * dt), c3 = 1.0 / (beta * dt * dt);
+  const auto M = ref.to_eigen(ref.M);
+  Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> keff(ref.to_eigen(ref.effective(km, c2 * km, c3)));
+  const Eigen::Index n = M.rows();
+  const Eigen::VectorXd Mr = Eigen::Map<const Eigen::VectorXd>(ref.Mr[0].data(), n);
+  exec::InternalForce k(c, exec::GeometryCache::Off);
+  const auto settings = exec::default_force_settings();
+  auto hu = Kokkos::create_mirror_view(k.u);
+  auto hv = Kokkos::create_mirror_view(k.v);
+  auto force = [&](const Eigen::VectorXd& U, const Eigen::VectorXd& V, double t) {
+    for (Eigen::Index q = 0; q < n; ++q) {
+      hu(q) = U[q];
+      hv(q) = V[q];
+    }
+    Kokkos::deep_copy(k.u, hu);
+    Kokkos::deep_copy(k.v, hv);
+    k.step = StepContext{t, dt, 1};
+    k.compute(settings);
+    auto hf = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), k.f);
+    Eigen::VectorXd F(n);
+    for (Eigen::Index q = 0; q < n; ++q) F[q] = hf(q);
+    return F;
+  };
+  Eigen::VectorXd U = Eigen::VectorXd::Zero(n), V = U, A = U;
+  std::vector<std::vector<double>> want;
+  double t = 0.0;
+  int host_iterations = 0;
+  for (int s = 0; s < steps; ++s) {
+    const Eigen::VectorXd Vt = V, At = A;
+    V = V * (1.0 - gamma / beta) + At * (dt * (1.0 - 0.5 * gamma / beta));
+    A = A * (1.0 - 0.5 / beta) + Vt * (-1.0 / (beta * dt));
+    t += dt;
+    const double ag = ag_at(m.time_series[0], t);
+    for (int it = 0;; ++it) {
+      ASSERT_LT(it, 100) << "host Newton, step " << s;
+      const Eigen::VectorXd R = -force(U, V, t) - M * A - ag * Mr;
+      if (R.lpNorm<Eigen::Infinity>() <= 1e-11) break;
+      const Eigen::VectorXd dU = keff.solve(R);
+      U += dU;
+      V += c2 * dU;
+      A += c3 * dU;
+      ++host_iterations;
+    }
+    k.commit_state();
+    std::vector<double> row = {t};
+    const auto rec = recorded(c, U);
+    row.insert(row.end(), rec.begin(), rec.end());
+    want.push_back(row);
+  }
+
+  // the production run
+  const std::string file = temp_file("uniform.txt");
+  io::Model mr = m;
+  add_recorder(mr, file);
+  mr.process.insert(mr.process.begin(), {"recorder", "", io::RecorderStep{"disp"}});
+  exec::RunOptions o;
+  o.verbose = false;
+  o.renumbering = compile::Renumbering::Off;
+  const auto rep = exec::run_model(mr, o);
+  const auto got = read_rows(file);
+  ASSERT_EQ(got.size(), want.size());
+  double worst = 0.0, scale = 0.0;
+  for (std::size_t q = 0; q < got.size(); ++q) {
+    ASSERT_EQ(got[q][0], want[q][0]);
+    for (std::size_t j = 1; j < got[q].size(); ++j) {
+      worst = std::max(worst, std::abs(got[q][j] - want[q][j]));
+      scale = std::max(scale, std::abs(want[q][j]));
+    }
+  }
+  const auto& stage = rep.stages.back();
+  std::printf("[ %s, Uniform damping, Newmark + Newton: within %.2e of the host recurrence (peak %.3e); Newton %.2f "
+              "iterations per step (host, approximate matrix: %.2f) ]\n",
+              io::to_string(type), worst / scale, scale, static_cast<double>(stage.newton_iterations) / steps,
+              static_cast<double>(host_iterations) / steps);
+  EXPECT_GT(scale, 1e-5);
+  EXPECT_LE(worst, 1e-8 * scale);
+  // the consistent tangent: Newton converges in a few iterations per step
+  EXPECT_LE(stage.newton_iterations, 3 * steps);
   }
 }
 
