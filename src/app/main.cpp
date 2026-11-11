@@ -3,7 +3,7 @@
 //   femorax --version        print the FemoraX version
 //   femorax info             print the build configuration (Kokkos version and backends)
 //   femorax check <model.h5> read and validate a model, and check this build can run it
-//   femorax run <model.h5>   run a model [--renumbering off|on] [--quiet]
+//   femorax run <model.h5>   run a model [--renumbering off|on] [--quiet] [--vtkhdf-precision single|double]
 //
 // Kokkos options (for example --kokkos-num-threads=8) are accepted by every command.
 //
@@ -30,7 +30,7 @@ void print_usage() {
       "  --version          print the FemoraX version\n"
       "  info               print the build configuration\n"
       "  check <model.h5>   validate a model and check this build can run it\n"
-      "  run <model.h5>     run a model [--renumbering off|on] [--quiet]\n");
+      "  run <model.h5>     run a model [--renumbering off|on] [--quiet] [--vtkhdf-precision single|double]\n");
 }
 
 int cmd_info() {
@@ -93,7 +93,7 @@ int main(int argc, char* argv[]) {
   if (cmd == "info") return cmd_info();
   if (cmd == "run") {
     if (argc < 3) {
-      std::fprintf(stderr, "usage: femorax run <model.h5> [--renumbering off|on] [--quiet]\n");
+      std::fprintf(stderr, "usage: femorax run <model.h5> [--renumbering off|on] [--quiet] [--vtkhdf-precision single|double]\n");
       return 1;
     }
     femorax::exec::RunOptions opt;
@@ -104,6 +104,13 @@ int main(int argc, char* argv[]) {
         opt.renumbering = v == "off" ? femorax::compile::Renumbering::Off : femorax::compile::Renumbering::RCM;
       } else if (a == "--quiet") {
         opt.verbose = false;
+      } else if (a == "--vtkhdf-precision" && i + 1 < argc) {
+        const std::string_view v = argv[++i];
+        if (v != "single" && v != "double") {
+          std::fprintf(stderr, "femorax run: --vtkhdf-precision takes single or double\n");
+          return 1;
+        }
+        opt.vtkhdf_single_precision = v == "single";
       } else {
         std::fprintf(stderr, "femorax run: unknown option '%.*s'\n", static_cast<int>(a.size()), a.data());
         return 1;

@@ -18,7 +18,11 @@
 //                 i32 (row of each step's block); FieldDataOffsets/, FieldDataSizes/
 //
 // Datasets are created empty with the same element types, chunk shapes and unlimited first
-// dimension as OpenSees, and grow as OpenSees grows them. The mesh is written by
+// dimension as OpenSees, and grow as OpenSees grows them. With single precision (a FemoraX
+// option, not in OpenSees) the response datasets (PointData displacement / velocity /
+// acceleration, CellData stress3D6 / strain3D6) are float32, each value the FP64 result
+// rounded to nearest by HDF5's conversion; the mesh, the times and everything else stay as
+// above. Computation is FP64 either way. The mesh is written by
 // write_mesh() (OpenSees: on the recorder's first record() call), each recorded step by
 // write_step(). Host code; not thread-safe: one thread owns a writer.
 
@@ -47,7 +51,7 @@ class VtkhdfWriter {
   // "acceleration"; `cell_fields` the CellData names (6 values per element): any of
   // "stress3D6", "strain3D6". Throws ModelError if the file cannot be created.
   VtkhdfWriter(const std::string& file, const std::vector<std::string>& fields,
-               const std::vector<std::string>& cell_fields = {});
+               const std::vector<std::string>& cell_fields = {}, bool single_precision = false);
   ~VtkhdfWriter();
   VtkhdfWriter(const VtkhdfWriter&) = delete;
   VtkhdfWriter& operator=(const VtkhdfWriter&) = delete;

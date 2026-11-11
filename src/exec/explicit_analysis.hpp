@@ -38,6 +38,7 @@ struct RunOptions {
   int nan_check_interval = 100;
   int stable_step_check_interval = 100;  // 0: only at the start of each stage
   bool verbose = true;
+  bool vtkhdf_single_precision = false;  // VTKHDF responses as float32 (computation stays FP64)
 };
 
 struct StageReport {

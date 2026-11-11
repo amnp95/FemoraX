@@ -210,7 +210,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   GroundMotions motions(model);
   std::vector<std::unique_ptr<DrmLoad>> drm;
   for (const auto& p : model.drm_patterns) drm.push_back(std::make_unique<DrmLoad>(p, c, force));
-  Recorders recorders(model, c);
+  Recorders recorders(model, c, opt.vtkhdf_single_precision);
   recorders.attach(force);
   rep.setup_seconds = now() - t_setup;
   if (opt.verbose) {

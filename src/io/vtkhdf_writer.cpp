@@ -83,8 +83,9 @@ struct VtkhdfWriter::Impl {
 };
 
 VtkhdfWriter::VtkhdfWriter(const std::string& path, const std::vector<std::string>& fields,
-                           const std::vector<std::string>& cell_fields)
+                           const std::vector<std::string>& cell_fields, bool single_precision)
     : impl_(new Impl) {
+  const hid_t response_type = single_precision ? H5T_NATIVE_FLOAT : H5T_NATIVE_DOUBLE;
   auto& s = *impl_;
   s.fields = fields;
   s.field_offset.assign(fields.size(), 0);
@@ -142,10 +143,10 @@ VtkhdfWriter::VtkhdfWriter(const std::string& path, const std::vector<std::strin
 
   for (const auto& f : fields) {
     create(s.point_offsets, f.c_str(), H5T_NATIVE_INT, 0, 100);
-    create(s.point_data, f.c_str(), H5T_NATIVE_DOUBLE, 3, 100);
+    create(s.point_data, f.c_str(), response_type, 3, 100);
   }
   for (const auto& f : cell_fields) {  // stress3D6, strain3D6: [rows, 6], chunks of 500 rows
-    create(s.cell_data, f.c_str(), H5T_NATIVE_DOUBLE, 6, 500);
+    create(s.cell_data, f.c_str(), response_type, 6, 500);
     create(s.cell_offsets, f.c_str(), H5T_NATIVE_INT, 0, 500);
   }
   create(s.point_data, "nodeTags", H5T_NATIVE_INT, 0, 500);

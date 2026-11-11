@@ -44,7 +44,8 @@ class Recorders {
   using Space = Kokkos::DefaultExecutionSpace;
   using Vec = Kokkos::View<double*, Space>;
 
-  Recorders(const io::Model& model, const compile::Compiled& c);
+  // single_precision: VTKHDF responses written as float32 (io/vtkhdf_writer.hpp).
+  Recorders(const io::Model& model, const compile::Compiled& c, bool single_precision = false);
   // Bytes the constructor will allocate in the default memory space (the staging buffer and
   // the equation maps, and on host backends the two pinned buffers), without allocating.
   static std::int64_t device_bytes_estimate(const io::Model& model, const compile::Compiled& c);
@@ -115,6 +116,7 @@ class Recorders {
   // Owned by the writer thread once it runs.
   std::vector<std::unique_ptr<std::ofstream>> files_;
   std::vector<std::unique_ptr<io::VtkhdfWriter>> vtkhdf_;
+  bool single_precision_ = false;
 
   std::mutex mutex_;
   std::condition_variable cv_;

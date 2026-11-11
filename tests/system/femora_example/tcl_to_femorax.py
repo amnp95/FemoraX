@@ -2,27 +2,40 @@
 """Convert the Tcl that Femora exports for a soil column into a FemoraX model file.
 
     .venv/bin/python tests/system/femora_example/tcl_to_femorax.py <model.tcl> <model.femorax.h5>
+        [--explicit DT] [--recorder-dt DT] [--recorder FILE] [--responses "disp vel ..."]
 
 A test tool, not the Femora exporter (Femora owns that): it reads the subset of Femora's
-Tcl export that its nonlinear layered soil column uses, so OpenSees and FemoraX run the same
-model, and stops on anything else. Recognised:
+Tcl export that its nonlinear layered soil column and its DRM basin use, so OpenSees and
+FemoraX run the same model, and stops on anything else. Partitioned (OpenSeesMP) exports
+are merged into one model: the `if {$pid == k}` guards are skipped and nodes repeated in
+several partitions are kept once (their coordinates must agree). Recognised:
 
-  set NAME VALUE                     (only to resolve $NAME in fixZ)
+  set NAME VALUE                     (only to resolve $NAME in fixX / fixY / fixZ)
   nDMaterial PressureDependMultiYield tag nd rho ... c   (Femora's 22 values)
+  nDMaterial ElasticIsotropic tag E nu rho
   node tag x y z -ndf 3
   element stdBrick tag n1 .. n8 mat b1 b2 b3
   equalDOF retained constrained dofs...
-  fixZ z dofs... -tol tol
+  fixX / fixY / fixZ coordinate dofs... -tol tol
   region tag -ele ... -rayleigh alphaM betaK betaKinit betaKcomm    (inside eval "...")
   timeSeries Path tag -filePath f -fileTime f -factor x
   pattern UniformExcitation tag dof -accel series
+  pattern H5DRM tag "file" factor crdScale distanceTolerance doTransform T00..T22 x0 x1 x2
   recorder vtkhdf file -dT dt responses...
   recorder Node -file f -precision p -time -node tags -dof dofs response   (opensees_* -> femorax_*)
   updateMaterialStage -material tag -stage s
   setTime t
-  the analysis blocks of Femora's Analysis.to_tcl (test, algorithm, integrator, its
-  FemoraAnalyzeTransientStep procedure: max retries, sublevels, substeps; the loop: a
-  number of steps or a final time)
+  the analysis blocks of Femora's Analysis.to_tcl (test, algorithm, integrator Newmark or
+  LoadControl, its FemoraAnalyzeTransientStep procedure: max retries, sublevels, substeps;
+  the loop: a number of steps or a final time)
+
+Options (FemoraX studies; each changes the model and says so):
+  --explicit DT     every Transient stage runs ExplicitDifference (algorithm Linear) at step
+                    DT, and every stdBrick gets lumped mass (ExplicitDifference needs it);
+                    static stages are unchanged
+  --recorder-dt DT  the VTKHDF recorder's interval
+  --recorder FILE   the VTKHDF file FemoraX writes (default femorax.vtkhdf)
+  --responses R     the VTKHDF responses (default: the Tcl's)
 
 Femora's helper procedures, progress output and MPI guards are skipped.
 """
@@ -83,11 +96,19 @@ def parse_analysis(lines: list[str], i: int) -> tuple[dict, int]:
             if "-initial" in tok:
                 a["modified_newton_initial"] = 1
         elif tok[0] == "integrator":
-            if tok[1] != "Newmark" or len(tok) != 4:
+            if tok[1] == "Newmark" and len(tok) == 4:
+                a["integrator"], a["gamma"], a["beta"] = "Newmark", float(tok[2]), float(tok[3])
+            elif tok[1] == "LoadControl" and len(tok) == 6:
+                a["integrator"], a["load_increment"] = "LoadControl", float(tok[2])
+                a["num_iter"], a["min_increment"], a["max_increment"] = int(tok[3]), float(tok[4]), float(tok[5])
+            else:
                 raise Unsupported(f"integrator {' '.join(tok[1:])}")
-            a["integrator"], a["gamma"], a["beta"] = "Newmark", float(tok[2]), float(tok[3])
-        elif tok[0] == "analysis" and tok[1] != "Transient":
-            raise Unsupported(f"analysis {tok[1]}")
+        elif tok[0] == "analysis":
+            if tok[1] not in ("Transient", "Static"):
+                raise Unsupported(f"analysis {tok[1]}")
+            a["analysis_type"] = tok[1]
+        elif tok[0] == "initialize":
+            a["initialize"] = 1
         elif m := re.search(r"\$FemoraRetry < (\d+)\}", s):
             a["max_retries"] = int(m.group(1))
         elif m := re.match(r"if \{\$level >= (\d+)\}", s):
@@ -103,7 +124,7 @@ def parse_analysis(lines: list[str], i: int) -> tuple[dict, int]:
         i += 1
     if level_limit:
         a["num_sublevels"], a["num_substeps"] = level_limit, substeps
-    for k in ("algorithm", "integrator", "dt", "test_type"):
+    for k in ("algorithm", "integrator", "test_type") + (("dt",) if a["analysis_type"] == "Transient" else ("num_steps",)):
         if k not in a:
             raise Unsupported(f"analysis {name}: no {k}")
     return a, i + 1
@@ -113,11 +134,12 @@ def convert(tcl: Path) -> dict:
     lines = logical_lines(tcl.read_text())
     var: dict[str, str] = {}
     materials: dict[int, dict] = {}
-    nodes: list[tuple[int, float, float, float]] = []
+    nodes: dict[int, tuple[float, float, float]] = {}
     elements: list[tuple[int, list[int], int, tuple[float, float, float]]] = []
     ties: list[tuple[int, int, list[int]]] = []
-    fixes: list[tuple[float, list[int], float]] = []
-    region = None
+    fixes: list[tuple[int, float, list[int], float]] = []  # (axis, coordinate, dofs, tol)
+    regions: list[tuple[list[int], list[float]]] = []
+    drm = None
     series = None
     pattern = None
     recorder = None
@@ -147,13 +169,19 @@ def convert(tcl: Path) -> dict:
         if head == "set" and len(tok) == 3 and not tok[2].startswith("["):
             var[tok[1]] = tok[2]
         elif head == "nDMaterial":
-            if tok[1] != "PressureDependMultiYield" or len(tok) != 3 + len(PDMY_ORDER):
+            if tok[1] == "PressureDependMultiYield" and len(tok) == 3 + len(PDMY_ORDER):
+                materials[int(tok[2])] = dict(zip(PDMY_ORDER, (float(x) for x in tok[3:])))
+            elif tok[1] == "ElasticIsotropic" and len(tok) == 6:
+                materials[int(tok[2])] = {"type": "ElasticIsotropic", "E": float(tok[3]), "nu": float(tok[4]),
+                                          "rho": float(tok[5])}
+            else:
                 raise Unsupported(s)
-            materials[int(tok[2])] = dict(zip(PDMY_ORDER, (float(x) for x in tok[3:])))
         elif head == "node":
             if tok[5:] != ["-ndf", "3"]:
                 raise Unsupported(s)
-            nodes.append((int(tok[1]), float(tok[2]), float(tok[3]), float(tok[4])))
+            x = (float(tok[2]), float(tok[3]), float(tok[4]))
+            if nodes.setdefault(int(tok[1]), x) != x:
+                raise Unsupported(f"node {tok[1]} appears with different coordinates")
         elif head == "element":
             if tok[1] != "stdBrick" or len(tok) != 15:
                 raise Unsupported(s)
@@ -161,15 +189,15 @@ def convert(tcl: Path) -> dict:
                              (float(tok[12]), float(tok[13]), float(tok[14]))))
         elif head == "equalDOF":
             ties.append((int(tok[1]), int(tok[2]), [int(x) for x in tok[3:]]))
-        elif head == "fixZ":
+        elif head in ("fixX", "fixY", "fixZ"):
             z = float(var[tok[1][1:]]) if tok[1].startswith("$") else float(tok[1])
             t = tok.index("-tol")
-            fixes.append((z, [int(x) for x in tok[2:t]], float(tok[t + 1])))
+            fixes.append(("XYZ".index(head[-1]), z, [int(x) for x in tok[2:t]], float(tok[t + 1])))
         elif head == "eval" and "region" in s:
             m = re.search(r"region (\d+) -ele ([\d ]+) -rayleigh ([^\"]+)\"", s)
-            if not m or region is not None:
+            if not m:
                 raise Unsupported(s)
-            region = ([int(x) for x in m.group(2).split()], [float(x) for x in m.group(3).split()])
+            regions.append(([int(x) for x in m.group(2).split()], [float(x) for x in m.group(3).split()]))
         elif head == "timeSeries":
             if tok[1] != "Path" or series is not None:
                 raise Unsupported(s)
@@ -178,6 +206,14 @@ def convert(tcl: Path) -> dict:
             vals = np.loadtxt(base / o["-filePath"]).ravel()
             times = np.loadtxt(base / o["-fileTime"]).ravel()
             series = (int(tok[2]), times, vals, float(o.get("-factor", 1.0)))
+        elif head == "pattern" and tok[1] == "H5DRM":
+            m = re.match(r'pattern H5DRM (\d+) "([^"]+)" (.*)$', s)
+            v = [float(x) for x in m.group(3).split()] if m else []
+            if len(v) != 16 or drm is not None:
+                raise Unsupported(s)
+            drm = dict(tag=int(m.group(1)), file=m.group(2), factor=v[0], crd_scale=v[1], distance_tolerance=v[2],
+                       do_coordinate_transformation=int(v[3]), transform=v[4:13], origin=v[13:16])
+            process.append(("pattern", {"tag": w.i32(drm["tag"])}, {}))
         elif head == "pattern":
             if tok[1] != "UniformExcitation" or tok[4] != "-accel":
                 raise Unsupported(s)
@@ -208,14 +244,20 @@ def convert(tcl: Path) -> dict:
         else:
             raise Unsupported(s)
         i += 1
-    return dict(materials=materials, nodes=nodes, elements=elements, ties=ties, fixes=fixes, region=region,
-                series=series, pattern=pattern, recorder=recorder, node_recorders=node_recorders, process=process)
+    return dict(materials=materials, nodes=[(t, *x) for t, x in nodes.items()], elements=elements, ties=ties,
+                fixes=fixes, regions=regions, series=series, pattern=pattern, drm=drm, recorder=recorder,
+                node_recorders=node_recorders, process=process)
 
 
-def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf") -> None:
+def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", explicit_dt: float | None = None,
+                recorder_dt: float | None = None, responses: str | None = None) -> None:
     nodes = sorted(m["nodes"])
     mats = {}
     for tag, p in sorted(m["materials"].items()):
+        if p.get("type") == "ElasticIsotropic":
+            mats[str(tag)] = w.node(attrs={"type": "ElasticIsotropic", "E": w.f64(p["E"]), "nu": w.f64(p["nu"]),
+                                           "rho": w.f64(p["rho"])})
+            continue
         attrs = {"type": "PressureDependMultiYield"}
         for k in PDMY_ORDER:
             attrs[k] = w.i32(int(p[k])) if k in ("nd", "noYieldSurf") else w.f64(p[k])
@@ -225,14 +267,17 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf") -> 
     for gi, (mat, b) in enumerate(keys):
         els = [(e, c) for (e, c, mm, bb) in m["elements"] if (mm, bb) == (mat, b)]
         groups[f"{gi:06d}"] = w.node(
-            attrs={"type": "stdBrick", "material": w.i32(mat), "body_force": w.f64(list(b)), "lumped": w.u8(False)},
+            attrs={"type": "stdBrick", "material": w.i32(mat), "body_force": w.f64(list(b)),
+                   "lumped": w.u8(explicit_dt is not None)},
             data={"tags": w.i32([e for e, _ in els]), "connectivity": w.i32([c for _, c in els])})
     fix_node, fix_dof = [], []
-    for (z, dofs, tol) in m["fixes"]:
-        for (t, _x, _y, zz) in nodes:
-            if abs(zz - z) <= tol:
+    fixed = set()
+    for (axis, z, dofs, tol) in m["fixes"]:
+        for (t, *xyz) in nodes:
+            if abs(xyz[axis] - z) <= tol:
                 for d, on in enumerate(dofs, start=1):
-                    if on:
+                    if on and (t, d) not in fixed:  # OpenSees: a second fix of a DOF is ignored
+                        fixed.add((t, d))
                         fix_node.append(t)
                         fix_dof.append(d)
     ret, con, dof = [], [], []
@@ -241,17 +286,16 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf") -> 
             ret.append(r)
             con.append(c)
             dof.append(d)
-    els, ray = m["region"]
-    stag, times, vals, factor = m["series"]
-    ptag, pdof, pseries = m["pattern"]
-    _f, rdt, responses = m["recorder"]
+    _f, rdt, tcl_responses = m["recorder"]
+    rdt = recorder_dt if recorder_dt is not None else rdt
+    responses = responses if responses is not None else tcl_responses
 
     def typed(a: dict) -> dict:
         out = {}
         for k, v in a.items():
             if isinstance(v, str):
                 out[k] = v
-            elif k.startswith("modified_newton"):
+            elif k.startswith("modified_newton") or k == "initialize":
                 out[k] = w.u8(bool(v))
             elif isinstance(v, int):
                 out[k] = w.i32(v)
@@ -261,9 +305,29 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf") -> 
                 out[k] = v
         return out
 
+    series_groups, patterns = {}, {}
+    if m["series"] is not None:
+        stag, times, vals, factor = m["series"]
+        series_groups[str(stag)] = w.node(attrs={"type": "Path", "factor": w.f64(factor)},
+                                          data={"time": w.f64(times), "values": w.f64(vals)})
+    if m["pattern"] is not None:
+        ptag, pdof, pseries = m["pattern"]
+        patterns[str(ptag)] = w.node(attrs={"type": "UniformExcitation", "dof": w.i32(pdof), "accel": w.i32(pseries)})
+    if m["drm"] is not None:
+        d = m["drm"]
+        patterns[str(d["tag"])] = w.node(
+            attrs={"type": "H5DRM", "file": d["file"], "factor": w.f64(d["factor"]), "crd_scale": w.f64(d["crd_scale"]),
+                   "distance_tolerance": w.f64(d["distance_tolerance"]),
+                   "do_coordinate_transformation": w.i32(d["do_coordinate_transformation"])},
+            data={"transform": w.f64(np.reshape(d["transform"], (3, 3)).tolist()), "origin": w.f64(d["origin"])}
+            if d["do_coordinate_transformation"] else {})
     steps = {}
     for i, (kind, a, d) in enumerate(m["process"]):
         if kind == "analysis":
+            if explicit_dt is not None and a["analysis_type"] == "Transient":
+                a = {k: v for k, v in a.items() if k in ("name", "analysis_type", "final_time", "num_steps",
+                                                          "constraint_handler", "numberer", "system")}
+                a.update(integrator="ExplicitDifference", algorithm="Linear", dt=explicit_dt)
             a = typed(a)
         elif kind == "update_material_stage":
             a = {"stage": w.i32(a["stage"])}
@@ -279,13 +343,12 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf") -> 
             "sp": w.node(groups={"fix": w.node(data={"node": w.i32(fix_node), "dof": w.i32(fix_dof)})}),
             "mp": w.node(groups={"equal_dof": w.node(data={"retained": w.i32(ret), "constrained": w.i32(con),
                                                            "dof": w.i32(dof)})})}),
-        "damping": w.node(groups={"rayleigh": w.node(groups={"000000": w.node(
+        "damping": w.node(groups={"rayleigh": w.node(groups={f"{k:06d}": w.node(
             attrs={"alphaM": w.f64(ray[0]), "betaK": w.f64(ray[1]), "betaKinit": w.f64(ray[2]),
-                   "betaKcomm": w.f64(ray[3])}, data={"elements": w.i32(els)})})}),
-        "time_series": w.node(groups={str(stag): w.node(attrs={"type": "Path", "factor": w.f64(factor)},
-                                                        data={"time": w.f64(times), "values": w.f64(vals)})}),
-        "patterns": w.node(groups={str(ptag): w.node(attrs={"type": "UniformExcitation", "dof": w.i32(pdof),
-                                                            "accel": w.i32(pseries)})}),
+                   "betaKcomm": w.f64(ray[3])}, data={"elements": w.i32(els)})
+            for k, (els, ray) in enumerate(m["regions"])})}),
+        "time_series": w.node(groups=series_groups),
+        "patterns": w.node(groups=patterns),
         "recorders": w.node(groups={"vtkhdf": w.node(attrs={"type": "VTKHDF", "file": femorax_vtkhdf,
                                                             "dT": w.f64(rdt), "responses": responses}),
                                     **{name: w.node(attrs={"type": "Node", "file": f, "response": resp,
@@ -298,11 +361,18 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf") -> 
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print(__doc__)
-        return 1
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("tcl", type=Path)
+    ap.add_argument("out", type=Path)
+    ap.add_argument("--explicit", type=float, default=None, metavar="DT")
+    ap.add_argument("--recorder-dt", type=float, default=None, metavar="DT")
+    ap.add_argument("--recorder", default="femorax.vtkhdf", metavar="FILE")
+    ap.add_argument("--responses", default=None)
+    o = ap.parse_args()
     try:
-        write_model(convert(Path(sys.argv[1])), Path(sys.argv[2]))
+        write_model(convert(o.tcl), o.out, femorax_vtkhdf=o.recorder, explicit_dt=o.explicit,
+                    recorder_dt=o.recorder_dt, responses=o.responses)
     except Unsupported as e:
         print(f"tcl_to_femorax: not in the recognised subset: {e}", file=sys.stderr)
         return 3

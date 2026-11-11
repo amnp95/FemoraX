@@ -167,6 +167,13 @@ if(EXISTS "${FEMORAX_OPENSEES}" AND EXISTS "${FEMORAX_VENV_PYTHON}")
                    ${CMAKE_CURRENT_BINARY_DIR}/system_implicit)
   set_tests_properties(system.implicit_vs_opensees PROPERTIES TIMEOUT 600)
 endif()
+# Single-precision VTKHDF output against the double output of the same run (no OpenSees).
+if(EXISTS "${FEMORAX_VENV_PYTHON}")
+  add_test(NAME system.vtkhdf_single_precision
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/single_precision_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_single_precision)
+  set_tests_properties(system.vtkhdf_single_precision PROPERTIES TIMEOUT 300)
+endif()
 # Nonlinear (PressureDependMultiYield) cases against stored OpenSees output: OpenSees does
 # not run (tests/system/soil_column/nonlinear_references.sh stores it).
 if(EXISTS "${FEMORAX_VENV_PYTHON}")

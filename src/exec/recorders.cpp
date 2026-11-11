@@ -109,7 +109,8 @@ std::int64_t Recorders::device_bytes_estimate(const io::Model& m, const compile:
   return values * 8 + columns * 4 + (host ? 2 * values * 8 : 0);
 }
 
-Recorders::Recorders(const io::Model& m, const compile::Compiled& c) {
+Recorders::Recorders(const io::Model& m, const compile::Compiled& c, bool single_precision)
+    : single_precision_(single_precision) {
   std::unordered_map<std::int32_t, std::int32_t> internal;
   for (std::int32_t i = 0; i < c.dofs.num_nodes(); ++i) internal[c.dofs.node_tag[i]] = i;
   auto upload = [](const std::vector<std::int32_t>& h) {
@@ -289,7 +290,7 @@ void Recorders::write(Job& job) {
       std::vector<std::string> fields, cells;
       for (const auto resp : r.responses) fields.emplace_back(vtkhdf_field(resp));
       for (const int c : r.cell_responses) cells.emplace_back(c == 0 ? "stress3D6" : "strain3D6");
-      vtkhdf_[i] = std::make_unique<io::VtkhdfWriter>(r.file, fields, cells);
+      vtkhdf_[i] = std::make_unique<io::VtkhdfWriter>(r.file, fields, cells, single_precision_);
     }
     return;
   }
