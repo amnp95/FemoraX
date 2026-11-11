@@ -10,11 +10,18 @@
 //   4.45 % at 1 Hz, 2.79 % at 10 Hz for a 5 % target): the drop that step 2 corrects with
 //   FemoraX's own fit (docs/design.md).
 // - Static stages and inactive times: no damping and a stiffness multiplier of 1.
+// - FemoraX's fit (step 2a) and the oscillation formula; inside solid elements (step 2b-1):
+//   a stdBrick mode decays exactly like the single-mode spring, rigid motion is undamped.
 
 #include "compile/uniform_damping_fit.hpp"
+#include "physics/damping/element_damping.hpp"
 #include "physics/damping/uniform_damping.hpp"
+#include "physics/elements/ssp_brick.hpp"
+#include "physics/elements/std_brick.hpp"
+#include "physics/materials/elastic_isotropic.hpp"
 #include "reference_data.hpp"
 
+#include <Eigen/Dense>
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -266,6 +273,187 @@ TEST(UniformDamping, FemoraxFitGivesTheTargetAcrossTheBand) {
     std::printf("[ FemoraX fit 5 %% over 0.1-10 Hz, %4g Hz: step by step %.3f %% ]\n", f, 100 * z);
     EXPECT_NEAR(z / 0.05, 1.0, 0.06) << f;
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// Step 2b-1: inside solid elements. A unit stdBrick (ElasticIsotropic, lumped mass), its four
+// base nodes fixed. Its stiffness is sum_gp B^T D B dvol; the damping filters each point's
+// stress and returns B^T qd dvol. Started in one of its own modes, the element stays in that
+// mode, and the mode's amplitude is exactly the single-mode spring of the same frequency
+// (the same filter acting on k u): the element path matches simulate() to rounding.
+using Brick = StdBrick<ElasticIsotropic>;
+constexpr double kXe[8][3] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0}, {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
+
+Brick::Params brick_params() {
+  Brick::Params p{};
+  p.mat.E = 1.0e5;
+  p.mat.v = 0.3;
+  p.mat.rho = 70.0;  // heavy enough to put the first mode inside the 0.1-10 Hz band
+  p.massType = 1;    // lumped
+  return p;
+}
+
+// Point stresses D B u of the brick for nodal displacements u (24 values).
+void brick_stresses(const Brick::Params& p, const double* u, double (*sig)[6]) {
+  double xl[3][8], D[6][6];
+  Brick::local_coords(kXe, xl);
+  ElasticIsotropic::initial_tangent(p.mat, D);
+  const auto g = Brick::recomputed_geometry(xl, p);
+  for (int gp = 0; gp < 8; ++gp) {
+    Brick::PointShape s;
+    g.shape(gp, s);
+    double eps[6];
+    Brick::point_strain(s, u, eps);
+    for (int a = 0; a < 6; ++a) {
+      sig[gp][a] = 0;
+      for (int c = 0; c < 6; ++c) sig[gp][a] += D[a][c] * eps[c];
+    }
+  }
+}
+
+// f = B^T sig dvol summed over the points (the element force of point stresses sig).
+void brick_force(const Brick::Params& p, const double (*sig)[6], double* f) {
+  double xl[3][8];
+  Brick::local_coords(kXe, xl);
+  uniform_damping_element_force<Brick>(Brick::recomputed_geometry(xl, p), sig, f);
+}
+
+TEST(UniformDampingElement, AStdBrickModeDecaysLikeTheSingleModeSpring) {
+  const auto p = brick_params();
+  // Free DOFs: the top nodes 4..7 (12 values); stiffness and lumped mass there.
+  constexpr int NF = 12;
+  Eigen::MatrixXd K(NF, NF), M = Eigen::MatrixXd::Zero(NF, NF);
+  for (int a = 0; a < NF; ++a) {
+    double u[24] = {}, sig[8][6], f[24];
+    u[12 + a] = 1.0;
+    brick_stresses(p, u, sig);
+    brick_force(p, sig, f);
+    for (int b = 0; b < NF; ++b) K(b, a) = f[12 + b];
+  }
+  {
+    double Me[24 * 24];
+    Brick::mass(p, kXe, Me);
+    for (int a = 0; a < NF; ++a) M(a, a) = Me[(12 + a) * 24 + (12 + a)];
+  }
+  Eigen::GeneralizedSelfAdjointEigenSolver<Eigen::MatrixXd> eig(K, M);
+  const double lambda = eig.eigenvalues()(0);
+  Eigen::VectorXd phi = eig.eigenvectors().col(0);
+  phi /= std::sqrt(phi.dot(M * phi));
+  const double f0 = std::sqrt(lambda) / (2 * kPi), dt = 1.0 / f0 / 400.0;
+  for (const bool femorax_fit : {false, true}) {
+    UniformDampingFilters fl;
+    if (femorax_fit) ASSERT_TRUE(uniform_damping_fit_femorax(0.05, 0.1, 10.0, 0.05, fl));
+    else fl = fit_0p1_10();
+    const double eta = uniform_damping_eta(0.05);
+    const int ns = 6 * (fl.nFilter + 2);
+    std::vector<double> C(8 * ns, 0.0), T(8 * ns, 0.0);
+    auto damping = [&](const Eigen::VectorXd& U, const UniformDampingStep& st, double* fd) {
+      double u[24] = {}, sig[8][6], qd[8][6];
+      for (int a = 0; a < NF; ++a) u[12 + a] = U(a);
+      brick_stresses(p, u, sig);
+      for (int gp = 0; gp < 8; ++gp)
+        uniform_damping_update<6>(fl, eta, st, {C.data() + gp * ns, 1}, {T.data() + gp * ns, 1}, sig[gp], qd[gp]);
+      brick_force(p, qd, fd);
+    };
+    // static step: u = phi, the filters take its stresses
+    Eigen::VectorXd U = phi, V = Eigen::VectorXd::Zero(NF), A = Eigen::VectorXd::Zero(NF);
+    {
+      double fd[24];
+      damping(U, UniformDampingStep{}, fd);
+      C = T;
+    }
+    const int steps = 2400;
+    const double g = 0.5, b = 0.25, c2 = g / (b * dt), c3 = 1.0 / (b * dt * dt);
+    std::vector<double> amp;
+    double t = 0;
+    for (int n = 0; n < steps; ++n) {
+      UniformDampingStep st;
+      st.dynamic = true;
+      st.dT = dt;
+      st.t = t + dt;
+      Eigen::VectorXd Ud = (1 - g / b) * V + dt * (1 - 0.5 * g / b) * A;
+      Eigen::VectorXd Udd = -1.0 / (b * dt) * V + (1 - 0.5 / b) * A;
+      Eigen::VectorXd Un = U;
+      const double km = uniform_damping_stiffness_multiplier(fl, eta, st);
+      const Eigen::MatrixXd Keff = c3 * M + km * K;
+      for (int it = 0; it < 20; ++it) {
+        double fd[24];
+        damping(Un, st, fd);
+        Eigen::VectorXd Fd(NF);
+        for (int a = 0; a < NF; ++a) Fd(a) = fd[12 + a];
+        const Eigen::VectorXd R = -(M * Udd) - (K * Un + Fd);
+        const Eigen::VectorXd dU = Keff.ldlt().solve(R);
+        Un += dU;
+        Ud += c2 * dU;
+        Udd += c3 * dU;
+        if (dU.lpNorm<Eigen::Infinity>() <= 1e-14) break;
+      }
+      {
+        double fd[24];
+        damping(Un, st, fd);
+      }
+      C = T;
+      U = Un;
+      V = Ud;
+      A = Udd;
+      t += dt;
+      amp.push_back(phi.dot(M * U));  // the mode's amplitude
+    }
+    const auto ref = simulate(f0, fl, steps);  // the single-mode spring at the brick's frequency
+    double worst = 0;
+    for (int n = 0; n < steps; ++n) worst = std::max(worst, std::fabs(amp[static_cast<std::size_t>(n)] - ref[static_cast<std::size_t>(n)]));
+    std::printf("[ stdBrick mode at %.3f Hz, %s fit: amplitude within %.1e of the single-mode spring ]\n", f0,
+                femorax_fit ? "FemoraX" : "OpenSees", worst);
+    EXPECT_LE(worst, 1e-9);
+  }
+}
+
+TEST(UniformDampingElement, RigidMotionGivesNoDampingForce) {
+  // Every node moves by the same translation and a small rotation about z: no strain, so the
+  // filtered stresses stay zero and so does the damping force, for stdBrick and SSPbrick.
+  const auto fl = fit_0p1_10();
+  const double eta = uniform_damping_eta(0.05);
+  UniformDampingStep st;
+  st.dynamic = true;
+  st.dT = 0.001;
+  st.t = 0.001;
+  double u[24];
+  for (int j = 0; j < 8; ++j) {
+    u[3 * j] = 0.3 - 1e-3 * kXe[j][1];
+    u[3 * j + 1] = -0.2 + 1e-3 * kXe[j][0];
+    u[3 * j + 2] = 0.1;
+  }
+  const auto p = brick_params();
+  double sig[8][6], qd[8][6], f[24];
+  brick_stresses(p, u, sig);
+  const int ns = 6 * (fl.nFilter + 2);
+  std::vector<double> C(ns, 0.0), T(ns, 0.0);
+  for (int gp = 0; gp < 8; ++gp) uniform_damping_update<6>(fl, eta, st, {C.data(), 1}, {T.data(), 1}, sig[gp], qd[gp]);
+  brick_force(p, qd, f);
+  double fmax = 0;
+  for (double v : f) fmax = std::max(fmax, std::fabs(v));
+  EXPECT_LE(fmax, 1e-9);
+
+  using Ssp = SSPbrick<ElasticIsotropic>;
+  static_assert(UniformDampedSolid<Brick> && UniformDampedSolid<Ssp>);
+  static_assert(uniform_damping_quantities<Brick> == 48 && uniform_damping_quantities<Ssp> == 6);
+  Ssp::Params sp{};
+  sp.mat = p.mat;
+  double xl[3][8];
+  Ssp::local_coords(kXe, xl);
+  const auto g = Ssp::recomputed_geometry(xl, sp);
+  Ssp::PointShape s;
+  g.shape(0, s);
+  double eps[6], D[6][6], s0[6] = {}, q0[1][6];
+  Ssp::point_strain(s, u, eps);
+  ElasticIsotropic::initial_tangent(p.mat, D);
+  for (int a = 0; a < 6; ++a)
+    for (int c = 0; c < 6; ++c) s0[a] += D[a][c] * eps[c];
+  uniform_damping_update<6>(fl, eta, st, {C.data(), 1}, {T.data(), 1}, s0, q0[0]);
+  uniform_damping_element_force<Ssp>(g, q0, f);
+  fmax = 0;
+  for (double v : f) fmax = std::max(fmax, std::fabs(v));
+  EXPECT_LE(fmax, 1e-9);
 }
 
 }  // namespace

@@ -623,8 +623,18 @@ and a Uniform region gets both (as OpenSees allows). Later, optional: per-group 
    filters, from OpenSees' weights, one more filter when needed): within 0.95-1.05 of the
    target over the band for 2, 5 and 10 % over 0.1-10, 0.5-20 and 0.2-2 Hz (2-12 filters);
    step by step, 5 % over 0.1-10 Hz gives 4.98 / 5.03 / 4.87 % at 0.1 / 1 / 10 Hz.
-   (b) The element contract part and stdBrick and SSPbrick (state, explicit force, stable
-   step), with tests 1-4 and 8.
+   (b-1) Inside solid elements, physics only. Done (2026-11-11):
+   `physics/damping/element_damping.hpp` (the `UniformDampedSolid` concept: the point
+   stresses are the damping quantities; the damping force `B^T qd dvol` through the element's
+   own `point_node_force`, generic over stdBrick and SSPbrick); a stdBrick started in one of
+   its modes decays exactly like the single-mode spring of that frequency (within 5e-15,
+   both fits) and rigid motion gives no damping force (stdBrick and SSPbrick).
+   (b-2) The kernels: damping state per batch (committed and trial, the number of filters a
+   compile-time bucket), damped and undamped batches, the damping force in every force-kernel
+   variant (bit-identical across layouts), the stable step with the stiffened response, and
+   the stiffness correction at the band's geometric mean. The correction must act only on the
+   change of the damping quantities since the damping was activated: applied to the full
+   stress it would push on the gravity stresses when shaking starts.
 3. Implicit stages (operator, diagonal), tests against the reference assembly and OpenSees.
 4. Schema 0.7, reader and fixtures; the converter; support table.
 5. Tests 5-7; benchmarks of the damped kernels.
