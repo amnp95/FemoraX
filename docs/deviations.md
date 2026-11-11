@@ -324,6 +324,30 @@ its peak (tolerance 5e-4). CPU and CUDA builds reproduced the event sequence exa
 - Test: `tests/unit/test_ssp_brick_reference.cpp` (gate: relative 1e-12, the element
   default); the system tests above.
 
+### Uniform damping — FemoraX's fit and stiffness correction (decided 2026-11-11, `fit = "femorax"`)
+- OpenSees: `SRC/damping/UniformDamping.cpp` (`Initialize`, `getStiffnessMultiplier`),
+  commit 955ceb0
+- Difference: OpenSees fits the filter weights so the damping term alone is flat within 5 %,
+  and leaves the filters' extra stiffness in place. FemoraX's default fit
+  (`uniform_damping_fit_femorax`) fits the weights so the damping ratio of the oscillation
+  is the target within 5 %, with a stiffness correction `kcorr` (the filters' stiffening at
+  the band's geometric mean) subtracted from the stiffness while the damping acts, on the
+  change of the stress since the damping started to act (`UniformDamped`). `fit = "opensees"`
+  keeps OpenSees' weights and no correction, and reproduces OpenSees to rounding.
+- Why: with OpenSees' weights 5 % over 0.1-10 Hz gives 4.7 % at 0.1 Hz and 3.4 % at 10 Hz,
+  and the response is 4-19 % stiffer (natural frequencies up by as much). With FemoraX's fit
+  the damping is 4.8-5.1 % across the band, the frequency at the band's geometric mean is
+  the specified one (x1.002 for 5 %, the damping's own (1 + (2 zeta)^2)^(1/4)), and x0.93 at
+  f1 to x1.09 at f2 (FemoraX's fit, 5 %, 0.1-10 Hz). Gravity stresses are untouched. The
+  stable explicit step is 0.890 of the undamped one (0.793 without the correction).
+- Effect on results: a different damping and stiffness with the default fit, by design;
+  none with `fit = "opensees"`.
+- Test: `UniformDamping.FemoraxFitGivesTheTargetAcrossTheBand`,
+  `UniformDampedMaterial.TheCorrectionActsOnlyOnTheChangeSinceActivation`,
+  `UniformDampedMaterial.ADampedStdBrickModeDecaysLikeTheSingleModeSpring`,
+  `UniformDampingReference.SingleModeFreeVibrationMatchesOpenSees` (OpenSees' fit),
+  `UniformDampedKernels.TheStableStepAccountsForTheStiffening`.
+
 ### SSPbrick — exact lumped mass and body force (decided 2026-11-07, milestone 2)
 - OpenSees: `SRC/element/UWelements/SSPbrick.cpp` (`getMass`, `getResistingForce`),
   commit 955ceb0

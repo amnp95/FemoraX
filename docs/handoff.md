@@ -39,28 +39,23 @@ Done (all on master, each after `scripts/check.sh`):
   kernels (registry entries for ElasticIsotropic, buckets 8 and 32).
 - `a015feb` (iii)-a the stable step: the damped step is the undamped one over
   `sqrt(1 + 2 eta sum alpha_i)` (0.793 for 5 % over 0.1-10 Hz).
+- (iii)-b the stiffness correction (default with FemoraX's fit; docs/deviations.md): the
+  frequency at the band's geometric mean is kept (x1.002 for 5 %), the damping stays within
+  5 % of the target, gravity stresses are untouched; the stable step is 0.890 of the
+  undamped one.
 
 Next, in order:
-1. (iii)-b the stiffness correction (default with FemoraX's fit): subtract the filters' extra
-   stiffness at the band's geometric mean, acting only on the change since activation (store
-   the stress at activation in the wrapper's state, 6 more values per point), so gravity
-   stresses are untouched; refit FemoraX's weights with the correction on so 5 % stays 5 %;
-   tests: the mode frequency at the reference equals the specified one, the damping stays
-   5 % +- 5 % across the band, a gravity stress at activation gives no force.
-2. (iv) PressureIndependMultiYield and PressureDependMultiYield wrapped (their material
+1. (iv) PressureIndependMultiYield and PressureDependMultiYield wrapped (their material
    stage must reach the wrapped Params).
-3. Step 3 implicit stages (stored tangents with the multiplier; the operator), step 4 schema
+2. Step 3 implicit stages (stored tangents with the multiplier; the operator), step 4 schema
    0.7 (`/damping/uniform`, approved) with reader, fixtures and the converter, step 5 the
    remaining verification (yielding, plane-wave attenuation, the basin with Uniform) and
    benchmarks.
-4. Open: a damped DRM layer is refused today (DRM elements must have no state); decide what
+3. Open: a damped DRM layer is refused today (DRM elements must have no state); decide what
    the DRM forces do with Uniform damping.
 
 Other findings of 2026-11-11 (the user asked; not started):
-- A mass-proportional-only (alphaM) absorber would remove the absorber's time-step penalty
-  (about 7x fewer explicit steps for the basin) but absorbs high frequencies less and needs
-  grading across its layers; to test against today's Rayleigh absorber by the DRM exterior
-  nodes (scattered field) and the surface response. PML stays the proper solution.
+- A mass-proportional-only (alphaM) absorber: tested, see "The basin example" below.
 - Implicit plastic basin in FemoraX against the user's OpenSees run (same scheme, 96 cores
   each): displacements within 0.2 %, 12 min against 32 min.
 - The 2-day OpenSees explicit runs were the basin-with-buildings study (beams, fiber sections,

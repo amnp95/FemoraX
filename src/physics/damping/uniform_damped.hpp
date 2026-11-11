@@ -12,11 +12,18 @@
 // surfaces of the multi-yield materials); the definition's own count, Params::fl.nFilter,
 // may be smaller.
 //
-// State per point: the wrapped material's Mat::NSTATE values, then the filter state of its
-// NSTRAIN stresses, NSTRAIN * (NF + 2) values (uniform_damping_update's layout).
+// FemoraX's stiffness correction (fit = "femorax", Params::fl.kcorr; docs/design.md): while the
+// damping acts, kcorr (sig - sig_act) is subtracted from the stress and kcorr D from the
+// tangent, sig_act being the material's stress when the damping started to act, so the damped
+// response has the specified stiffness at the band's geometric mean and the stresses already
+// there (gravity) are untouched. sig_act follows the material stress in static steps and
+// before the activation time, and stays fixed from then on.
 //
-// Not yet here (docs/design.md, step 2b-2): the stiffness correction at the band's geometric
-// mean, the -fact time series, the material stage of wrapped multi-yield materials, and the
+// State per point: the wrapped material's Mat::NSTATE values, then the filter state of its
+// NSTRAIN stresses, NSTRAIN * (NF + 2) values (uniform_damping_update's layout), then sig_act
+// (NSTRAIN values).
+//
+// Not yet here (docs/design.md, step 2b-2): the -fact time series, the material stage of wrapped multi-yield materials, and the
 // compacted (predictor / corrector) path.
 
 #include "physics/contracts.hpp"
@@ -33,7 +40,7 @@ struct UniformDamped {
   static constexpr MaterialKind KIND = Mat::KIND;
   static constexpr int NSTRAIN = Mat::NSTRAIN;
   static constexpr int NDAMP = NSTRAIN * (NF + 2);
-  static constexpr int NSTATE = Mat::NSTATE + NDAMP;
+  static constexpr int NSTATE = Mat::NSTATE + NDAMP + NSTRAIN;
   static constexpr TangentSymmetry TANGENT = Mat::TANGENT;
   // The tangent depends on the step size (the stiffness multiplier).
   static constexpr bool CONSTANT_TANGENT = false;
@@ -55,6 +62,10 @@ struct UniformDamped {
   FEMORAX_HD static Strided<T> damping_part(Strided<T> s) {
     return {s.base + static_cast<std::ptrdiff_t>(Mat::NSTATE) * s.stride, s.stride};
   }
+  template <class T>
+  FEMORAX_HD static Strided<T> activation_part(Strided<T> s) {
+    return {s.base + static_cast<std::ptrdiff_t>(Mat::NSTATE + NDAMP) * s.stride, s.stride};
+  }
 
   FEMORAX_HD static UniformDampingStep step_of(const StepContext& step, const Params& p) {
     UniformDampingStep s;
@@ -66,17 +77,26 @@ struct UniformDamped {
     return s;
   }
 
-  // The update with the step: the material's stress plus the damping stress, the material's
-  // tangent times the stiffness multiplier.
+  // The update with the step: the material's stress plus the damping stress, less the
+  // stiffness correction; the material's tangent times the stiffness multiplier less kcorr.
   FEMORAX_HD static void update(const StepContext& step, const Params& p, Strided<const double> committed,
                                 Strided<double> trial, const double* eps, double* sig, double (*D)[NSTRAIN]) {
     Mat::update(p.mat, material_part(committed), material_part(trial), eps, sig, D);
     const UniformDampingStep s = step_of(step, p);
     double qd[NSTRAIN];
     uniform_damping_update<NSTRAIN>(p.fl, p.eta, s, damping_part(committed), damping_part(trial), sig, qd);
-    const double km = uniform_damping_stiffness_multiplier(p.fl, p.eta, s);
+    double km = uniform_damping_stiffness_multiplier(p.fl, p.eta, s);
+    // When the multiplier acts (a dynamic step inside (ta, td)), so does the correction.
+    const bool acting = s.dynamic && s.dT > 0.0 && s.t > s.ta && s.t < s.td;
+    const bool tracking = !s.dynamic || !(s.t > s.ta);
+    const Strided<const double> actC = activation_part(committed);
+    const Strided<double> actT = activation_part(trial);
+    const double kc = acting ? p.fl.kcorr : 0.0;
+    km -= kc;
     for (int a = 0; a < NSTRAIN; ++a) {
-      sig[a] += qd[a];
+      const double sig_act = tracking ? sig[a] : actC[a];
+      actT[a] = sig_act;
+      sig[a] += qd[a] - kc * (sig[a] - sig_act);
       for (int c = 0; c < NSTRAIN; ++c) D[a][c] *= km;
     }
   }
@@ -91,6 +111,8 @@ struct UniformDamped {
     if constexpr (requires { Mat::initial_state(p.mat, s); }) Mat::initial_state(p.mat, material_part(s));
     const Strided<double> d = damping_part(s);
     for (int k = 0; k < NDAMP; ++k) d[k] = 0.0;
+    const Strided<double> act = activation_part(s);
+    for (int k = 0; k < NSTRAIN; ++k) act[k] = 0.0;
   }
 
   FEMORAX_HD static void initial_tangent(const Params& p, double (*D)[NSTRAIN]) { Mat::initial_tangent(p.mat, D); }
@@ -99,11 +121,12 @@ struct UniformDamped {
   }
   FEMORAX_HD static double density(const Params& p) { return Mat::density(p.mat); }
 
-  // The stable step's tangent: the material's, times the largest stiffness multiplier
-  // (1 + 2 eta sum alpha_i, its limit for a vanishing step), a bound that needs no step size.
+  // The stable step's tangent: the material's, times the largest stiffness multiplier less the
+  // correction (1 + 2 eta sum alpha_i - kcorr, its limit for a vanishing step), a bound that
+  // needs no step size.
   FEMORAX_HD static void stability_tangent(const Params& p, Strided<const double> committed, double (*D)[NSTRAIN]) {
     femorax::stability_tangent<Mat>(p.mat, material_part(committed), D);
-    double km = 1.0;
+    double km = 1.0 - p.fl.kcorr;
     for (int i = 0; i < p.fl.nFilter; ++i) km += 2.0 * p.eta * p.fl.alpha[i];
     for (int a = 0; a < NSTRAIN; ++a)
       for (int c = 0; c < NSTRAIN; ++c) D[a][c] *= km;

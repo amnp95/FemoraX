@@ -35,6 +35,12 @@ struct UniformDampingFilters {
   int nFilter = 0;
   double omegac[kUniformDampingMaxFilters] = {};
   double alpha[kUniformDampingMaxFilters] = {};
+  // FemoraX's stiffness correction (fit = "femorax"; 0 for OpenSees' fit): the filters'
+  // stiffening at the band's geometric mean, sum_i 2 eta alpha_i w_r^2 / (w_r^2 + omegac_i^2)
+  // with w_r = 2 pi sqrt(freq1 freq2), subtracted from the stiffness while the damping acts,
+  // on the change of the damping quantities since its activation (UniformDamped). Not used by
+  // the functions below, which are OpenSees' filter.
+  double kcorr = 0.0;
 };
 
 // The class works with eta = 2 * the damping ratio (the loss factor): OpenSees' command

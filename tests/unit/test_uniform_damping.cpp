@@ -32,6 +32,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <complex>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -112,7 +113,9 @@ Record read_record(const std::string& name) {
 // sdof_uniform.tcl as OpenSees runs it. Static step: u = 1, the filters take q = k u. Then
 // Newmark (form D: OpenSees' Newmark::newStep predictor, accelerations from 0 since the
 // script does not call initialize) with Newton to NormDispIncr 1e-14: the ZeroLength force
-// k u + qd and tangent k (1 + km).
+// k u + qd and tangent k (1 + km). With FemoraX's stiffness correction (fl.kcorr, 0 for
+// OpenSees' fit) the force loses kcorr k (u - 1) and the tangent kcorr k: the static step's
+// u = 1 is where the damping starts to act.
 std::vector<double> simulate(double f, const UniformDampingFilters& fl, int steps) {
   const double eta = uniform_damping_eta(0.05), m = 1.0, gamma = 0.5, beta = 0.25;
   const double w = 2 * kPi * f, k = w * w, dt = 1.0 / f / 400.0;
@@ -141,8 +144,8 @@ std::vector<double> simulate(double f, const UniformDampingFilters& fl, int step
     for (int it = 0; it < 20; ++it) {
       const double q[1] = {k * U};
       uniform_damping_update<1>(fl, eta, st, {C.data(), 1}, {T.data(), 1}, q, qd);
-      const double R = -(m * Udd) - (k * U + qd[0]);
-      const double K = c3 * m + k * uniform_damping_stiffness_multiplier(fl, eta, st);
+      const double R = -(m * Udd) - (k * U + qd[0] - fl.kcorr * (k * U - k * 1.0));
+      const double K = c3 * m + k * (uniform_damping_stiffness_multiplier(fl, eta, st) - fl.kcorr);
       const double dU = R / K;
       U += dU;
       Ud += c2 * dU;
@@ -258,18 +261,31 @@ TEST(UniformDamping, FemoraxFitGivesTheTargetAcrossTheBand) {
     for (double zeta : {0.02, 0.05, 0.10}) {
       UniformDampingFilters fl;
       ASSERT_TRUE(uniform_damping_fit_femorax(zeta, band.first, band.second, 0.05, fl));
-      double lo = 1e9, hi = 0, shift = 0;
+      double lo = 1e9, hi = 0, flo = 1e9, fhi = 0;
       for (int k = 0; k <= 200; ++k) {
         const double f = band.first * std::pow(band.second / band.first, k / 200.0);
         const auto mode = uniform_damping_mode(fl, uniform_damping_eta(zeta), 2 * kPi * f);
         lo = std::min(lo, mode.zeta / zeta);
         hi = std::max(hi, mode.zeta / zeta);
-        shift = std::max(shift, mode.frequency_ratio);
+        flo = std::min(flo, mode.frequency_ratio);
+        fhi = std::max(fhi, mode.frequency_ratio);
       }
-      std::printf("[ FemoraX fit %4.1f %% over %g-%g Hz: %d filters, damping %.3f-%.3f of the target, frequency up to x%.3f ]\n",
-                  100 * zeta, band.first, band.second, fl.nFilter, lo, hi, shift);
+      // The stiffness correction: the filters' stiffening cancels at the band's geometric mean,
+      // so the mode there keeps its frequency up to the damping's own (1 + (2 zeta)^2)^(1/4).
+      const double eta = uniform_damping_eta(zeta), wr = 2 * kPi * std::sqrt(band.first * band.second);
+      EXPECT_DOUBLE_EQ(fl.kcorr, uniform_damping_correction(fl, eta, wr));
+      std::complex<double> factor = 1.0 - fl.kcorr;
+      for (int i = 0; i < fl.nFilter; ++i)
+        factor += 2.0 * eta * fl.alpha[i] * std::complex<double>(0.0, wr) / std::complex<double>(fl.omegac[i], wr);
+      EXPECT_NEAR(factor.real(), 1.0, 1e-13);
+      const double fref = uniform_damping_mode(fl, eta, wr).frequency_ratio;
+      std::printf("[ FemoraX fit %4.1f %% over %g-%g Hz: %d filters, damping %.3f-%.3f of the target, kcorr %.4f, "
+                  "frequency x%.4f at the reference, x%.3f-x%.3f over the band ]\n",
+                  100 * zeta, band.first, band.second, fl.nFilter, lo, hi, fl.kcorr, fref, flo, fhi);
       EXPECT_GE(lo, 0.95);
       EXPECT_LE(hi, 1.05);
+      EXPECT_GT(fl.kcorr, 0.0);
+      EXPECT_NEAR(fref, 1.0, 0.01);
     }
   }
   // and the step-by-step filter delivers it
@@ -352,6 +368,7 @@ TEST(UniformDampingElement, AStdBrickModeDecaysLikeTheSingleModeSpring) {
     UniformDampingFilters fl;
     if (femorax_fit) ASSERT_TRUE(uniform_damping_fit_femorax(0.05, 0.1, 10.0, 0.05, fl));
     else fl = fit_0p1_10();
+    fl.kcorr = 0.0;  // the filter mechanism alone; the correction lives in UniformDamped
     const double eta = uniform_damping_eta(0.05);
     const int ns = 6 * (fl.nFilter + 2);
     std::vector<double> C(8 * ns, 0.0), T(8 * ns, 0.0);
@@ -500,6 +517,49 @@ TEST(UniformDampedMaterial, StaticStepsAreTheUndampedElement) {
   }
   // the filters took the stresses (static tracking), the damping stress stayed 0
   for (int gp = 0; gp < 8; ++gp) EXPECT_EQ(T[gp * NS + 6], 0.0);
+}
+
+TEST(UniformDampedMaterial, TheCorrectionActsOnlyOnTheChangeSinceActivation) {
+  // A point carries a gravity stress from static steps; the damping then acts. At the same
+  // strain the stress is the material's, bit for bit (the correction and the filters see no
+  // change); at a changed strain the correction removes kcorr times the change of the
+  // material stress, and the tangent is the material's times (km - kcorr).
+  UniformDampingFilters fl;
+  ASSERT_TRUE(uniform_damping_fit_femorax(0.05, 0.1, 10.0, 0.05, fl));
+  ASSERT_GT(fl.kcorr, 0.0);
+  const auto pd = damped_brick_params(fl);
+  constexpr int NS = DampedEI::NSTATE;
+  std::vector<double> C(NS, 0.0), T(NS, 0.0);
+  const double eps_g[6] = {-1e-4, -1e-4, -3e-4, 0, 0, 0};
+  double sig[6], D[6][6], sig_m[6], D_m[6][6];
+  for (int s = 0; s < 3; ++s) {  // gravity: static steps, then commit
+    DampedEI::update(StepContext{}, pd.mat, {C.data(), 1}, {T.data(), 1}, eps_g, sig, D);
+    C = T;
+  }
+  const double dt = 1e-3;
+  DampedEI::update(StepContext{dt, dt, 1}, pd.mat, {C.data(), 1}, {T.data(), 1}, eps_g, sig, D);
+  ElasticIsotropic::update(pd.mat.mat, {}, {}, eps_g, sig_m, D_m);
+  for (int a = 0; a < 6; ++a) EXPECT_EQ(sig[a], sig_m[a]) << a;
+  C = T;
+  // a changed strain: the stress against the undamped wrapper's (kcorr = 0) on the same state
+  const double eps[6] = {-0.8e-4, -1.1e-4, -2.5e-4, 2e-5, 0, -1e-5};
+  auto p0 = pd.mat;
+  p0.fl.kcorr = 0.0;
+  std::vector<double> T0(NS, 0.0);
+  double sig0[6], D0[6][6];
+  const StepContext step{2 * dt, dt, 1};
+  DampedEI::update(step, pd.mat, {C.data(), 1}, {T.data(), 1}, eps, sig, D);
+  DampedEI::update(step, p0, {C.data(), 1}, {T0.data(), 1}, eps, sig0, D0);
+  double sig_g[6];
+  ElasticIsotropic::update(pd.mat.mat, {}, {}, eps_g, sig_g, D_m);
+  ElasticIsotropic::update(pd.mat.mat, {}, {}, eps, sig_m, D_m);
+  const double km = uniform_damping_stiffness_multiplier(fl, pd.mat.eta, DampedEI::step_of(step, pd.mat));
+  for (int a = 0; a < 6; ++a) {
+    EXPECT_NEAR(sig[a], sig0[a] - fl.kcorr * (sig_m[a] - sig_g[a]), 1e-12 * std::fabs(sig_m[a]) + 1e-9) << a;
+    for (int c = 0; c < 6; ++c) EXPECT_NEAR(D[a][c], D_m[a][c] * (km - fl.kcorr), 1e-9 * std::fabs(D_m[a][c]));
+  }
+  // the activation stress stayed the gravity stress
+  for (int a = 0; a < 6; ++a) EXPECT_EQ(T[NS - 6 + a], sig_g[a]) << a;
 }
 
 TEST(UniformDampedMaterial, ADampedStdBrickModeDecaysLikeTheSingleModeSpring) {
@@ -671,7 +731,7 @@ TEST(UniformDampedKernels, DampedBatchesStaticEqualUndampedAndEveryVariantAgrees
 
 TEST(UniformDampedKernels, TheStableStepAccountsForTheStiffening) {
   // The damped column's stable explicit step is the undamped one over sqrt(1 + 2 eta sum
-  // alpha_i): the wrapper's stability tangent is the material's times that bound, and without
+  // alpha_i - kcorr): the wrapper's stability tangent is the material's times that bound, and without
   // Rayleigh damping the step is 2 / omega_max (docs/design.md, "Stable time step").
   for (const auto type : {io::ElementType::StdBrick, io::ElementType::SSPbrick}) {
     SCOPED_TRACE(io::to_string(type));
@@ -682,7 +742,7 @@ TEST(UniformDampedKernels, TheStableStepAccountsForTheStiffening) {
     const double dtd = kd.min_critical_dt(ExplicitScheme::ExplicitDifference);
     const double dtu = ku.min_critical_dt(ExplicitScheme::ExplicitDifference);
     const auto fl = registry::uniform_damping_filters(md.uniform[0]);
-    double km = 1.0;
+    double km = 1.0 - fl.kcorr;
     for (int i = 0; i < fl.nFilter; ++i) km += 2.0 * uniform_damping_eta(0.05) * fl.alpha[i];
     std::printf("[ %s: stable step %.6e undamped, %.6e damped (ratio %.6f, 1/sqrt(km) %.6f) ]\n",
                 io::to_string(type), dtu, dtd, dtd / dtu, 1.0 / std::sqrt(km));

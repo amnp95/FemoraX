@@ -675,6 +675,17 @@ stable explicit step is the undamped one over `sqrt(1 + 2 eta sum alpha_i)`, to 
 stdBrick and SSPbrick (5 % over 0.1-10 Hz, FemoraX's fit: 0.7932 of the undamped step, a 21 %
 smaller step: the stiffening at the mesh's highest frequencies; Rayleigh `betaK` cost 7x in
 the basin). Next: the stiffness correction (iii)-b.
+(iii)-b the stiffness correction. Done (2026-11-11): `UniformDampingFilters::kcorr`, the
+filters' stiffening at `w_r = 2 pi sqrt(f1 f2)`, `sum_i 2 eta alpha_i w_r^2 / (w_r^2 +
+omegac_i^2)` (`uniform_damping_correction`), set by FemoraX's fit, which now refits the
+weights with the correction on (0 for OpenSees' fit). The wrapper stores the material
+stress when the damping starts to act (6 more values per point; it follows the stress in
+static steps and before `ta`) and, while the damping acts, subtracts `kcorr (sig - sig_act)`
+from the stress and `kcorr D` from the tangent; the stability tangent uses
+`1 + 2 eta sum alpha_i - kcorr`. 5 % over 0.1-10 Hz: kcorr 0.206 with 7 filters, damping
+0.962-1.015 of the target, frequency x1.002 at the reference and x0.93-x1.09 over the band
+(without the correction up to x1.19), the stable step 0.890 of the undamped one (0.793
+before). A gravity stress at activation gives the material's stress bit for bit.
 
 ### Verification
 

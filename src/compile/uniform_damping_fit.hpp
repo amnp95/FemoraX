@@ -12,6 +12,7 @@
 //   oscillation's damping equals the target over the band.
 
 #include <cmath>
+#include <numbers>
 #include <complex>
 
 #include "physics/damping/uniform_damping.hpp"
@@ -128,8 +129,18 @@ inline bool uniform_damping_fit(double freq1, double freq2, double delta, Unifor
   return false;
 }
 
+// FemoraX's stiffness correction (UniformDampingFilters::kcorr): the real part of the filters'
+// complex stiffness factor sum_i 2 eta alpha_i s / (s + omegac_i) at s = i omega_ref, so the
+// corrected response has the specified stiffness at omega_ref.
+inline double uniform_damping_correction(const UniformDampingFilters& fl, double eta, double omega_ref) {
+  double r = 0.0;
+  const double w2 = omega_ref * omega_ref;
+  for (int i = 0; i < fl.nFilter; ++i) r += 2.0 * eta * fl.alpha[i] * w2 / (w2 + fl.omegac[i] * fl.omegac[i]);
+  return r;
+}
+
 // The free vibration of a mass on a spring whose force passes through these filters: the
-// root s near i omega0 of m s^2 + k (1 + sum_i 2 eta alpha_i s / (s + omegac_i)) = 0
+// root s near i omega0 of m s^2 + k (1 - kcorr + sum_i 2 eta alpha_i s / (s + omegac_i)) = 0
 // (k / m = omega0^2), the continuous limit of uniform_damping_update (the filter of step 1
 // with dt -> 0; the discrete histories agree with it independently of dt). Host code.
 struct UniformDampingMode {
@@ -146,7 +157,7 @@ inline UniformDampingMode uniform_damping_mode(const UniformDampingFilters& fl, 
       sum += b * s / (s + fl.omegac[i]);
       dsum += b * fl.omegac[i] / ((s + fl.omegac[i]) * (s + fl.omegac[i]));
     }
-    g += omega0 * omega0 * (1.0 + sum);
+    g += omega0 * omega0 * (1.0 - fl.kcorr + sum);
     dg += omega0 * omega0 * dsum;
     const C ds = g / dg;
     s -= ds;
@@ -157,7 +168,8 @@ inline UniformDampingMode uniform_damping_mode(const UniformDampingFilters& fl, 
 
 // FemoraX's fit (fit = "femorax", docs/design.md): weights for which the oscillation's damping
 // ratio (uniform_damping_mode, with eta = uniform_damping_eta(zeta)) is zeta within delta
-// (relative) over [freq1, freq2]: Gauss-Newton on the weights of OpenSees' filters (the same
+// (relative) over [freq1, freq2], with the stiffness correction at the band's geometric mean
+// (kcorr, recomputed from the weights at every evaluation): Gauss-Newton on the weights of OpenSees' filters (the same
 // log-spaced omegac), from OpenSees' weights; one more filter when that is not enough. Host
 // code. False if no fit within kUniformDampingMaxFilters.
 inline bool uniform_damping_fit_femorax(double zeta, double freq1, double freq2, double delta,
@@ -172,7 +184,9 @@ inline bool uniform_damping_fit_femorax(double zeta, double freq1, double freq2,
     UniformDampingFilters fl;
     if (!uniform_damping_detail::opensees_weights(freq1, freq2, nFilter, fl)) return false;
     const int K = 40 * nFilter;  // sample frequencies
-    auto residuals = [&](const UniformDampingFilters& f, double* r) {
+    const double omega_ref = 2.0 * std::numbers::pi * std::sqrt(freq1 * freq2);
+    auto residuals = [&](UniformDampingFilters& f, double* r) {
+      f.kcorr = uniform_damping_correction(f, eta, omega_ref);
       double worst = 0.0;
       for (int k = 0; k < K; ++k) {
         const double w0 = pi2 * std::pow(10.0, f1log + (f2log - f1log) * k / (K - 1));
