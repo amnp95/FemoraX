@@ -50,7 +50,17 @@ struct DevBatch {
   int current = 0;
   // Slot of element e's k-th value: slot_offset + k * padded + e.
   std::int64_t slot_offset = 0;
+  // The step of the next force evaluation or state determination (set by InternalForce
+  // before each launch): what every material update in the kernels receives.
+  StepContext step{};
 };
+
+// The element's damping for a launch: its region's Rayleigh factors and the launch's step.
+KOKKOS_INLINE_FUNCTION Rayleigh with_step(const Rayleigh& d, const StepContext& step) {
+  Rayleigh r = d;
+  r.step = step;
+  return r;
+}
 
 // Whether the element has an element-level stiffness term (physics/contracts.hpp).
 template <class Elem>
@@ -171,6 +181,7 @@ void launch_flat(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
   const auto sc = b.state[b.current], st = b.state[1 - b.current];
   const Index P = b.padded;
   const std::int64_t base = b.slot_offset;
+  const StepContext step = b.step;
   Kokkos::parallel_for(
       "element_force_flat", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(begin, end),
       KOKKOS_LAMBDA(const Index i) {
@@ -184,7 +195,8 @@ void launch_flat(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
         const DevParams<Elem>& pr = params(param(e));
         if (Cached) {  // a constant (template argument); nvcc cannot capture inside if constexpr
           typename Elem::Work work;
-          Elem::template compute_with<false>(SerialInner{}, cached_geometry<Elem>(geo, cst, e, P), pr.p, pr.damp,
+          Elem::template compute_with<false>(SerialInner{}, cached_geometry<Elem>(geo, cst, e, P), pr.p,
+                                             with_step(pr.damp, step),
                                              ue, ve, state_of<Elem>(sc, e, P), state_of<Elem>(st, e, P), fe,
                                              nullptr, work);
         } else {
@@ -193,7 +205,8 @@ void launch_flat(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
             const Index n = node(a * P + e);
             for (int d = 0; d < NDM; ++d) xe[a][d] = coords(d * N + n);
           }
-          Elem::template compute<false>(pr.p, pr.damp, xe, ue, ve, state_of<Elem>(sc, e, P), state_of<Elem>(st, e, P),
+          Elem::template compute<false>(pr.p, with_step(pr.damp, step), xe, ue, ve, state_of<Elem>(sc, e, P),
+                                        state_of<Elem>(st, e, P),
                                         fe, nullptr);
         }
         for (int k = 0; k < NDOF; ++k)
@@ -223,6 +236,7 @@ void launch_team(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
   const auto sc = b.state[b.current], st = b.state[1 - b.current];
   const Index P = b.padded;
   const std::int64_t base = b.slot_offset;
+  const StepContext step = b.step;
   constexpr bool HAS_TERM = kHasTerm<Elem>;
 
   Policy probe(league, Kokkos::AUTO);
@@ -281,7 +295,7 @@ void launch_team(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
           if (pr.damp.betaKinit != 0.0) Elem::Material::initial_tangent(pr.p.mat, D0);
           typename Elem::PointResult r;
           double dd[NSTRESS][NSTRESS];
-          Elem::point_update_shape(pr.p, pr.damp, s, ue, ve, state_of<Elem>(sc, e, P).point(gp),
+          Elem::point_update_shape(pr.p, with_step(pr.damp, step), s, ue, ve, state_of<Elem>(sc, e, P).point(gp),
                                    state_of<Elem>(st, e, P).point(gp), D0, r, dd);
           double* c = g + S::C + gp * NNODE * 3 * NDFN;
           for (int j = 0; j < NNODE; ++j)

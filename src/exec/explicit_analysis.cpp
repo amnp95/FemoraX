@@ -304,6 +304,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
           ed_predict(u, v_elem, a, dt, n);
           time += dt;
           motions.evaluate(time);
+          force.step = StepContext{time, dt, 1};
           force.compute(choice.settings);
           motions.apply_drm(time, force.f);
           ed_correct(force.f, m, eq_dof, motions.accel(), motions.dof(), motions.num_active(), v_elem, a,
@@ -311,6 +312,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         } else {
           motions.evaluate(time);  // loads at t(n)
           cd_garbage_velocity(v_elem, um, c2, n);
+          force.step = StepContext{time, dt, 1};
           force.compute(choice.settings);
           motions.apply_drm(time, force.f);
           cd_solve(force.f, m, cm, eq_dof, motions.accel(), motions.dof(), motions.num_active(), u, um, v_rec,

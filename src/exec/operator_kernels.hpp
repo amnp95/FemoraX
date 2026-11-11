@@ -41,13 +41,14 @@ KOKKOS_INLINE_FUNCTION PointArray<const double> tangents_of(const Vec& t, Index 
 // D of the material at the strain of ue at point s, from the point's committed state; the
 // trial state is written (the same values the force kernel writes at this displacement).
 template <class Elem>
-KOKKOS_INLINE_FUNCTION void material_tangent(const typename Elem::Params& p, const typename Elem::PointShape& s,
-                                             const double* ue, Strided<const double> committed, Strided<double> trial,
+KOKKOS_INLINE_FUNCTION void material_tangent(const StepContext& step, const typename Elem::Params& p,
+                                             const typename Elem::PointShape& s, const double* ue,
+                                             Strided<const double> committed, Strided<double> trial,
                                              double (*D)[Elem::Material::NSTRAIN]) {
   using Mat = typename Elem::Material;
   double eps[Mat::NSTRAIN], sig[Mat::NSTRAIN];
   Elem::point_strain(s, ue, eps);
-  Mat::update(p.mat, committed, trial, eps, sig, D);
+  material_update<Mat>(step, p.mat, committed, trial, eps, sig, D);
 }
 
 // The recomputed source: materials without history state only (InternalForce::resolve
@@ -55,12 +56,13 @@ KOKKOS_INLINE_FUNCTION void material_tangent(const typename Elem::Params& p, con
 // with state the branch is never taken; it is not compiled either, which keeps the compiler
 // from analysing an update on empty state views.
 template <class Elem>
-KOKKOS_INLINE_FUNCTION void recomputed_tangent(const typename Elem::Params& p, const typename Elem::PointShape& s,
-                                               const double* ue, double (*D)[Elem::Material::NSTRAIN]) {
+KOKKOS_INLINE_FUNCTION void recomputed_tangent(const StepContext& step, const typename Elem::Params& p,
+                                               const typename Elem::PointShape& s, const double* ue,
+                                               double (*D)[Elem::Material::NSTRAIN]) {
   if constexpr (Elem::Material::NSTATE == 0) {
-    material_tangent<Elem>(p, s, ue, {}, {}, D);
+    material_tangent<Elem>(step, p, s, ue, {}, {}, D);
   } else {
-    (void)p, (void)s, (void)ue, (void)D;
+    (void)step, (void)p, (void)s, (void)ue, (void)D;
     Kokkos::abort("recomputed tangent for a material with history state");
   }
 }
@@ -83,6 +85,7 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
   const auto sc = b.state[b.current];
   const Index P = b.padded;
   const std::int64_t base = b.slot_offset;
+  const StepContext step = b.step;
   Kokkos::parallel_for(
       Diagonal ? "element_operator_diagonal" : "element_operator_apply",
       Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(begin, end), KOKKOS_LAMBDA(const Index i) {
@@ -113,7 +116,7 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
           } else if (SourceI == static_cast<int>(Source::Stored)) {
             Storage<Elem>::load(tangents_of<Elem>(ts, e, P).point(gp), D);
           } else {  // Recomputed: materials without history state only (InternalForce::resolve)
-            recomputed_tangent<Elem>(pr.p, s, ue, D);
+            recomputed_tangent<Elem>(step, pr.p, s, ue, D);
           }
         };
         // Committed tangent (betaKcomm): from the point's committed state.
@@ -229,6 +232,7 @@ void launch_store_tangents(const DevBatch<Elem>& b, const DevTangents<Elem>& t, 
   const auto ts = t.stored;
   const auto sc = b.state[b.current], st = b.state[1 - b.current];
   const Index P = b.padded;
+  const StepContext step = b.step;
   Kokkos::parallel_for(
       "element_store_tangents", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count),
       KOKKOS_LAMBDA(const Index e) {
@@ -252,7 +256,8 @@ void launch_store_tangents(const DevBatch<Elem>& b, const DevTangents<Elem>& t, 
           if (Cached) Elem::point_load_geometry(gp, cache_of<Elem>(geo, e, P).point(gp), s);
           else Elem::point_geometry(xl, gp, s);
           double D[NS][NS];
-          material_tangent<Elem>(pr.p, s, ue, state_of<Elem>(sc, e, P).point(gp), state_of<Elem>(st, e, P).point(gp), D);
+          material_tangent<Elem>(step, pr.p, s, ue, state_of<Elem>(sc, e, P).point(gp), state_of<Elem>(st, e, P).point(gp),
+                                 D);
           Storage<Elem>::store(D, out.point(gp));
         }
       });

@@ -197,6 +197,7 @@ DevBatch<ReplayElement<Elem>> replay_batch(const DevBatch<Elem>& b, const DevCom
   r.state[0] = b.state[b.current];
   r.state[1] = d.results;
   r.slot_offset = b.slot_offset;
+  r.step = b.step;
   return r;
 }
 

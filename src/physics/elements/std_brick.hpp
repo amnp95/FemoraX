@@ -414,7 +414,7 @@ struct StdBrick {
     r.s = s;
     double strain[NSTRESS];
     point_strain(r.s, ue, strain);
-    Mat::update(p.mat, committed_i, trial_i, strain, r.stress, dd);
+    material_update<Mat>(damp.step, p.mat, committed_i, trial_i, strain, r.stress, dd);
 
     r.stiffDamping = damp.betaK != 0.0 || damp.betaKinit != 0.0 || damp.betaKcomm != 0.0;
     for (int a = 0; a < NSTRESS; ++a) r.dampStress[a] = 0.0;

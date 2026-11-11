@@ -114,6 +114,7 @@ struct InternalForce::Batch {
   // Material history state (none for materials without it).
   virtual bool has_state() const = 0;
   virtual void commit_state() = 0;
+  virtual void set_step(const StepContext& s) = 0;
   // updateMaterialStage for the parameter sets of model material `material` (an index into
   // model.materials); returns whether any set of this batch uses it.
   virtual bool set_material_stage(std::int32_t material, int stage) = 0;
@@ -354,6 +355,7 @@ struct TypedBatch final : InternalForce::Batch {
     }
   }
   void commit_state() override { b.current = 1 - b.current; }
+  void set_step(const StepContext& s) override { b.step = s; }
   bool set_material_stage(std::int32_t material, int stage) override {
     using MP = typename Elem::Material::Params;
     if constexpr (requires(MP q) { q.loadStage = 0; }) {
@@ -489,6 +491,7 @@ ForceSettings InternalForce::resolve(const ForceSettings& s) const {
 }
 
 void InternalForce::compute(const ForceSettings& settings) {
+  for (auto& b : batches_) b->set_step(step);
   const ForceSettings s = resolve(settings);
   if (s.scatter == Scatter::Colored && !has_coloring_) {
     Kokkos::abort("InternalForce: colored scatter needs CompileOptions::build_coloring");
@@ -564,6 +567,7 @@ int InternalForce::select_elements(const std::vector<std::int32_t>& tags) {
 }
 
 void InternalForce::element_output(int selection, int which, const Vec& out, std::int64_t offset) {
+  for (auto& b : batches_) b->set_step(step);
   const auto& s = selections_.at(static_cast<std::size_t>(selection));
   for (std::size_t bi = 0; bi < batches_.size(); ++bi)
     batches_[bi]->element_output(which, s.elems[bi], s.rows[bi], out, offset, coords_, nnodes_, u);
@@ -601,6 +605,7 @@ void InternalForce::enable_stored_tangents() {
 }
 
 void InternalForce::store_tangents(const Vec& u_at, const OperatorSettings& settings) {
+  for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (!has_stored_tangents()) Kokkos::abort("InternalForce::store_tangents: call enable_stored_tangents() first");
   for (auto& b : batches_) b->store_tangents(s, coords_, nnodes_, u_at);
@@ -608,6 +613,7 @@ void InternalForce::store_tangents(const Vec& u_at, const OperatorSettings& sett
 
 void InternalForce::apply_operator(const OperatorCoefficients& k, const OperatorSettings& settings, const Vec& u_at,
                                    const Kokkos::View<const double*, Space>& x, const Vec& y) {
+  for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (s.tangent == TangentSource::Stored && !has_stored_tangents())
     Kokkos::abort("InternalForce: stored tangents requested without enable_stored_tangents()");
@@ -624,6 +630,7 @@ void InternalForce::apply_operator(const OperatorCoefficients& k, const Operator
 
 void InternalForce::operator_diagonal(const OperatorCoefficients& k, const OperatorSettings& settings,
                                       const Vec& u_at, const Vec& d) {
+  for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (s.tangent == TangentSource::Stored && !has_stored_tangents())
     Kokkos::abort("InternalForce: stored tangents requested without enable_stored_tangents()");
@@ -638,6 +645,7 @@ void InternalForce::operator_diagonal(const OperatorCoefficients& k, const Opera
 
 void InternalForce::mass_times_ground(int direction, const OperatorSettings& settings, const Vec& u_at,
                                       const Vec& y) {
+  for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   const Out out = s.scatter == Scatter::Gather ? Out::Slots : s.scatter == Scatter::Atomic ? Out::Atomic : Out::Plain;
   if (s.scatter == Scatter::Colored && !has_coloring_)

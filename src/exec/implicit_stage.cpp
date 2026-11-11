@@ -275,6 +275,8 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
       time += h;
     }
     attempt_time = time;
+    // The step every material update of this attempt belongs to (Uniform damping's filters).
+    force.step = StepContext{time, is_static ? time - time0 : h, is_static ? 0 : 1};
     Kokkos::deep_copy(s.du0, s.du);  // the solver's initial guess, restored on failure
     motions.evaluate(time);
     const OperatorCoefficients k = coefficients(h);

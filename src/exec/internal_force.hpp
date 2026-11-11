@@ -93,6 +93,10 @@ class InternalForce {
 
   // Equation-space vectors, device-resident. Set u and v before compute().
   Vec u, v, f;
+  // The step of the next compute(), store_tangents() and operator evaluation (the time
+  // loops set it; static stages and evaluations outside a stage keep dynamic = 0). Every
+  // material update in the kernels receives it (physics/contracts.hpp, StepContext).
+  StepContext step{};
   void fill(double u0, double v0);
 
   std::int32_t num_equations() const { return neq_; }

@@ -582,7 +582,7 @@ Scripts and records: `/work2/08189/amnp95/femorax_plots/damping_test/`.
   term), so Newton stays consistent; the matrix-free operator, its Jacobi diagonal and the
   stored-tangent path include it. Symmetry: unchanged (a scalar multiple per element).
 
-### The step context and the damped-material wrapper (plan for step 2b-2, 2026-11-11; to approve)
+### The step context and the damped-material wrapper (plan for step 2b-2, 2026-11-11; approved by the user, who left the implementation choices to us)
 
 **The blocker.** The filters need the step size `dT`, the trial time `t` and whether the stage
 is dynamic, at every step and every substep. Nothing passes them today: a material's
@@ -634,7 +634,17 @@ damped wrapper for ElasticIsotropic and PressureIndependMultiYield first (the ba
 materials), the others when a model needs them.
 
 **Steps of 2b-2 (one commit each):** (i) the step context through the time loops, kernels,
-elements and the material concept, no behaviour change (all tests unchanged, bit for bit);
+elements and the material concept, no behaviour change (all tests unchanged, bit for bit).
+Done (2026-11-11), with less plumbing than planned: `StepContext` (`physics/contracts.hpp`)
+travels inside the `Rayleigh` struct every element already receives where it updates its
+material, and inside each batch's `DevBatch::step`, which every kernel already captures;
+`InternalForce::step` is set by the time loops (ExplicitDifference and CentralDifference at
+the force evaluation, every implicit attempt and substep) and handed to the batches before
+each launch. Elements and kernel helpers call materials through `material_update<Mat>`,
+which passes the step to a material whose `update` takes one and calls the others as
+before; no element, material or kernel signature changed. All tests unchanged, and the
+explicit force kernels within run-to-run noise (40^3 stdBrick, 96 threads: flat_gather
+1261 / 1116 us, flat_atomic 1335 / 1347 us before / after);
 (ii) the wrapper for ElasticIsotropic with the free-vibration tests through the real
 kernels; (iii) the stable step and the stiffness correction; (iv) PressureIndependMultiYield
 and PressureDependMultiYield.

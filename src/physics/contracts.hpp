@@ -47,11 +47,25 @@ FEMORAX_HD constexpr bool is_symmetric(TangentSymmetry t) { return t != TangentS
 
 // Rayleigh damping coefficients of one element (Femora assigns them per region):
 //   C = alphaM*M + betaK*K_current + betaKinit*K_initial + betaKcomm*K_committed
+// The step a material update belongs to: what time-dependent damping (Uniform damping,
+// docs/design.md, "The step context and the damped-material wrapper") needs. The time loops
+// fill it before every force evaluation and state determination; static stages (and every
+// evaluation outside a stage) have dynamic = 0.
+struct StepContext {
+  double t = 0.0;   // the trial time
+  double dT = 0.0;  // the step size (trial time - committed time)
+  int dynamic = 0;  // 1 in Transient stages
+};
+
+// An element's damping: the Rayleigh factors of its region, and the step context, which the
+// launch layer sets per force evaluation (every element receives this struct wherever it
+// updates its material).
 struct Rayleigh {
   double alphaM = 0.0;
   double betaK = 0.0;
   double betaKinit = 0.0;
   double betaKcomm = 0.0;
+  StepContext step{};
 };
 
 namespace detail {
@@ -102,6 +116,19 @@ concept Material = requires {
   { M::committed_tangent(p, committed, D) } -> std::same_as<void>;
   { M::density(p) } -> std::same_as<double>;
 };
+
+// The material update with the step context: a material whose update takes a StepContext
+// first (a damped-material wrapper) receives it; every other material is called as before.
+template <class M>
+FEMORAX_HD void material_update(const StepContext& step, const typename M::Params& p, Strided<const double> committed,
+                                Strided<double> trial, const double* eps, double* sig, double (*D)[M::NSTRAIN]) {
+  if constexpr (requires { M::update(step, p, committed, trial, eps, sig, D); }) {
+    M::update(step, p, committed, trial, eps, sig, D);
+  } else {
+    (void)step;
+    M::update(p, committed, trial, eps, sig, D);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Element contract
