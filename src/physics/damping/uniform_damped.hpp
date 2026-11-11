@@ -23,8 +23,11 @@
 // NSTRAIN stresses, NSTRAIN * (NF + 2) values (uniform_damping_update's layout), then sig_act
 // (NSTRAIN values).
 //
-// Not yet here (docs/design.md, step 2b-2): the -fact time series, the material stage of wrapped multi-yield materials, and the
-// compacted (predictor / corrector) path.
+// The wrapped material's own parameters stay in Params::mat, so the material stage
+// (updateMaterialStage) reaches a wrapped multi-yield material there (exec::InternalForce).
+//
+// Not yet here (docs/design.md, step 2b-2): the -fact time series and the compacted
+// (predictor / corrector) path; a wrapped multi-yield material runs the fused update.
 
 #include "physics/contracts.hpp"
 #include "physics/damping/uniform_damping.hpp"
@@ -142,6 +145,15 @@ struct UniformDamped {
       static_assert(Mat::NSTATE == 0, "a material with history state needs recorded_stress");
       double D[NSTRAIN][NSTRAIN];
       Mat::update(p.mat, material_part(committed), {}, eps, out, D);
+    }
+  }
+  // getStrain: the material's.
+  FEMORAX_HD static void recorded_strain(const Params& p, Strided<const double> committed, const double* eps,
+                                         double* out) {
+    if constexpr (requires { Mat::recorded_strain(p.mat, committed, eps, out); }) {
+      Mat::recorded_strain(p.mat, material_part(committed), eps, out);
+    } else {
+      for (int c = 0; c < NSTRAIN; ++c) out[c] = eps[c];
     }
   }
 };

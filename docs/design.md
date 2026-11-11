@@ -686,6 +686,19 @@ from the stress and `kcorr D` from the tangent; the stability tangent uses
 0.962-1.015 of the target, frequency x1.002 at the reference and x0.93-x1.09 over the band
 (without the correction up to x1.19), the stable step 0.890 of the undamped one (0.793
 before). A gravity stress at activation gives the material's stress bit for bit.
+(iv) the multi-yield materials wrapped. Done (2026-11-11): registry entries
+`UniformDampedEntry<PressureDependMultiYieldEntry<20>, NF>` and the same for
+PressureIndependMultiYield, NF 8 and 32 (the 40-surface buckets are not wrapped yet: a damped
+material with more than 20 surfaces is an unsupported pair; one line each when a model needs
+it). The material stage reaches the wrapped Params (`set_material_stage` looks for
+`mat.loadStage` too); the wrapper forwards `recorded_strain`. A wrapped material runs the
+fused update (the compacted predictor / corrector path needs a split wrapper, later). Tests: a
+wrapped PIMY point equals the plain material bit for bit in static steps through the stage
+switch and into yielding; under shear at a constant rate onto the perfectly plastic surface
+the damping stress dies out (1.7e-8 after 24 s on the plateau, against 159 for the elastic
+material at the same rate; its largest value 2.0) (verification item 5); damped PIMY and PDMY
+columns through the real kernels take the stage, equal the undamped column in static
+evaluations bit for bit, and give the same bits in every kernel variant.
 
 ### Verification
 

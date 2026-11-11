@@ -43,15 +43,16 @@ Done (all on master, each after `scripts/check.sh`):
   frequency at the band's geometric mean is kept (x1.002 for 5 %), the damping stays within
   5 % of the target, gravity stresses are untouched; the stable step is 0.890 of the
   undamped one.
+- (iv) PressureIndependMultiYield and PressureDependMultiYield wrapped (20-surface buckets,
+  filter buckets 8 and 32): the material stage reaches them, a yielding point stops adding
+  damping, every kernel variant gives the same bits. The compacted path is not wrapped.
 
 Next, in order:
-1. (iv) PressureIndependMultiYield and PressureDependMultiYield wrapped (their material
-   stage must reach the wrapped Params).
-2. Step 3 implicit stages (stored tangents with the multiplier; the operator), step 4 schema
+1. Step 3 implicit stages (stored tangents with the multiplier; the operator), step 4 schema
    0.7 (`/damping/uniform`, approved) with reader, fixtures and the converter, step 5 the
    remaining verification (yielding, plane-wave attenuation, the basin with Uniform) and
    benchmarks.
-3. Open: a damped DRM layer is refused today (DRM elements must have no state); decide what
+2. Open: a damped DRM layer is refused today (DRM elements must have no state); decide what
    the DRM forces do with Uniform damping.
 
 Other findings of 2026-11-11 (the user asked; not started):

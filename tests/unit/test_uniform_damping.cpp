@@ -25,12 +25,14 @@
 #include "physics/elements/ssp_brick.hpp"
 #include "physics/elements/std_brick.hpp"
 #include "physics/materials/elastic_isotropic.hpp"
+#include "physics/materials/pressure_independ_multi_yield.hpp"
 #include "reference_data.hpp"
 
 #include <Eigen/Dense>
 #include <Kokkos_Core.hpp>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstring>
@@ -659,7 +661,44 @@ TEST(UniformDampedMaterial, RecordersSeeTheMaterialsOwnStress) {
 // ---------------------------------------------------------------------------------------
 // Step 2b-2 (ii)-b: damped batches from the model's Uniform damping regions, through the
 // real force kernels.
-io::Model damped_column(bool damped, io::ElementType type) {
+// The basin's clay (PressureIndependMultiYield, 20 surfaces) as a model material.
+io::PressureIndependMultiYieldData basin_clay_data() {
+  io::PressureIndependMultiYieldData d;
+  d.rho = 1.8;
+  d.refShearModul = 1.8 * 150.0 * 150.0;
+  d.refBulkModul = 1.8 * (300.0 * 300.0 - 4.0 * 150.0 * 150.0 / 3.0);
+  d.cohesi = 8.0;
+  d.peakShearStra = 0.1;
+  d.frictionAng = 0.0;
+  d.refPress = 100.0;
+  d.pressDependCoe = 0.0;
+  d.noYieldSurf = 20;
+  return d;
+}
+
+// A loose sand (PressureDependMultiYield, 20 surfaces), as in test_material_state.cpp.
+io::PressureDependMultiYieldData loose_sand_data() {
+  io::PressureDependMultiYieldData d;
+  d.rho = 19.1 / 9.81;
+  d.refShearModul = 75.0e3;
+  d.refBulkModul = 2.0 * d.refShearModul * 1.3 / 1.2;
+  d.frictionAng = 29.0;
+  d.peakShearStra = 0.1;
+  d.refPress = 80.0;
+  d.pressDependCoe = 0.5;
+  d.PTAng = 29.0;
+  d.contrac = 0.21;
+  d.liquefac1 = 10.0;
+  d.liquefac2 = 0.02;
+  d.liquefac3 = 1.0;
+  d.noYieldSurf = 20;
+  d.e = 0.85;
+  return d;
+}
+
+enum class Soil { Elastic, Pimy, Pdmy };
+
+io::Model damped_column(bool damped, io::ElementType type, Soil soil = Soil::Elastic) {
   femorax::testing::ColumnSpec spec;
   spec.nx = 2;
   spec.ny = 2;
@@ -667,6 +706,10 @@ io::Model damped_column(bool damped, io::ElementType type) {
   spec.damping = false;
   spec.element = type;
   io::Model m = femorax::testing::soil_column(spec);
+  for (auto& mat : m.materials) {
+    if (soil == Soil::Pimy) mat.data = basin_clay_data();
+    if (soil == Soil::Pdmy) mat.data = loose_sand_data();
+  }
   if (damped) {
     io::UniformDampingRegion r;
     r.id = "soil";
@@ -751,5 +794,160 @@ TEST(UniformDampedKernels, TheStableStepAccountsForTheStiffening) {
   }
 }
 
+// ---------------------------------------------------------------------------------------
+// Step 2b-2 (iv): the multi-yield materials wrapped.
+using P20 = PressureIndependMultiYield<20>;
+using DampedP20 = UniformDamped<P20, 32>;
+static_assert(Material<DampedP20>);
+
+DampedP20::Params damped_pimy_params(const UniformDampingFilters& fl) {
+  const auto d = basin_clay_data();
+  P20::Input in{};
+  in.rho = d.rho;
+  in.refShearModul = d.refShearModul;
+  in.refBulkModul = d.refBulkModul;
+  in.cohesi = d.cohesi;
+  in.peakShearStra = d.peakShearStra;
+  in.frictionAng = d.frictionAng;
+  in.refPress = d.refPress;
+  in.pressDependCoe = d.pressDependCoe;
+  in.numberOfYieldSurf = d.noYieldSurf;
+  DampedP20::Params p{};
+  EXPECT_EQ(P20::setup(in, p.mat), P20::Ok);
+  p.fl = fl;
+  p.eta = uniform_damping_eta(0.05);
+  return p;
+}
+
+TEST(UniformDampedMaterial, AWrappedPimyIsThePlainMaterialInStaticSteps) {
+  // Through the stage switch (elastic, then plastic) and into yielding, static steps of the
+  // wrapped material give the plain material's stress and tangent bit for bit.
+  UniformDampingFilters fl;
+  ASSERT_TRUE(uniform_damping_fit_femorax(0.05, 0.1, 10.0, 0.05, fl));
+  auto pw = damped_pimy_params(fl);
+  auto pm = pw.mat;
+  constexpr int NW = DampedP20::NSTATE, NM = P20::NSTATE;
+  std::vector<double> Cw(NW), Tw(NW), Cm(NM), Tm(NM);
+  DampedP20::initial_state(pw, {Cw.data(), 1});
+  DampedP20::initial_state(pw, {Tw.data(), 1});
+  P20::initial_state(pm, {Cm.data(), 1});
+  P20::initial_state(pm, {Tm.data(), 1});
+  for (int n = 0; n < 40; ++n) {
+    if (n == 3) pw.mat.loadStage = pm.loadStage = 1;  // updateMaterialStage
+    const double g = n < 3 ? 0.0 : 0.004 * (n - 3);    // shear well past the peak strain 0.1
+    const double eps[6] = {-1e-4, -1e-4, -1e-4, g, 0.3 * g, 0.0};
+    double sw[6], sm[6], Dw[6][6], Dm[6][6];
+    DampedP20::update(StepContext{}, pw, {Cw.data(), 1}, {Tw.data(), 1}, eps, sw, Dw);
+    P20::update(pm, {Cm.data(), 1}, {Tm.data(), 1}, eps, sm, Dm);
+    for (int a = 0; a < 6; ++a) {
+      ASSERT_EQ(sw[a], sm[a]) << n << " " << a;
+      for (int c = 0; c < 6; ++c) ASSERT_EQ(Dw[a][c], Dm[a][c]) << n;
+    }
+    Cw = Tw;
+    Cm = Tm;
+  }
+}
+
+TEST(UniformDampedMaterial, AYieldingPointStopsAddingDamping) {
+  // Shear at a constant rate, dynamic steps, past the peak strain onto the perfectly plastic
+  // outer surface: the material stress stops changing, so the filtered stress catches up and
+  // the damping stress dies out (Huang et al.: a yielding member's damping stops growing). An
+  // elastic material at the same rate keeps its damping stress.
+  UniformDampingFilters fl;
+  ASSERT_TRUE(uniform_damping_fit_femorax(0.05, 0.1, 10.0, 0.05, fl));
+  fl.kcorr = 0.0;  // the damping stress alone
+  auto pw = damped_pimy_params(fl);
+  pw.mat.loadStage = 1;
+  using DampedE = UniformDamped<ElasticIsotropic, 32>;
+  DampedE::Params pe{};
+  const double G = pw.mat.refShearModulus, K = pw.mat.refBulkModulus;
+  pe.mat.E = 9 * K * G / (3 * K + G);
+  pe.mat.v = (3 * K - 2 * G) / (2 * (3 * K + G));
+  pe.mat.rho = 1.8;
+  pe.fl = fl;
+  pe.eta = pw.eta;
+  constexpr int NW = DampedP20::NSTATE, NE = DampedE::NSTATE, NM = P20::NSTATE;
+  std::array<double, NW> Cw{}, Tw{};
+  std::array<double, NE> Ce{}, Te{};
+  std::array<double, NM> Cm{}, Tm{};
+  DampedP20::initial_state(pw, {Cw.data(), 1});
+  DampedP20::initial_state(pw, {Tw.data(), 1});
+  P20::initial_state(pw.mat, {Cm.data(), 1});
+  P20::initial_state(pw.mat, {Tm.data(), 1});
+  const double dt = 0.01, rate = 0.5 / 30.0;  // shear strain 0.5 after 30 s; the peak 0.1 at 6 s
+  double qd_p = 0, qd_e = 0, qd_p_max = 0, qd_e_max = 0;
+  for (int n = 0; n <= 3000; ++n) {
+    const double t = n * dt, g = rate * t;
+    const double eps[6] = {0, 0, 0, g, 0, 0};
+    const StepContext step = n == 0 ? StepContext{} : StepContext{t, dt, 1};
+    double sw[6], sm[6], se[6], se0[6], D[6][6];
+    DampedP20::update(step, pw, {Cw.data(), 1}, {Tw.data(), 1}, eps, sw, D);
+    P20::update(pw.mat, {Cm.data(), 1}, {Tm.data(), 1}, eps, sm, D);
+    DampedE::update(step, pe, {Ce.data(), 1}, {Te.data(), 1}, eps, se, D);
+    ElasticIsotropic::update(pe.mat, {}, {}, eps, se0, D);
+    Cw = Tw;
+    Cm = Tm;
+    Ce = Te;
+    qd_p = sw[3] - sm[3];
+    qd_e = se[3] - se0[3];
+    qd_p_max = std::max(qd_p_max, std::fabs(qd_p));
+    qd_e_max = std::max(qd_e_max, std::fabs(qd_e));
+  }
+  std::printf("[ shear at %.4f /s: damping stress at 30 s %.3e (PIMY, yielded) vs %.3e (elastic); largest %.3e vs %.3e ]\n",
+              rate, qd_p, qd_e, qd_p_max, qd_e_max);
+  EXPECT_GT(std::fabs(qd_e), 0.0);
+  EXPECT_LT(std::fabs(qd_p), 1e-3 * std::fabs(qd_e));
+  EXPECT_LE(qd_p_max, qd_e_max);
+}
+
+TEST(UniformDampedKernels, DampedMultiYieldColumnsTakeTheStageAndEveryVariantAgrees) {
+  for (const auto soil : {Soil::Pimy, Soil::Pdmy})
+  for (const auto type : {io::ElementType::StdBrick, io::ElementType::SSPbrick}) {
+    SCOPED_TRACE(io::to_string(type));
+    SCOPED_TRACE(soil == Soil::Pimy ? "PressureIndependMultiYield" : "PressureDependMultiYield");
+    const auto md = damped_column(true, type, soil);
+    const auto cd = compile::compile_model(md, compile::CompileOptions{});
+    const auto cu = compile::compile_model(damped_column(false, type, soil), compile::CompileOptions{});
+    ASSERT_EQ(cd.batches.size(), 1u);
+    exec::InternalForce kd(cd, exec::GeometryCache::On), ku(cu, exec::GeometryCache::On);
+    std::vector<double> u(static_cast<std::size_t>(kd.num_equations()));
+    for (std::size_t q = 0; q < u.size(); ++q) u[q] = 2e-3 * std::sin(0.7 + 1.3 * static_cast<double>(q));
+    const auto def = exec::default_force_settings();
+    // the default settings may pick the compacted path for the undamped PDMY; the wrapped
+    // material runs the fused one, so compare on the fused path
+    auto fused = def;
+    fused.material = exec::MaterialPath::Fused;
+    for (int stage : {0, 1}) {
+      SCOPED_TRACE(stage);
+      for (std::size_t i = 0; i < md.materials.size(); ++i) {
+        EXPECT_TRUE(kd.set_material_stage(static_cast<std::int32_t>(i), stage));
+        EXPECT_TRUE(ku.set_material_stage(static_cast<std::int32_t>(i), stage));
+      }
+      const auto fs = force_at(kd, u, StepContext{}, fused), fu = force_at(ku, u, StepContext{}, fused);
+      for (std::size_t q = 0; q < fs.size(); ++q) ASSERT_EQ(fs[q], fu[q]) << q;
+      kd.commit_state();
+      ku.commit_state();
+    }
+    std::vector<double> u2(u.size());
+    for (std::size_t q = 0; q < u.size(); ++q) u2[q] = 1.5 * u[q] + 1e-3 * std::cos(0.3 * static_cast<double>(q));
+    const StepContext step{0.001, 0.001, 1};
+    const auto variants = exec::tunable_variants(kd);
+    const auto first = force_at(kd, u2, step, variants[0]);
+    const auto fu2 = force_at(ku, u2, StepContext{}, fused);
+    double diff = 0, scale = 0;
+    for (std::size_t q = 0; q < first.size(); ++q) {
+      diff = std::max(diff, std::fabs(first[q] - fu2[q]));
+      scale = std::max(scale, std::fabs(fu2[q]));
+    }
+    EXPECT_GT(diff, 1e-6 * scale);  // the damping force
+    for (const auto& s : variants) {
+      SCOPED_TRACE(exec::to_string(s));
+      const auto f = force_at(kd, u2, step, s);
+      EXPECT_EQ(std::memcmp(f.data(), first.data(), f.size() * sizeof(double)), 0);
+    }
+  }
+}
+
 }  // namespace
+
 

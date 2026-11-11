@@ -175,7 +175,9 @@ struct SSPbrickEntry {
 // The registered entries: one line each.
 // Uniform damping (docs/design.md): the material of an element in a Uniform damping region is
 // wrapped, UniformDamped<Base, NF>, in the smallest filter bucket NF that holds the region's
-// fit. Another material or bucket is one more line in Materials below.
+// fit. Another material or bucket is one more line in Materials below. The multi-yield
+// materials are wrapped in their 20-surface bucket only so far (each entry is one more
+// instantiation of every kernel); a damped one with more surfaces is an unsupported pair.
 template <class BaseEntry, int NF>
 struct UniformDampedEntry {
   using Material = UniformDamped<typename BaseEntry::Material, NF>;
@@ -198,7 +200,11 @@ inline constexpr bool is_damped_entry = requires { M::filters; };
 
 using Materials = TypeList<ElasticIsotropicEntry, PressureDependMultiYieldEntry<20>, PressureDependMultiYieldEntry<40>,
                            PressureIndependMultiYieldEntry<20>, PressureIndependMultiYieldEntry<40>,
-                           UniformDampedEntry<ElasticIsotropicEntry, 8>, UniformDampedEntry<ElasticIsotropicEntry, 32>>;
+                           UniformDampedEntry<ElasticIsotropicEntry, 8>, UniformDampedEntry<ElasticIsotropicEntry, 32>,
+                           UniformDampedEntry<PressureDependMultiYieldEntry<20>, 8>,
+                           UniformDampedEntry<PressureDependMultiYieldEntry<20>, 32>,
+                           UniformDampedEntry<PressureIndependMultiYieldEntry<20>, 8>,
+                           UniformDampedEntry<PressureIndependMultiYieldEntry<20>, 32>>;
 
 // The smallest bucket that holds the material's surfaces.
 template <int NS>

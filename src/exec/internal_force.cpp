@@ -358,11 +358,15 @@ struct TypedBatch final : InternalForce::Batch {
   void set_step(const StepContext& s) override { b.step = s; }
   bool set_material_stage(std::int32_t material, int stage) override {
     using MP = typename Elem::Material::Params;
-    if constexpr (requires(MP q) { q.loadStage = 0; }) {
+    // The material's own loadStage, or the wrapped material's (UniformDamped keeps it in mat).
+    constexpr bool own = requires(MP q) { q.loadStage = 0; };
+    constexpr bool wrapped = requires(MP q) { q.mat.loadStage = 0; };
+    if constexpr (own || wrapped) {
       bool any = false;
       for (std::size_t i = 0; i < host_params.size(); ++i)
         if (param_material[i] == material) {
-          host_params[i].p.mat.loadStage = stage;
+          if constexpr (own) host_params[i].p.mat.loadStage = stage;
+          else host_params[i].p.mat.mat.loadStage = stage;
           any = true;
         }
       if (any) {
