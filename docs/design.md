@@ -528,6 +528,21 @@ Scripts and records: `/work2/08189/amnp95/femorax_plots/damping_test/`.
    (step 1, `test_uniform_damping`), so the drop is the formulation's, not a bug in a
    particular element. Note: OpenSees' command passes `zeta * 2.0` to the class, which works
    with the loss factor `eta = 2 zeta` (`TclDampingCommand.cpp`).
+   Correction (step 2a): the peak-to-peak decay above is biased at high frequency by the
+   filters' slow relaxation; with that part removed the oscillation's damping is 4.75 % at
+   0.1 Hz, 4.21 % at 1 Hz and 3.42 % at 10 Hz, and the continuous-limit formula
+   (`uniform_damping_mode`) gives 4.69 / 4.18 / 3.37 %. The same formula shows the
+   stiffening: the natural frequency rises by 4 % at 0.1 Hz and 19 % at 10 Hz (OpenSees fit,
+   5 % over 0.1-10 Hz).
+4. Stiffening is the price of causal frequency-independent damping and grows with the ratio
+   and the band (FemoraX fit: up to x1.08 for 2 %, x1.22 for 5 %, x1.49 for 10 % over 0.1-10 Hz,
+   at the top of the band). For buildings this shortens the periods. Default (proposed to the
+   user in plain terms, 2026-11-11, who left the technical choice to us): with
+   `fit = "femorax"` FemoraX scales each damped element's stiffness so the damped response has
+   the specified stiffness at a reference frequency, the band's geometric mean
+   `sqrt(f1 f2)` (as SW4 does for its moduli), and the run summary always reports how much the
+   damping stiffens the response at f1 and f2; `fit = "opensees"` keeps OpenSees' behaviour
+   (no correction). Designed and verified in step 2b.
 3. Stability: the element stiffness is multiplied by `1 + sum_i 4 alpha_i xi / (2 + w_i dt)`
    (`UniformDamping::getStiffnessMultiplier`), which grows with the ratio and the band width.
 
@@ -599,11 +614,17 @@ and a Uniform region gets both (as OpenSees allows). Later, optional: per-group 
 ### Steps (one commit each, after approval)
 
 1. The filter fit and the single-mode tests (host, physics only). Done (2026-11-11):
-   `physics/damping/uniform_damping.hpp` (OpenSees' fit, update and stiffness multiplier,
-   state through `Strided` views), `test_uniform_damping` against stored OpenSees records
+   `physics/damping/uniform_damping.hpp` (OpenSees' update and stiffness multiplier, state
+   through `Strided` views) and `compile/uniform_damping_fit.hpp` (the fits, host code), `test_uniform_damping` against stored OpenSees records
    (`tests/reference/damping/`, `tests/reference/data/damping/`): within 1.3e-14.
-2. The element contract part and stdBrick and SSPbrick (state, explicit force, stable step),
-   with tests 1-4 and 8.
+2. (a) FemoraX's fit. Done (2026-11-11): `uniform_damping_mode` (the oscillation's damping
+   and frequency, the continuous limit of the filter, confirmed against step-by-step
+   histories within 1.5 %) and `uniform_damping_fit_femorax` (Gauss-Newton on OpenSees'
+   filters, from OpenSees' weights, one more filter when needed): within 0.95-1.05 of the
+   target over the band for 2, 5 and 10 % over 0.1-10, 0.5-20 and 0.2-2 Hz (2-12 filters);
+   step by step, 5 % over 0.1-10 Hz gives 4.98 / 5.03 / 4.87 % at 0.1 / 1 / 10 Hz.
+   (b) The element contract part and stdBrick and SSPbrick (state, explicit force, stable
+   step), with tests 1-4 and 8.
 3. Implicit stages (operator, diagonal), tests against the reference assembly and OpenSees.
 4. Schema 0.7, reader and fixtures; the converter; support table.
 5. Tests 5-7; benchmarks of the damped kernels.

@@ -11,6 +11,7 @@
 //   FemoraX's own fit (docs/design.md).
 // - Static stages and inactive times: no damping and a stiffness multiplier of 1.
 
+#include "compile/uniform_damping_fit.hpp"
 #include "physics/damping/uniform_damping.hpp"
 #include "reference_data.hpp"
 
@@ -175,4 +176,97 @@ TEST(UniformDampingReference, SingleModeFreeVibrationMatchesOpenSees) {
   }
 }
 
+// The damping of the oscillation in a step-by-step history, its slow part (the filters'
+// own relaxation) removed: least squares of u on [e^-at cos(wd t), e^-at sin(wd t), 1, t,
+// t^2] over a grid of (a, wd) around a guess, refined once. Returns the damping ratio.
+double fitted_zeta(const std::vector<double>& u, double f, double zeta0, double wn0) {
+  const double dt = 1.0 / f / 400.0;
+  auto misfit = [&](double a, double wd) {
+    double A[5][5] = {}, b[5] = {}, uu = 0;
+    for (std::size_t i = 0; i < u.size(); ++i) {
+      const double t = dt * static_cast<double>(i + 1), e = std::exp(-a * t);
+      const double r[5] = {e * std::cos(wd * t), e * std::sin(wd * t), 1.0, t, t * t};
+      for (int p = 0; p < 5; ++p) {
+        for (int q = 0; q < 5; ++q) A[p][q] += r[p] * r[q];
+        b[p] += r[p] * u[i];
+      }
+      uu += u[i] * u[i];
+    }
+    // residual = u.u - b^T A^-1 b (normal equations), by elimination
+    double c[5], bb[5];
+    for (int p = 0; p < 5; ++p) bb[p] = b[p];
+    for (int col = 0; col < 5; ++col)
+      for (int r2 = col + 1; r2 < 5; ++r2) {
+        const double fct = A[r2][col] / A[col][col];
+        for (int k = col; k < 5; ++k) A[r2][k] -= fct * A[col][k];
+        bb[r2] -= fct * bb[col];
+      }
+    for (int r2 = 4; r2 >= 0; --r2) {
+      double v = bb[r2];
+      for (int k = r2 + 1; k < 5; ++k) v -= A[r2][k] * c[k];
+      c[r2] = v / A[r2][r2];
+    }
+    double fit = 0;
+    for (int p = 0; p < 5; ++p) fit += c[p] * b[p];
+    return uu - fit;
+  };
+  double a0 = zeta0 * wn0, w0 = wn0, best = 1e300, ba = a0, bw = w0;
+  for (double span : {0.3, 0.03}) {
+    const double ac = ba, wc = bw;
+    for (int i = -20; i <= 20; ++i)
+      for (int j = -20; j <= 20; ++j) {
+        const double a = ac * (1 + span * i / 20.0), wd = wc * (1 + 0.2 * span * j / 20.0);
+        const double r = misfit(a, wd);
+        if (r < best) {
+          best = r;
+          ba = a;
+          bw = wd;
+        }
+      }
+  }
+  return ba / std::hypot(ba, bw);
+}
+
+TEST(UniformDamping, TheOscillationFormulaDescribesTheFilter) {
+  const auto fl = fit_0p1_10();
+  for (double f : {0.1, 1.0, 10.0}) {
+    const auto mode = uniform_damping_mode(fl, uniform_damping_eta(0.05), 2 * kPi * f);
+    const double z = fitted_zeta(simulate(f, fl, 2400), f, mode.zeta, mode.frequency_ratio * 2 * kPi * f);
+    std::printf("[ OpenSees fit, %4g Hz: formula %.3f %%, frequency x%.3f; step by step %.3f %% ]\n", f, 100 * mode.zeta,
+                mode.frequency_ratio, 100 * z);
+    EXPECT_NEAR(z / mode.zeta, 1.0, 0.03) << f;
+  }
+}
+
+TEST(UniformDamping, FemoraxFitGivesTheTargetAcrossTheBand) {
+  for (const auto& band : {std::pair{0.1, 10.0}, std::pair{0.5, 20.0}, std::pair{0.2, 2.0}}) {
+    for (double zeta : {0.02, 0.05, 0.10}) {
+      UniformDampingFilters fl;
+      ASSERT_TRUE(uniform_damping_fit_femorax(zeta, band.first, band.second, 0.05, fl));
+      double lo = 1e9, hi = 0, shift = 0;
+      for (int k = 0; k <= 200; ++k) {
+        const double f = band.first * std::pow(band.second / band.first, k / 200.0);
+        const auto mode = uniform_damping_mode(fl, uniform_damping_eta(zeta), 2 * kPi * f);
+        lo = std::min(lo, mode.zeta / zeta);
+        hi = std::max(hi, mode.zeta / zeta);
+        shift = std::max(shift, mode.frequency_ratio);
+      }
+      std::printf("[ FemoraX fit %4.1f %% over %g-%g Hz: %d filters, damping %.3f-%.3f of the target, frequency up to x%.3f ]\n",
+                  100 * zeta, band.first, band.second, fl.nFilter, lo, hi, shift);
+      EXPECT_GE(lo, 0.95);
+      EXPECT_LE(hi, 1.05);
+    }
+  }
+  // and the step-by-step filter delivers it
+  UniformDampingFilters fl;
+  ASSERT_TRUE(uniform_damping_fit_femorax(0.05, 0.1, 10.0, 0.05, fl));
+  for (double f : {0.1, 1.0, 10.0}) {
+    const auto mode = uniform_damping_mode(fl, uniform_damping_eta(0.05), 2 * kPi * f);
+    const double z = fitted_zeta(simulate(f, fl, 2400), f, mode.zeta, mode.frequency_ratio * 2 * kPi * f);
+    std::printf("[ FemoraX fit 5 %% over 0.1-10 Hz, %4g Hz: step by step %.3f %% ]\n", f, 100 * z);
+    EXPECT_NEAR(z / 0.05, 1.0, 0.06) << f;
+  }
+}
+
 }  // namespace
+

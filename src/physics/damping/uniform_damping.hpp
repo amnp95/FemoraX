@@ -6,7 +6,8 @@
 // uniform damping over a frequency range", Computers & Structures 212 (2019) 101-109.
 //
 // A damping definition is a ratio eta over a band [freq1, freq2]: nFilter first-order filters
-// at frequencies omegac[i] with weights alpha[i] (uniform_damping_fit). Each element filters
+// at frequencies omegac[i] with weights alpha[i], fitted on the host in the compile step
+// (compile/uniform_damping_fit.hpp: OpenSees' fit and FemoraX's). Each element filters
 // its own damping quantities q (stresses at a Gauss point, a beam's basic forces, ...) and
 // adds the damping quantity qd to them (uniform_damping_update); its stiffness is multiplied
 // by uniform_damping_stiffness_multiplier. Static stages only track q. Names follow the
@@ -35,103 +36,6 @@ struct UniformDampingFilters {
   double omegac[kUniformDampingMaxFilters] = {};
   double alpha[kUniformDampingMaxFilters] = {};
 };
-
-namespace uniform_damping_detail {
-
-// Solve X a = y for a symmetric n x n system (n <= kUniformDampingMaxFilters) by Gaussian
-// elimination with partial pivoting, on fixed-size storage. False if singular.
-inline bool solve(int n, double (&X)[kUniformDampingMaxFilters][kUniformDampingMaxFilters],
-                  double (&y)[kUniformDampingMaxFilters], double (&a)[kUniformDampingMaxFilters]) {
-  for (int c = 0; c < n; ++c) {
-    int p = c;
-    for (int r = c + 1; r < n; ++r)
-      if (std::fabs(X[r][c]) > std::fabs(X[p][c])) p = r;
-    if (X[p][c] == 0.0) return false;
-    if (p != c) {
-      for (int k = 0; k < n; ++k) {
-        const double t = X[c][k];
-        X[c][k] = X[p][k];
-        X[p][k] = t;
-      }
-      const double t = y[c];
-      y[c] = y[p];
-      y[p] = t;
-    }
-    for (int r = c + 1; r < n; ++r) {
-      const double f = X[r][c] / X[c][c];
-      for (int k = c; k < n; ++k) X[r][k] -= f * X[c][k];
-      y[r] -= f * y[c];
-    }
-  }
-  for (int r = n - 1; r >= 0; --r) {
-    double s = y[r];
-    for (int k = r + 1; k < n; ++k) s -= X[r][k] * a[k];
-    a[r] = s / X[r][r];
-  }
-  return true;
-}
-
-}  // namespace uniform_damping_detail
-
-// UniformDamping::Initialize: the fewest filters (from 2, log-spaced from freq1 to freq2)
-// whose weighted response sum_j alpha_j phi_j(omega), phi_j = 2 w / (1 + w^2), w =
-// omega / omegac_j, is within delta of 1 at 100 nFilter log-spaced frequencies of the band.
-// Host code (called once per definition). False if no fit within kUniformDampingMaxFilters.
-// OpenSees solves X alpha = y with its Matrix class; the elimination order here may change
-// the last bits of alpha.
-inline bool uniform_damping_fit(double freq1, double freq2, double delta, UniformDampingFilters& out) {
-  constexpr int M = kUniformDampingMaxFilters;
-  const double f1log = std::log10(freq1);
-  const double f2log = std::log10(freq2);
-  const double pi2 = 6.28318530718;  // as OpenSees
-  const double w1 = pi2 * freq1;
-  const double w2 = pi2 * freq2;
-  for (int nFilter = 2; nFilter <= M; ++nFilter) {
-    const double dfreq = (f2log - f1log) / (nFilter - 1);
-    double omegac[M] = {}, psi[M] = {}, y[M] = {}, alpha[M] = {};
-    double X[M][M] = {};
-    for (int i = 0; i < nFilter; ++i) {
-      const double wc = pi2 * std::pow(10.0, f1log + i * dfreq);
-      omegac[i] = wc;
-      psi[i] = wc * std::atan((wc * (w2 - w1)) / (wc * wc + w1 * w2));
-      y[i] = wc * std::log((wc * wc + w2 * w2) / (wc * wc + w1 * w1));
-      X[i][i] = 2.0 * psi[i] - ((2.0 * wc * wc * w2) / (wc * wc + w2 * w2) - (2.0 * wc * wc * w1) / (wc * wc + w1 * w1));
-    }
-    for (int i = 0; i < nFilter; ++i) {
-      const double wi = omegac[i];
-      for (int j = i + 1; j < nFilter; ++j) {
-        const double wj = omegac[j];
-        const double val = (4.0 * wi * wj * (psi[i] - psi[j])) / (wi * wi - wj * wj);
-        X[i][j] = val;
-        X[j][i] = val;
-      }
-    }
-    if (!uniform_damping_detail::solve(nFilter, X, y, alpha)) return false;
-    bool converged = true;
-    const int nf = 100 * nFilter;
-    const double df = (f2log - f1log) / (nf - 1);
-    for (int i = 0; i < nf && converged; ++i) {
-      const double omega = pi2 * std::pow(10.0, f1log + i * df);
-      double err = 0.0;
-      for (int j = 0; j < nFilter; ++j) {
-        const double wjn = omega / omegac[j];
-        const double phij = 2.0 * wjn / (1.0 + wjn * wjn);
-        err += alpha[j] * phij;
-      }
-      err -= 1.0;
-      if (err > delta || err < -delta) converged = false;
-    }
-    if (converged) {
-      out.nFilter = nFilter;
-      for (int i = 0; i < nFilter; ++i) {
-        out.omegac[i] = omegac[i];
-        out.alpha[i] = alpha[i];
-      }
-      return true;
-    }
-  }
-  return false;
-}
 
 // The class works with eta = 2 * the damping ratio (the loss factor): OpenSees' command
 // `damping Uniform tag zeta freq1 freq2 ...` constructs UniformDamping(tag, zeta*2.0, ...)
@@ -213,3 +117,4 @@ FEMORAX_HD void uniform_damping_update(const UniformDampingFilters& fl, double e
 }
 
 }  // namespace femorax
+
