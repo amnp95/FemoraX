@@ -582,6 +582,63 @@ Scripts and records: `/work2/08189/amnp95/femorax_plots/damping_test/`.
   term), so Newton stays consistent; the matrix-free operator, its Jacobi diagonal and the
   stored-tangent path include it. Symmetry: unchanged (a scalar multiple per element).
 
+### The step context and the damped-material wrapper (plan for step 2b-2, 2026-11-11; to approve)
+
+**The blocker.** The filters need the step size `dT`, the trial time `t` and whether the stage
+is dynamic, at every step and every substep. Nothing passes them today: a material's
+`update(p, committed, trial, eps, sig, D)` and an element's `compute` / `compute_with` /
+`point_update_shape` see parameters, state, strains and velocities only, and the parameter
+sets on the device (`pr.p`, `pr.damp`) are fixed for a stage.
+
+**Options.**
+1. *Recommended:* a plain struct `StepContext { double t, dT; int dynamic; }`
+   (`physics/step_context.hpp`), passed by value from the time loop to every kernel launch
+   (a launch argument: no device copy, nothing allocated, the same value for every thread,
+   so determinism is unchanged), and on to the elements and materials. Materials that ignore
+   it keep their current `update`; the material concept accepts either form, and a small
+   adapter calls the old one, so ElasticIsotropic, PressureDependMultiYield and
+   PressureIndependMultiYield do not change. Elements forward it from `compute`,
+   `compute_with` and `point_update_shape` (stdBrick, SSPbrick, and the compacted path's
+   `Replay`). Substeps and retries pass their own `dT` and `t`; static stages pass
+   `dynamic = 0`.
+2. Store `dT` and `t` in the device parameter sets and update them every step: a host-to-
+   device copy per step and per substep, against "nothing in the time loop"; rejected.
+3. A device-wide "current step" value read by the physics: global mutable state, forbidden
+   in the physics layer (CLAUDE.md rule 2); rejected.
+
+**The damping as a material wrapper.** With the step context, Uniform damping becomes a
+material wrapper `UniformDamped<Mat, NF>` (NF = a compile-time bucket of filters, for
+example 8, 16 and 32): its state is `Mat`'s state followed by the filter state of the 6
+stresses; its `update` calls `Mat::update` (stress `sig`, tangent `D`), filters `sig`
+(`uniform_damping_update`), returns `sig + qd` and `D * (1 + km)` (OpenSees' Brick:
+`dd *= getStiffnessMultiplier()`). The element force `B^T sig dvol` then includes the damping
+force exactly as `uniform_damping_element_force` computes it (step 2b-1), and:
+- every kernel variant (flat, team, compacted; cached and recomputed geometry; the implicit
+  operator and its stored tangents) includes the damping with no kernel change beyond
+  forwarding the context, so bit-identity across variants is kept by construction
+  (`test_memory_contract` extended to a damped material);
+- damped and undamped elements are different batches automatically (a different material
+  type), so undamped models keep today's code, state and bits;
+- recorders: `stress3D6` reports the material's own stress, without the damping stress (as
+  OpenSees' `getStress`); the wrapper keeps the material stress in its state for this;
+- the stable step: the wrapper's stability tangent is `Mat`'s times the largest multiplier,
+  `1 + 2 eta sum_i alpha_i` (its limit as `dT -> 0`), a conservative bound with no `dT`;
+- the stiffness correction (default with `fit = "femorax"`) lives in the wrapper too: it
+  stores the stress at activation and subtracts `R_ref (sig - sig_activation)` from the
+  damping stress, so gravity stresses are untouched.
+
+**Cost to watch.** Each (element, material, NF bucket) triple is one more instantiation of
+every kernel: 2 elements x 5 material entries x 3 buckets = 30 more, which lengthens the
+CUDA and SYCL builds. Mitigation: the buckets 8 and 32 only at first; registration of the
+damped wrapper for ElasticIsotropic and PressureIndependMultiYield first (the basin's
+materials), the others when a model needs them.
+
+**Steps of 2b-2 (one commit each):** (i) the step context through the time loops, kernels,
+elements and the material concept, no behaviour change (all tests unchanged, bit for bit);
+(ii) the wrapper for ElasticIsotropic with the free-vibration tests through the real
+kernels; (iii) the stable step and the stiffness correction; (iv) PressureIndependMultiYield
+and PressureDependMultiYield.
+
 ### Verification
 
 1. Single-mode free vibration (a mass on a spring, then a brick, then a beam) at 8-10
