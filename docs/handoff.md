@@ -122,6 +122,19 @@ the Tcl that `basin.py` exports (it merges the 96 OpenSeesMP partitions).
   (about 1 %); the absorber surface moves at most 4e-4 m. No OpenSees comparison yet.
 - Plastic case: the converter needs PressureIndependMultiYield materials (a few lines);
   then the same recipe with `material="plastic"`. Implicit case: after step 6 above.
+- Absorber experiment (Stampede3 pvc node, CPU presets, 2026-11-11): the elastic basin with
+  the absorber region's Rayleigh damping (alphaM 2.36, betaK 0.015: 95 % at 0.2 and 20 Hz)
+  replaced by mass-only damping (alphaM 23.9: 95 % at 2 Hz, betaK 0). The stable step grows
+  10x (2.2e-3 against 2.2e-4); dt 1e-3, 27,400 steps in 52 s (1.91 ms/step), 2 min 15 s in
+  all. Against the Rayleigh absorber: surface-centre displacement within 2.3 % of its peak,
+  surface-centre acceleration peak 10.3 against 9.7 (20 % largest difference), a DRM
+  exterior node (scattered field only) 14.5 % in displacement and twice the acceleration
+  peak (1.72 against 0.86): mass damping falls as 1/f, so the layer reflects the high
+  frequencies. No late-time ringing difference (soil RMS velocity equal at 20-27 s).
+  Model `$SCRATCH/femorax_runs/basin_site2_elastic/massonly.femorax.h5`, script and plot
+  `/work2/08189/amnp95/femorax_plots/compare_absorbers.py`,
+  `absorber_rayleigh_vs_massonly.png`. Conclusion: fine for displacements and long periods
+  at a tenth of the cost; for accelerations a graded layer or PML (docs/todo.md item 13).
 
 ## TACC
 

@@ -75,3 +75,9 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     (filtering the actual stress or force) for beams and yielding materials, and a stable-step
     check with the stiffened response. Plan first (formulation, verification, schema
     addition).
+13. **Absorbing layers without betaK.** A mass-only absorber gives the basin a 10x larger
+    explicit step with displacements within 2.3 % of the Rayleigh absorber, but reflects the
+    high frequencies (twice the acceleration peak at a DRM exterior node; docs/handoff.md,
+    "The basin example"). Next: a graded mass-proportional layer (alphaM rising inward, a
+    per-element-layer Rayleigh region, which Femora can already export) measured the same
+    way, then PML (milestone 4) as the frequency-independent absorber.
