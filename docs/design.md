@@ -670,6 +670,11 @@ the constant-tangent operator need CONSTANT_TANGENT; a free-vibration run throug
 (ii) the wrapper for ElasticIsotropic with the free-vibration tests through the real
 kernels; (iii) the stable step and the stiffness correction; (iv) PressureIndependMultiYield
 and PressureDependMultiYield.
+(iii)-a the stable step. Done (2026-11-11): through the real kernels the damped column's
+stable explicit step is the undamped one over `sqrt(1 + 2 eta sum alpha_i)`, to 1e-12, for
+stdBrick and SSPbrick (5 % over 0.1-10 Hz, FemoraX's fit: 0.7932 of the undamped step, a 21 %
+smaller step: the stiffening at the mesh's highest frequencies; Rayleigh `betaK` cost 7x in
+the basin). Next: the stiffness correction (iii)-b.
 
 ### Verification
 

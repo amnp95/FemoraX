@@ -15,6 +15,7 @@
 
 #include "../common/synthetic_models.hpp"
 #include "compile/batches.hpp"
+#include "compile/registry.hpp"
 #include "compile/uniform_damping_fit.hpp"
 #include "exec/force_settings.hpp"
 #include "exec/internal_force.hpp"
@@ -665,6 +666,28 @@ TEST(UniformDampedKernels, DampedBatchesStaticEqualUndampedAndEveryVariantAgrees
       const auto f = force_at(kd, u2, step, s);
       EXPECT_EQ(std::memcmp(f.data(), first.data(), f.size() * sizeof(double)), 0);
     }
+  }
+}
+
+TEST(UniformDampedKernels, TheStableStepAccountsForTheStiffening) {
+  // The damped column's stable explicit step is the undamped one over sqrt(1 + 2 eta sum
+  // alpha_i): the wrapper's stability tangent is the material's times that bound, and without
+  // Rayleigh damping the step is 2 / omega_max (docs/design.md, "Stable time step").
+  for (const auto type : {io::ElementType::StdBrick, io::ElementType::SSPbrick}) {
+    SCOPED_TRACE(io::to_string(type));
+    const auto md = damped_column(true, type);
+    const auto cd = compile::compile_model(md, compile::CompileOptions{});
+    const auto cu = compile::compile_model(damped_column(false, type), compile::CompileOptions{});
+    exec::InternalForce kd(cd, exec::GeometryCache::On), ku(cu, exec::GeometryCache::On);
+    const double dtd = kd.min_critical_dt(ExplicitScheme::ExplicitDifference);
+    const double dtu = ku.min_critical_dt(ExplicitScheme::ExplicitDifference);
+    const auto fl = registry::uniform_damping_filters(md.uniform[0]);
+    double km = 1.0;
+    for (int i = 0; i < fl.nFilter; ++i) km += 2.0 * uniform_damping_eta(0.05) * fl.alpha[i];
+    std::printf("[ %s: stable step %.6e undamped, %.6e damped (ratio %.6f, 1/sqrt(km) %.6f) ]\n",
+                io::to_string(type), dtu, dtd, dtd / dtu, 1.0 / std::sqrt(km));
+    EXPECT_LT(dtd, dtu);
+    EXPECT_NEAR(dtd / dtu, 1.0 / std::sqrt(km), 1e-12);
   }
 }
 
