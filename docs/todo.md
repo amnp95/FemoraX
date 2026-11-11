@@ -56,8 +56,22 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     one under Intel's memory checking (`ONEAPI_DEVICE_SELECTOR`, Level Zero validation layer)
     and the CUDA build under `compute-sanitizer --tool memcheck`. Until then `s3-sycl-pvc`
     is not part of `scripts/check.sh`.
-12. **Constant-Q damping (Qs, Qp)**, as SW4 uses for the DRM inputs: a viscoelastic law with
+12. **Constant-Q damping (Qs, Qp)** (now planned as Uniform damping, docs/design.md; step 1 done), as SW4 uses for the DRM inputs: a viscoelastic law with
     a few relaxation mechanisms per integration point (deviatoric with Qs, volumetric with
     Qp), which barely reduces the explicit stable step, unlike Rayleigh stiffness damping.
-    OpenSees' `damping Uniform` does not work correctly according to the user; not ported.
-    Plan first (formulation, verification, schema addition).
+    Findings (2026-11-11, OpenSees `955ceb0`, free vibration of a 1 x 1 x 10 elastic column,
+    `/work2/08189/amnp95/femorax_plots/damping_test/column.tcl`): OpenSees' `damping Uniform`
+    (Huang, Sturt & Willford 2019: filters the element's internal force, one ratio, a band)
+    gives 4.40 % for a 5 % target on stdBrick (Rayleigh: 5.01 %) and **nothing at all on
+    SSPbrick** (only a "yet to be implemented" warning per element), which explains the
+    user's "no effect". It multiplies the stiffness by 1 + sum 4 alpha_i xi / (2 + w_i dt),
+    so with a high ratio over a wide band (the user tried 95 % for absorbers) the element
+    stiffens several times and the run goes unstable: causal frequency-independent damping
+    is for physical damping (a few percent), not for absorbing layers (PML, or graded
+    mass-proportional layers, which do not reduce the explicit step).
+    Direction discussed with the user (nothing decided): one memory-filter damping for every
+    element, input as a ratio (or separate shear and volume ratios for solids, the Qs/Qp of
+    SW4) and a band [f1, f2]: SW4-consistent for elastic soil under SW4 DRM input, Huang-like
+    (filtering the actual stress or force) for beams and yielding materials, and a stable-step
+    check with the stiffened response. Plan first (formulation, verification, schema
+    addition).

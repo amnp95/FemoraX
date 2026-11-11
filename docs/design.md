@@ -477,6 +477,139 @@ Constraints use DOF elimination (transformation), not penalty, because penalty r
 iterative-solver convergence. Assembled matrices are built only in tests, on the host from
 element matrices, for small reference models.
 
+## Frequency-independent ("Uniform") damping (plan approved 2026-11-11, with schema 0.7; before H5DRM streaming)
+
+Rayleigh damping (supported) is accurate at two frequencies only, and its stiffness part
+(`betaK`) cuts the explicit stable step (7x in Femora's basin, through the absorber). Uniform
+damping gives one damping ratio over a frequency band to every element, and leaves the step
+almost unchanged at normal damping levels. It is what Femora's `model.damping.uniform`
+already exports for OpenSees (`damping Uniform <tag> <ratio> <f1> <f2> [-activateTime Ta]
+[-deactivateTime Td] [-fact tsTag]`, attached to element regions with `region ... -damp tag`;
+Femora attaches every damping through regions).
+
+### Decisions taken with the user
+
+- Damping for FemoraX: Rayleigh (supported), Uniform (this plan), PML for absorbing
+  boundaries (milestone 4). Modal damping is not planned: it needs an eigen solve, couples
+  the whole model, damps a building's rigid motion with the soil unless that is removed, and
+  Uniform gives nearly the same per-mode damping without these problems. Secant-stiffness
+  damping is not planned either (Uniform already follows yielding).
+- Compatibility levels: (1) the same Femora input means the same thing in both programs and
+  FemoraX matches OpenSees where OpenSees is correct; (2) where OpenSees is incomplete or wrong,
+  FemoraX does the right thing and records it in docs/deviations.md (and Femora's OpenSees
+  export should warn); (3) FemoraX-only options are optional, off by default, and never an
+  error: Femora's OpenSees export writes the closest OpenSees equivalent with a warning.
+- The fit: each Uniform damping definition chooses how the filter weights are computed,
+  `fit = "femorax"` (the default: the measured damping ratio equals the target across the
+  band) or `fit = "opensees"` (OpenSees' weights, which reproduce an OpenSees run to rounding;
+  for a 5 % target over 0.1-10 Hz they give 4.7 % at 0.1 Hz down to 2.8 % at 10 Hz). The run
+  summary names the fit and how to switch. Decided with the user, 2026-11-11.
+- Not for absorbing layers: frequency-independent damping must stiffen the response at high
+  frequency to stay causal; at high ratios over a wide band the element stiffens several
+  times and explicit runs go unstable (the user saw it at 95 %). Normal use: up to about
+  10-20 %. Absorbers are PML's job.
+
+### Findings that shape the design (OpenSees `955ceb0`, Stampede3, 2026-11-11)
+
+Scripts and records: `/work2/08189/amnp95/femorax_plots/damping_test/`.
+
+1. Element support: OpenSees filters stdBrick (6 stresses per Gauss point), `quad` (3),
+   the beam-column elements (basic forces: 3 in 2D, 6 in 3D), the shells MITC4, DKGQ/DKGT
+   and their NL versions, ASDShellQ4/T3 (8 section resultants per point) and zeroLength
+   (one force per spring). Every other element, SSPbrick included, prints "Damping is yet to
+   be implemented" and runs **undamped** (a 1 x 1 x 10 column: 0.00 % on SSPbrick). This is
+   the "no effect" the user saw.
+2. Level: on single-mode systems (a mass on a zeroLength spring, 5 % over 0.1-10 Hz) the
+   measured damping falls from 4.69 % at 0.1 Hz to 4.45 % at 1 Hz, 3.71 % at 3 Hz and 2.79 % at
+   10 Hz, the same at 50, 400 and 3200 steps per period. OpenSees fits its filters so that
+   the damping term is flat within 5 %, but the filters also add stiffness that grows with
+   frequency, and the damping ratio is the damping relative to the total stiffness, so the
+   measured ratio drops at high frequency. The port reproduces these histories to 1.3e-14
+   (step 1, `test_uniform_damping`), so the drop is the formulation's, not a bug in a
+   particular element. Note: OpenSees' command passes `zeta * 2.0` to the class, which works
+   with the loss factor `eta = 2 zeta` (`TclDampingCommand.cpp`).
+3. Stability: the element stiffness is multiplied by `1 + sum_i 4 alpha_i xi / (2 + w_i dt)`
+   (`UniformDamping::getStiffnessMultiplier`), which grows with the ratio and the band width.
+
+### Formulation
+
+- Mechanism (Huang, Sturt & Willford 2019; OpenSees `SRC/damping/UniformDamping.cpp`): a
+  set of first-order filters at frequencies `w_i` spread over the band with weights
+  `alpha_i`; each element filters its own damping quantities `q` (below) and adds the
+  filtered difference as a damping force. Static stages track `q` without damping; damping
+  is applied for `Ta < t < Td`, times the optional time-series factor. Rigid motion gives
+  `q = 0`, hence no damping; a yielding member's `q` stops growing, and so does its damping.
+- **Deliberate difference: the fit target.** FemoraX fits `alpha_i` so that the damping
+  ratio as measured (the damping relative to the stiffened response) equals the target over
+  the band, within the same 5 %, instead of the damping term alone (step 2). The OpenSees fit
+  stays available (the port of step 1) for comparisons with OpenSees; the difference is
+  recorded in docs/deviations.md with this evidence.
+- **Damping quantities per element type** (element contract, `contracts.hpp`: an optional
+  `DampedElement` part, like `ElementTermElement`): the element declares `NDAMPQ` values
+  per point (or per element), how to compute them from its state (stresses for solids,
+  basic forces for beams, section resultants for shells, spring forces for zero-length
+  elements), how to turn a damping quantity back into nodal forces (the element's `B^T`
+  for solids, its basic-to-global transformation for beams), and a **group label** per
+  value (`volume` / `shear` for solids, `axial` / `bending` / `torsion` for beams,
+  `membrane` / `bending` / `transverse_shear` for shells). First version: one ratio for
+  every group; per-group ratios are a later, optional extension that needs no redesign.
+- State: per point (or per element) `NDAMPQ * (nFilter + 2)` doubles, in the committed and
+  trial buffers like material state (commit swaps; retries and substeps work unchanged);
+  about 5.4 KB per stdBrick with 5 filters, 0.7 KB per SSPbrick or 3D beam. `nFilter` is
+  fixed per damping definition, so it is a compile-time bucket like the yield surfaces.
+- **Zero cost when unused:** damped and undamped elements are different batches, so an
+  undamped element keeps exactly today's code, state and memory (tested: the same bits and
+  memory estimate as before). A ratio of 0 is no damping.
+- Explicit stages: the damping force joins the element force in the same fused kernel. The
+  stable step uses the stiffened response (`1 + km`, exact per element): a step above it
+  stops the run with a message, as for Rayleigh damping.
+- Implicit stages: the operator gets the stiffened tangent (`(1 + km) K_t` plus the damping
+  term), so Newton stays consistent; the matrix-free operator, its Jacobi diagonal and the
+  stored-tangent path include it. Symmetry: unchanged (a scalar multiple per element).
+
+### Verification
+
+1. Single-mode free vibration (a mass on a spring, then a brick, then a beam) at 8-10
+   frequencies across the band: the measured ratio equals the target within 5 % (the
+   design accuracy); outside the band it falls off as the fit predicts.
+2. The same systems against OpenSees on the elements OpenSees supports (stdBrick first,
+   beams with milestone 3): the force history at the OpenSees fit (a test-only option) to
+   rounding, so the mechanism itself is verified; the default fit then differs only by the
+   documented target change.
+3. SSPbrick damped as specified (OpenSees: none; a documented deviation).
+4. Rigid motion: a block translating and rotating gets no damping force.
+5. Yielding: a PressureIndependMultiYield column, damping force bounded by the stress.
+6. Stable step: the check refuses a ratio and band whose stiffening breaks the explicit step,
+   and a run just below the limit is stable.
+7. Plane-wave attenuation in an elastic column against the analytical constant-Q solution
+   (frequency-independent attenuation over the band), and the Hayward basin with Uniform in
+   the soil against Rayleigh.
+8. Undamped models: bit-identical and the same memory as before.
+
+### Schema 0.7 (proposal; asks the user before any change)
+
+`/damping/uniform/<index>` (optional), one per Femora damping region, like
+`/damping/rayleigh/<index>`: attrs `ratio` (float64, > 0), `freq1`, `freq2` (float64,
+0 < f1 < f2), optional `activate_time`, `deactivate_time` (float64), optional `factor_series`
+(int32, a time-series tag), optional `fit` (string, `"femorax"` by default or `"opensees"`);
+dataset `elements` (int32 tags). An element in both a Rayleigh
+and a Uniform region gets both (as OpenSees allows). Later, optional: per-group ratios
+(`ratio_axial`, ... ) as more attributes.
+
+### Steps (one commit each, after approval)
+
+1. The filter fit and the single-mode tests (host, physics only). Done (2026-11-11):
+   `physics/damping/uniform_damping.hpp` (OpenSees' fit, update and stiffness multiplier,
+   state through `Strided` views), `test_uniform_damping` against stored OpenSees records
+   (`tests/reference/damping/`, `tests/reference/data/damping/`): within 1.3e-14.
+2. The element contract part and stdBrick and SSPbrick (state, explicit force, stable step),
+   with tests 1-4 and 8.
+3. Implicit stages (operator, diagonal), tests against the reference assembly and OpenSees.
+4. Schema 0.7, reader and fixtures; the converter; support table.
+5. Tests 5-7; benchmarks of the damped kernels.
+Beams, shells and springs get it with their own milestones by declaring their damping
+quantities.
+
 ## Time integration and algorithms
 
 - Explicit: ExplicitDifference and CentralDifference (lumped mass), no solver.
