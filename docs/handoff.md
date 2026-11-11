@@ -1,4 +1,4 @@
-# Handoff: where FemoraX stands (2026-11-10)
+# Handoff: where FemoraX stands (updated 2026-11-11)
 
 A note for a new Claude Code session (for example on TACC) that does not have the earlier
 conversation. `CLAUDE.md`, `docs/design.md` (Roadmap), `docs/todo.md` and the git log are the
@@ -16,6 +16,56 @@ full record; this file adds what they do not say yet. Read it after `CLAUDE.md`.
   `/home/aminp/femorax_runs/` on the laptop, `$SCRATCH` or `$WORK` on TACC), never to `/tmp`
   or a session scratch folder: a 5.5 GB basin result was lost that way.
 - Do not edit files while `scripts/check.sh` runs; grep its log for `FAILED`.
+
+## Current work (2026-11-11): Uniform damping
+
+Approved with the user and taken **before H5DRM streaming**. The plan, the decisions and every
+finding are in `docs/design.md`, "Frequency-independent ("Uniform") damping"; the user's
+target hardware is in Claude Code's memory (NVIDIA/AMD GPUs and CPUs; Intel GPUs only need to
+build and run).
+
+Done (all on master, each after `scripts/check.sh`):
+- `ff72e25` step 1: OpenSees' UniformDamping ported (`physics/damping/uniform_damping.hpp`),
+  against stored OpenSees records within 1.3e-14 (OpenSees' command doubles the ratio: the
+  class works with the loss factor 2 zeta).
+- `ea651a6` step 2a: FemoraX's fit (`compile/uniform_damping_fit.hpp`): 5 % gives 5 % across
+  the band (OpenSees' fit drops to about 3.4 % at 10 Hz for 0.1-10 Hz), the default
+  (`fit = "femorax"`, `"opensees"` reproduces OpenSees).
+- `32c7882` step 2b-1: the damping force in solid elements (`physics/damping/element_damping.hpp`).
+- `c12c2ed` the plan of 2b-2; `89d0a19` (i) the step context (time, step size, static or
+  dynamic) reaches every material update, no change in results, benchmarks within noise.
+- `9e01b2e` (ii)-a the wrapper `UniformDamped<Mat, NF>` (`physics/damping/uniform_damped.hpp`).
+- `ee74746` (ii)-b damped batches from `io::Model::uniform` regions through the real force
+  kernels (registry entries for ElasticIsotropic, buckets 8 and 32).
+- `a015feb` (iii)-a the stable step: the damped step is the undamped one over
+  `sqrt(1 + 2 eta sum alpha_i)` (0.793 for 5 % over 0.1-10 Hz).
+
+Next, in order:
+1. (iii)-b the stiffness correction (default with FemoraX's fit): subtract the filters' extra
+   stiffness at the band's geometric mean, acting only on the change since activation (store
+   the stress at activation in the wrapper's state, 6 more values per point), so gravity
+   stresses are untouched; refit FemoraX's weights with the correction on so 5 % stays 5 %;
+   tests: the mode frequency at the reference equals the specified one, the damping stays
+   5 % +- 5 % across the band, a gravity stress at activation gives no force.
+2. (iv) PressureIndependMultiYield and PressureDependMultiYield wrapped (their material
+   stage must reach the wrapped Params).
+3. Step 3 implicit stages (stored tangents with the multiplier; the operator), step 4 schema
+   0.7 (`/damping/uniform`, approved) with reader, fixtures and the converter, step 5 the
+   remaining verification (yielding, plane-wave attenuation, the basin with Uniform) and
+   benchmarks.
+4. Open: a damped DRM layer is refused today (DRM elements must have no state); decide what
+   the DRM forces do with Uniform damping.
+
+Other findings of 2026-11-11 (the user asked; not started):
+- A mass-proportional-only (alphaM) absorber would remove the absorber's time-step penalty
+  (about 7x fewer explicit steps for the basin) but absorbs high frequencies less and needs
+  grading across its layers; to test against today's Rayleigh absorber by the DRM exterior
+  nodes (scattered field) and the surface response. PML stays the proper solution.
+- Implicit plastic basin in FemoraX against the user's OpenSees run (same scheme, 96 cores
+  each): displacements within 0.2 %, 12 min against 32 min.
+- The 2-day OpenSees explicit runs were the basin-with-buildings study (beams, fiber sections,
+  embedded nodes, dt 5e-5, 700,000 steps), not the pure basin; their stdout had 78 million
+  H5DRM lines.
 
 ## Milestone 4 (DRM basin and dynamic pile-soil interaction): H5DRM
 
