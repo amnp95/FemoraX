@@ -139,6 +139,13 @@ ctest --preset cpu-debug
   them on Stampede3. AddressSanitizer cannot run on its compute nodes (strict memory
   accounting), so ASan stays on the laptop's `cpu-asan`. The OpenSees reference build there:
   `scripts/stampede3_opensees.sh` (Intel compilers, `tests/reference/README.md`).
+- Vista (TACC; NVIDIA Grace, aarch64; `idev -p gg`): `source scripts/vista_env.sh` (GCC 13.2,
+  HDF5 1.14.6, Eigen 3.4.0, Python 3.11 through `.venv-vista`, separate from Stampede3's
+  `.venv` because `/work` is shared), then the presets `vista-cpu-debug`, `vista-cpu-release`,
+  `vista-cpu-ubsan`; `scripts/check.sh` picks them on Vista. They build with
+  `-ffp-contract=off`: GCC fuses multiply-adds on aarch64 by default, which breaks the
+  bit-identical tests made on x86. No OpenSees build there: the live OpenSees comparisons are
+  skipped, the stored references run.
 - Intel GPUs (Stampede3 `pvc` nodes, Data Center GPU Max 1550): `source
   scripts/stampede3_sycl_env.sh` (oneAPI 2026.0), then the preset `s3-sycl-pvc` (Kokkos'
   SYCL backend). Intel's compilers default to fast floating-point math: every Intel build

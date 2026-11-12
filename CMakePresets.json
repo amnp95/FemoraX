@@ -107,6 +107,47 @@
       }
     },
     {
+      "name": "vista-base",
+      "hidden": true,
+      "inherits": "cpu-base",
+      "description": "Vista (TACC), NVIDIA Grace (aarch64): generic armv8 flags, so the build runs on gg nodes and on the Grace side of gh nodes. Sources from build/_kokkos and build/_gtest. Python: .venv-vista (Stampede3 shares /work and uses .venv). Load scripts/vista_env.sh first. No OpenSees reference build: the live OpenSees comparisons are skipped, the stored references run. -ffp-contract=off: GCC fuses a*b+c into FMA instructions by default on aarch64 (not on generic x86-64), which changes the last bits and breaks the bit-identical tests and OpenSees comparisons made on x86.",
+      "cacheVariables": {
+        "FETCHCONTENT_SOURCE_DIR_KOKKOS": "${sourceDir}/build/_kokkos/kokkos-5.1.0",
+        "FETCHCONTENT_SOURCE_DIR_GOOGLETEST": "${sourceDir}/build/_gtest/googletest-1.17.0",
+        "FETCHCONTENT_FULLY_DISCONNECTED": "ON",
+        "FEMORAX_PYTHON": "${sourceDir}/.venv-vista/bin/python",
+        "CMAKE_CXX_FLAGS": "-ffp-contract=off",
+        "CMAKE_C_FLAGS": "-ffp-contract=off"
+      }
+    },
+    {
+      "name": "vista-cpu-debug",
+      "displayName": "Vista: CPU (Serial + OpenMP), debug",
+      "inherits": [
+        "vista-base",
+        "cpu-debug"
+      ]
+    },
+    {
+      "name": "vista-cpu-release",
+      "displayName": "Vista: CPU (Serial + OpenMP), release",
+      "inherits": [
+        "vista-base",
+        "cpu-release"
+      ]
+    },
+    {
+      "name": "vista-cpu-ubsan",
+      "displayName": "Vista: CPU (Serial + OpenMP), UndefinedBehaviorSanitizer",
+      "description": "UBSan only, as on Stampede3 (ASan stays with the laptop's cpu-asan).",
+      "inherits": "vista-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-ffp-contract=off -fsanitize=undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=undefined"
+      }
+    },
+    {
       "name": "s3-sycl-pvc",
       "displayName": "Stampede3: Intel GPU (SYCL, Data Center GPU Max / Ponte Vecchio), release",
       "description": "Stampede3 pvc nodes. Load scripts/stampede3_sycl_env.sh first (Intel oneAPI 2026.0: icpx with SYCL). Kokkos' SYCL backend, compiled ahead of time for Ponte Vecchio; host code Serial. Sources from build/_kokkos and build/_gtest. -fp-model=precise: Intel's compilers default to fast math, which reorders and approximates floating-point arithmetic.",
@@ -164,6 +205,18 @@
       "configurePreset": "s3-cpu-ubsan"
     },
     {
+      "name": "vista-cpu-debug",
+      "configurePreset": "vista-cpu-debug"
+    },
+    {
+      "name": "vista-cpu-release",
+      "configurePreset": "vista-cpu-release"
+    },
+    {
+      "name": "vista-cpu-ubsan",
+      "configurePreset": "vista-cpu-ubsan"
+    },
+    {
       "name": "s3-sycl-pvc",
       "configurePreset": "s3-sycl-pvc"
     }
@@ -217,6 +270,27 @@
     {
       "name": "s3-cpu-ubsan",
       "configurePreset": "s3-cpu-ubsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "vista-cpu-debug",
+      "configurePreset": "vista-cpu-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "vista-cpu-release",
+      "configurePreset": "vista-cpu-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "vista-cpu-ubsan",
+      "configurePreset": "vista-cpu-ubsan",
       "output": {
         "outputOnFailure": true
       }

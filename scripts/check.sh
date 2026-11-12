@@ -9,13 +9,18 @@
 #                               # Stampede3: s3-cpu-debug, s3-cpu-release, s3-cpu-ubsan
 #                               # (ASan cannot run on its compute nodes: CMakePresets.json)
 #                               # (source scripts/stampede3_env.sh first; on a compute node)
+#                               # Vista: vista-cpu-debug, vista-cpu-release, vista-cpu-ubsan
+#                               # (source scripts/vista_env.sh first; on a compute node)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Build jobs: every core. TACC sets OMP_NUM_THREADS=1, which nproc obeys.
 jobs=$(env -u OMP_NUM_THREADS nproc)
 presets="cpu-debug cpu-release cpu-asan"
-if [[ "$(hostname -f 2>/dev/null || hostname)" == *.stampede3.tacc.utexas.edu ]]; then
+host="$(hostname -f 2>/dev/null || hostname)"
+if [[ "${host}" == *.stampede3.tacc.utexas.edu ]]; then
   presets="s3-cpu-debug s3-cpu-release s3-cpu-ubsan"
+elif [[ "${host}" == *.vista.tacc.utexas.edu ]]; then
+  presets="vista-cpu-debug vista-cpu-release vista-cpu-ubsan"
 elif command -v nvidia-smi > /dev/null && nvidia-smi -L > /dev/null 2>&1 && [ -x /usr/local/cuda-13.1/bin/nvcc ]; then
   cmake -P cmake/FetchKokkosSource.cmake > /dev/null  # nvcc_wrapper for the CUDA preset
   presets="${presets} cuda-ampere86"
