@@ -88,3 +88,12 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     state (a damped region no longer pays for the whole model). Done the same day: the
     re-check covers only batches whose stable step can change, with a bound from reference
     eigenvalues stored once per stage (docs/design.md, "Stable time step").
+15. **A production build with fused multiply-add.** Measured on Vista (gg node, 144 threads,
+    `flat_gather_cached`, 5000 explicit steps of the Site 2 basin, 2026-11-12): the exact
+    build (`-ffp-contract=off`, the vista presets) against the same build with
+    `-ffp-contract=fast`: elastic 0.792 / 0.773 against 0.737 / 0.717 ms/step, plastic
+    0.816 / 0.816 against 0.753 / 0.742 ms/step, about 7-8 % faster; results differ at
+    rounding (the plastic gravity stage: 370.1 GMRES iterations per step instead of 364.5).
+    Discussed with the user: keep the exact build for check.sh and the OpenSees comparisons,
+    add a production build (fused, perhaps tuned for the CPU) whose tests compare at a
+    tolerance as the CUDA build's do, and take benchmarks from it. Not decided or done.
