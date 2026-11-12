@@ -302,7 +302,11 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       st.integrator = io::to_string(an->integrator);
       st.dt = an->dt;
       const bool ed = an->integrator == io::Integrator::ExplicitDifference;
-      st.critical_dt = force.min_critical_dt(ed ? ExplicitScheme::ExplicitDifference : ExplicitScheme::CentralDifference);
+      const ExplicitScheme scheme = ed ? ExplicitScheme::ExplicitDifference : ExplicitScheme::CentralDifference;
+      // Batches without material state keep their stable step for the whole stage: computed
+      // once here; the periodic re-check below covers only the batches with state.
+      const double fixed_dt = force.min_critical_dt(scheme, InternalForce::Batches::WithoutState);
+      st.critical_dt = std::min(fixed_dt, force.min_critical_dt(scheme, InternalForce::Batches::WithState));
       if (an->dt > st.critical_dt) {
         char msg[256];
         std::snprintf(msg, sizeof(msg), "stage \"%s\": dt = %.6g exceeds the stable step %.6g of %s",
@@ -349,8 +353,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         if (recheck && k % opt.stable_step_check_interval == 0) {
           // History materials change their stiffness during the stage (PressureDependMultiYield
           // with confinement), so the stable step can fall below dt.
-          const double dtc =
-              force.min_critical_dt(ed ? ExplicitScheme::ExplicitDifference : ExplicitScheme::CentralDifference);
+          const double dtc = std::min(fixed_dt, force.min_critical_dt(scheme, InternalForce::Batches::WithState));
           st.min_critical_dt = std::min(st.min_critical_dt, dtc);
           if (dt > dtc && !warned) {
             char msg[384];

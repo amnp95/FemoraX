@@ -159,8 +159,11 @@ class InternalForce {
                   const Kokkos::View<std::uint32_t*, Space>& masks, const Kokkos::View<std::int32_t*, Space>& node_slot,
                   const Vec& du, const Vec& da, const Vec& slots, std::int64_t base);
 
-  // Smallest stable explicit step over all elements (docs/design.md, "Stable time step").
-  double min_critical_dt(ExplicitScheme scheme) const;
+  // Smallest stable explicit step over the elements of the chosen batches (docs/design.md,
+  // "Stable time step"): all of them, or only those whose material has state (whose step can
+  // change during a stage) or has none (whose step is fixed for the stage).
+  enum class Batches { All, WithState, WithoutState };
+  double min_critical_dt(ExplicitScheme scheme, Batches which = Batches::All) const;
 
   static int default_elements_per_team();
   int max_elements_per_team() const;  // smallest over the batches' scratch needs

@@ -468,9 +468,13 @@ std::int64_t InternalForce::device_bytes() const {
   return n;
 }
 
-double InternalForce::min_critical_dt(ExplicitScheme scheme) const {
+double InternalForce::min_critical_dt(ExplicitScheme scheme, Batches which) const {
   double m = 1e300;
-  for (const auto& b : batches_) m = std::min(m, b->min_critical_dt(coords_, nnodes_, scheme));
+  for (const auto& b : batches_) {
+    if (which == Batches::WithState && !b->has_state()) continue;
+    if (which == Batches::WithoutState && b->has_state()) continue;
+    m = std::min(m, b->min_critical_dt(coords_, nnodes_, scheme));
+  }
   return m;
 }
 

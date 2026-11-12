@@ -772,6 +772,30 @@ TEST(UniformDampedKernels, DampedBatchesStaticEqualUndampedAndEveryVariantAgrees
   }
 }
 
+TEST(UniformDampedKernels, TheStableStepSplitsIntoBatchesWithAndWithoutState) {
+  // A column damped in half its elements: the damped batch has state (its filters), the rest
+  // does not. The time loop computes the stateless batches' step once per stage and re-checks
+  // only the batches with state; their minimum is the whole model's.
+  auto m = damped_column(false, io::ElementType::StdBrick);
+  io::UniformDampingRegion r;
+  r.id = "half";
+  r.ratio = 0.05;
+  r.freq1 = 0.1;
+  r.freq2 = 10.0;
+  for (const auto& g : m.elements)
+    for (std::size_t e = 0; e < g.tags.size(); e += 2) r.elements.push_back(g.tags[e]);
+  m.uniform.push_back(r);
+  const auto c = compile::compile_model(m, compile::CompileOptions{});
+  ASSERT_EQ(c.batches.size(), 2u);
+  exec::InternalForce k(c, exec::GeometryCache::On);
+  using B = exec::InternalForce::Batches;
+  const auto s = ExplicitScheme::ExplicitDifference;
+  const double all = k.min_critical_dt(s), with = k.min_critical_dt(s, B::WithState),
+               without = k.min_critical_dt(s, B::WithoutState);
+  EXPECT_EQ(all, std::min(with, without));
+  EXPECT_LT(with, without);  // the damped elements are stiffer (the filters' stiffening)
+}
+
 TEST(UniformDampedKernels, TheStableStepAccountsForTheStiffening) {
   // The damped column's stable explicit step is the undamped one over sqrt(1 + 2 eta sum
   // alpha_i - kcorr): the wrapper's stability tangent is the material's times that bound, and without

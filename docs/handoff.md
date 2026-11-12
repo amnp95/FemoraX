@@ -122,6 +122,9 @@ the Tcl that `basin.py` exports (it merges the 96 OpenSeesMP partitions).
   (about 1 %); the absorber surface moves at most 4e-4 m. No OpenSees comparison yet.
 - Plastic case: the converter needs PressureIndependMultiYield materials (a few lines);
   then the same recipe with `material="plastic"`. Implicit case: after step 6 above.
+- Threads on spr nodes: use all 112 cores (`OMP_NUM_THREADS=112 OMP_PROC_BIND=spread
+  OMP_PLACES=threads`): the elastic basin's explicit step takes 1.37 ms with 112 threads and
+  2.12 ms with 56 (2026-11-12, 3000-step runs, `flat_gather_cached`).
 - Absorber experiment (Stampede3 pvc node, CPU presets, 2026-11-11): the elastic basin with
   the absorber region's Rayleigh damping (alphaM 2.36, betaK 0.015: 95 % at 0.2 and 20 Hz)
   replaced by mass-only damping (alphaM 23.9: 95 % at 2 Hz, betaK 0). The stable step grows
