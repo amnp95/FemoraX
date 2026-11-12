@@ -765,6 +765,12 @@ and a Uniform region gets both (as OpenSees allows). Later, optional: per-group 
    implicit damped stdBrick is the single-mode test of step 2b (Newmark with Newton through
    the element's own `compute<true>`, against the spring that matches OpenSees' records).
 4. Schema 0.7, reader and fixtures; the converter; support table.
+   Done (2026-11-12): `/damping/uniform/<index>` as proposed (schema/v0/README.md 3.7.1),
+   reader 0.7; `factor_series` is read and refused as unsupported until `-fact` is
+   implemented; a damped multi-yield material with more than 20 surfaces is refused by
+   `check_supported` with a message that says so; 14 fixtures. The converter reads
+   `damping Uniform` and `region ... -damp`. The run summary names each region's fit, the
+   damping range over the band, the frequency change at f1 and f2 and how to switch fits.
 5. Tests 5-7; benchmarks of the damped kernels.
 Beams, shells and springs get it with their own milestones by declaring their damping
 quantities.

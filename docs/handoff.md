@@ -49,11 +49,13 @@ Done (all on master, each after `scripts/check.sh`):
 - Step 3, implicit stages: no code change needed (the wrapper's tangent is consistent);
   Newmark + Newton through `run_model` matches a host recurrence within 2e-13, 1.6 Newton
   iterations per step.
+- Step 4, schema 0.7 (2026-11-12): `/damping/uniform` read, checked and run; the converter
+  reads `damping Uniform` and `region ... -damp`; the run summary reports the fit. `-fact`
+  is refused as unsupported until implemented.
 
 Next, in order:
-1. Step 4: schema 0.7 (`/damping/uniform`, approved) with the reader, fixtures and the
-   converter; then step 5, the remaining verification (plane-wave attenuation, the basin with
-   Uniform; yielding is done) and benchmarks of the damped kernels.
+1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
+   yielding is done) and benchmarks of the damped kernels.
 2. Open: a damped DRM layer is refused today (DRM elements must have no state); decide what
    the DRM forces do with Uniform damping.
 

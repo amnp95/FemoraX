@@ -20,7 +20,7 @@ struct SchemaVersion {
 
 // The schema version this reader implements. It reads files of the same major version
 // with a minor version up to this one.
-inline constexpr SchemaVersion reader_schema_version{0, 6};
+inline constexpr SchemaVersion reader_schema_version{0, 7};
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
 struct Metadata {
@@ -115,15 +115,16 @@ struct RayleighRegion {
 };
 
 // Uniform damping per element region (docs/design.md, "Frequency-independent damping"):
-// Femora's `damping Uniform` attached with `region ... -damp`. Built by tests until the
-// schema 0.7 reader (step 4) reads /damping/uniform.
+// Femora's `damping Uniform` attached with `region ... -damp`, /damping/uniform (schema 0.7).
 struct UniformDampingRegion {
-  std::string id;
+  std::string id;               // group name; regions apply in file order, the last one wins
   double ratio = 0.0;           // the damping ratio over the band
   double freq1 = 0.0, freq2 = 0.0;
   double activate_time = 0.0, deactivate_time = 1e20;
+  std::optional<std::int32_t> factor_series;  // -fact: a time-series tag (not supported yet)
   std::string fit = "femorax";  // or "opensees"
   std::vector<std::int32_t> elements;
+  Metadata meta;
 };
 
 // ---------------------------------------------------------------------------

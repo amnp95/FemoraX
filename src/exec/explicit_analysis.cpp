@@ -11,6 +11,8 @@
 #include <string>
 
 #include "compile/batches.hpp"
+#include "compile/registry.hpp"
+#include "compile/uniform_damping_fit.hpp"
 #include "exec/device_memory.hpp"
 #include "exec/drm_load.hpp"
 #include "exec/force_settings.hpp"
@@ -217,6 +219,28 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
     std::printf("femorax: %lld elements, %lld equations, force kernel %s (%s), device %s\n",
                 static_cast<long long>(rep.elements), static_cast<long long>(neq), rep.force_settings.c_str(),
                 rep.force_settings_source.c_str(), default_execution_space().c_str());
+    // Uniform damping: the fit, what it gives over the band, and how to switch (docs/design.md).
+    for (const auto& r : model.uniform) {
+      const auto fl = registry::uniform_damping_filters(r);
+      const double eta = uniform_damping_eta(r.ratio), two_pi = 2.0 * std::acos(-1.0);
+      double lo = 1e300, hi = 0.0;
+      for (int k = 0; k <= 50; ++k) {
+        const double f = r.freq1 * std::pow(r.freq2 / r.freq1, k / 50.0);
+        const double z = uniform_damping_mode(fl, eta, two_pi * f).zeta;
+        lo = std::min(lo, z);
+        hi = std::max(hi, z);
+      }
+      const double s1 = uniform_damping_mode(fl, eta, two_pi * r.freq1).frequency_ratio;
+      const double s2 = uniform_damping_mode(fl, eta, two_pi * r.freq2).frequency_ratio;
+      const bool femorax_fit = r.fit != "opensees";
+      std::printf("femorax: Uniform damping %s (%zu elements): %.4g %% over %.4g-%.4g Hz, fit \"%s\", %d filters: "
+                  "damping %.3g-%.3g %% over the band, frequency x%.3f at %.4g Hz and x%.3f at %.4g Hz%s; %s\n",
+                  r.id.c_str(), r.elements.size(), 100.0 * r.ratio, r.freq1, r.freq2, r.fit.c_str(), fl.nFilter,
+                  100.0 * lo, 100.0 * hi, s1, r.freq1, s2, r.freq2,
+                  femorax_fit ? " (stiffness kept at the band's geometric mean)" : " (no stiffness correction)",
+                  femorax_fit ? "fit = \"opensees\" reproduces OpenSees"
+                              : "fit = \"femorax\" (the default) gives the target across the band");
+    }
   }
 
   double time = 0.0;  // the domain time

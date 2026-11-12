@@ -19,6 +19,8 @@ struct Capabilities {
   bool vtkhdf_element_responses = true;   // VTKHDF stress3D6, strain3D6
   // Milestone 4 (schema 0.6), switched on when it runs:
   bool h5drm = true;                      // the H5DRM pattern
+  // Schema 0.7:
+  bool uniform_damping = true;            // /damping/uniform (without factor_series)
 };
 
 // Throws UnsupportedComponent naming the first thing the build cannot run, or ModelError

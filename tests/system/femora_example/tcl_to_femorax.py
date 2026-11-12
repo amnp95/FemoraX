@@ -20,6 +20,8 @@ several partitions are kept once (their coordinates must agree). Recognised:
   equalDOF retained constrained dofs...
   fixX / fixY / fixZ coordinate dofs... -tol tol
   region tag -ele ... -rayleigh alphaM betaK betaKinit betaKcomm    (inside eval "...")
+  damping Uniform tag ratio freq1 freq2 [-activateTime Ta] [-deactivateTime Td] [-fact ts]
+  region tag -ele ... -damp dampingTag                               (inside eval "...")
   timeSeries Path tag -filePath f -fileTime f -factor x
   pattern UniformExcitation tag dof -accel series
   pattern H5DRM tag "file" factor crdScale distanceTolerance doTransform T00..T22 x0 x1 x2
@@ -143,6 +145,8 @@ def convert(tcl: Path) -> dict:
     ties: list[tuple[int, int, list[int]]] = []
     fixes: list[tuple[int, float, list[int], float]] = []  # (axis, coordinate, dofs, tol)
     regions: list[tuple[list[int], list[float]]] = []
+    uniform_defs: dict[int, dict] = {}
+    uniform_regions: list[tuple[list[int], int]] = []
     drm = None
     series = None
     pattern = None
@@ -200,6 +204,26 @@ def convert(tcl: Path) -> dict:
             z = float(var[tok[1][1:]]) if tok[1].startswith("$") else float(tok[1])
             t = tok.index("-tol")
             fixes.append(("XYZ".index(head[-1]), z, [int(x) for x in tok[2:t]], float(tok[t + 1])))
+        elif head == "damping":
+            if tok[1] != "Uniform" or len(tok) < 6:
+                raise Unsupported(s)
+            o = dict(zip(tok[6::2], tok[7::2]))
+            if set(o) - {"-activateTime", "-deactivateTime", "-fact"}:
+                raise Unsupported(s)
+            d = dict(ratio=float(tok[3]), freq1=float(tok[4]), freq2=float(tok[5]))
+            if "-activateTime" in o:
+                d["activate_time"] = float(o["-activateTime"])
+            if "-deactivateTime" in o:
+                d["deactivate_time"] = float(o["-deactivateTime"])
+            if "-fact" in o:
+                d["factor_series"] = int(o["-fact"])
+            if uniform_defs.setdefault(int(tok[2]), d) != d:
+                raise Unsupported(f"damping {tok[2]} appears with different values")
+        elif head == "eval" and "region" in s and "-damp " in s:
+            m = re.search(r"region (\d+) -ele ([\d ]+) -damp (\d+)\"", s)
+            if not m:
+                raise Unsupported(s)
+            uniform_regions.append(([int(x) for x in m.group(2).split()], int(m.group(3))))
         elif head == "eval" and "region" in s:
             m = re.search(r"region (\d+) -ele ([\d ]+) -rayleigh ([^\"]+)\"", s)
             if not m:
@@ -252,8 +276,23 @@ def convert(tcl: Path) -> dict:
             raise Unsupported(s)
         i += 1
     return dict(materials=materials, nodes=[(t, *x) for t, x in nodes.items()], elements=elements, ties=ties,
-                fixes=fixes, regions=regions, series=series, pattern=pattern, drm=drm, recorder=recorder,
+                fixes=fixes, regions=regions, uniform_defs=uniform_defs, uniform_regions=uniform_regions, series=series, pattern=pattern, drm=drm, recorder=recorder,
                 node_recorders=node_recorders, process=process)
+
+
+def uniform_group(m: dict) -> dict:
+    """/damping/uniform (schema 0.7): one child per `region ... -damp` command."""
+    if not m["uniform_regions"]:
+        return {}
+    children = {}
+    for k, (els, tag) in enumerate(m["uniform_regions"]):
+        d = m["uniform_defs"].get(tag)
+        if d is None:
+            raise Unsupported(f"region -damp {tag}: no damping Uniform {tag}")
+        attrs = {key: (w.i32(v) if key == "factor_series" else w.f64(v)) for key, v in d.items()}
+        attrs["femora_tag"] = w.i32(tag)
+        children[f"{k:06d}"] = w.node(attrs=attrs, data={"elements": w.i32(els)})
+    return {"uniform": w.node(groups=children)}
 
 
 def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", explicit_dt: float | None = None,
@@ -354,7 +393,7 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", exp
         "damping": w.node(groups={"rayleigh": w.node(groups={f"{k:06d}": w.node(
             attrs={"alphaM": w.f64(ray[0]), "betaK": w.f64(ray[1]), "betaKinit": w.f64(ray[2]),
                    "betaKcomm": w.f64(ray[3])}, data={"elements": w.i32(els)})
-            for k, (els, ray) in enumerate(m["regions"])})}),
+            for k, (els, ray) in enumerate(m["regions"])}), **uniform_group(m)}),
         "time_series": w.node(groups=series_groups),
         "patterns": w.node(groups=patterns),
         "recorders": w.node(groups={"vtkhdf": w.node(attrs={"type": "VTKHDF", "file": femorax_vtkhdf,

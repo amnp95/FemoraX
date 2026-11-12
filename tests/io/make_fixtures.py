@@ -565,6 +565,52 @@ DRM_CASES = [
     ("h5drm_missing_factor", "explicit", "invalid", "attribute 'factor'", m_h5drm(drop=("factor",))),
 ]
 
+# --- schema 0.7: Uniform damping regions ---
+def m_uniform(attrs=None, drop=(), elements=(1, 2, 3), version=None, second=None):
+    """Add /damping/uniform/000000 (5 % over 0.1-10 Hz on the given elements); `second`: the
+    elements of a second region."""
+    def m(f):
+        u = f["damping"].create_group("uniform")
+        regions = [elements] + ([second] if second is not None else [])
+        for k, els in enumerate(regions):
+            g = u.create_group(f"{k:06d}")
+            a = {"ratio": np.float64(0.05), "freq1": np.float64(0.1), "freq2": np.float64(10.0)}
+            if k == 0:
+                a.update(attrs or {})
+            for name, v in a.items():
+                if not (k == 0 and name in drop):
+                    g.attrs[name] = v
+            g.create_dataset("elements", data=np.array(els, dtype=np.int32))
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
+
+
+UNIFORM_CASES = [
+    ("uniform", "explicit", "valid", "", m_uniform()),
+    ("uniform_all_attributes", "explicit", "valid", "",
+     m_uniform({"fit": "opensees", "activate_time": np.float64(1.0), "deactivate_time": np.float64(5.0)})),
+    ("uniform_implicit", "implicit", "valid", "", m_uniform()),
+    ("uniform_in_0_6_file", "explicit", "invalid", "was added in schema 0.7", m_uniform(version=[0, 6])),
+    ("uniform_missing_ratio", "explicit", "invalid", "attribute 'ratio'", m_uniform(drop=("ratio",))),
+    ("uniform_ratio", "explicit", "invalid", "'ratio' must be positive", m_uniform({"ratio": np.float64(0.0)})),
+    ("uniform_band", "explicit", "invalid", "0 < freq1 < freq2",
+     m_uniform({"freq1": np.float64(10.0), "freq2": np.float64(1.0)})),
+    ("uniform_times", "explicit", "invalid", "activate_time must be before deactivate_time",
+     m_uniform({"activate_time": np.float64(5.0), "deactivate_time": np.float64(1.0)})),
+    ("uniform_fit", "explicit", "invalid", "attribute 'fit' must be", m_uniform({"fit": "exact"})),
+    ("uniform_missing_element", "explicit", "invalid", "element 999 does not exist", m_uniform(elements=(1, 999))),
+    ("uniform_duplicate_element", "explicit", "invalid", "element 2 appears more than once",
+     m_uniform(elements=(2, 2))),
+    ("uniform_missing_series", "explicit", "invalid", "time series 9 does not exist",
+     m_uniform({"factor_series": np.int32(9)})),
+    ("uniform_overlap", "explicit", "warning", "the later region's damping applies",
+     m_uniform(second=(3, 4))),
+    # valid in the schema; refused until the factor is implemented
+    ("uniform_factor_series", "explicit", "unsupported", "time-series factor",
+     m_uniform({"factor_series": np.int32(1)})),
+]
+
 S = "/process/{explicit}"  # placeholder resolved below
 
 CASES = [
@@ -581,7 +627,7 @@ CASES = [
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 0.x files", m_version(1, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 7)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 8)),
     # --- schema 0.3: Static / LoadControl, ModifiedNewton, solver attributes ---------
     ("static_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
      m_static(version=[0, 2])),
@@ -713,7 +759,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     rows = []
     write_drm_file(out / "drm_fixture.h5drm")
-    for name, base, expect, text, mutate in CASES + SOIL_CASES + RECOVERY_CASES + DRM_CASES:
+    for name, base, expect, text, mutate in CASES + SOIL_CASES + RECOVERY_CASES + DRM_CASES + UNIFORM_CASES:
         path = out / f"{name}.femorax.h5"
         if base is None:
             path.write_text("this is not an HDF5 file\n")

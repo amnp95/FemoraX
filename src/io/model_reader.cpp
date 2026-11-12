@@ -449,9 +449,9 @@ void read_damping(Group& root, Model& m) {
   auto d = root.optional_group("damping");
   if (!d) return;
   for (const auto& t : d->children()) {
-    if (t != "rayleigh") {
+    if (t != "rayleigh" && t != "uniform") {
       unsupported("damping type " + quoted(t) + " (" + d->item(t) + ")",
-                  "per-region Rayleigh damping (/damping/rayleigh)");
+                  "per-region Rayleigh damping (/damping/rayleigh) and Uniform damping (/damping/uniform)");
     }
   }
   if (auto r = d->optional_group("rayleigh")) {
@@ -472,6 +472,41 @@ void read_damping(Group& root, Model& m) {
       m.rayleigh.push_back(std::move(reg));
     }
     r->finish();
+  }
+  if (auto u = d->optional_group("uniform")) {
+    require_minor(m, 7, u->path() + " (Uniform damping)");
+    for (const auto& id : ordered_children(*u)) {
+      Group g = u->group(id);
+      UniformDampingRegion reg;
+      reg.id = id;
+      reg.ratio = g.attr_double("ratio");
+      reg.freq1 = g.attr_double("freq1");
+      reg.freq2 = g.attr_double("freq2");
+      if (auto v = g.opt_attr_double("activate_time")) reg.activate_time = *v;
+      if (auto v = g.opt_attr_double("deactivate_time")) reg.deactivate_time = *v;
+      reg.factor_series = g.opt_attr_int("factor_series");
+      if (auto v = g.opt_attr_string("fit")) reg.fit = *v;
+      const std::string where = g.path();
+      for (double v : {reg.ratio, reg.freq1, reg.freq2, reg.activate_time, reg.deactivate_time}) {
+        require_finite(v, where + " attributes");
+      }
+      if (!(reg.ratio > 0.0)) invalid(where + ": attribute 'ratio' must be positive");
+      if (!(reg.freq1 > 0.0 && reg.freq2 > reg.freq1)) {
+        invalid(where + ": the band needs 0 < freq1 < freq2, found " + std::to_string(reg.freq1) + " and " +
+                std::to_string(reg.freq2));
+      }
+      if (!(reg.activate_time < reg.deactivate_time)) {
+        invalid(where + ": activate_time must be before deactivate_time");
+      }
+      if (reg.fit != "femorax" && reg.fit != "opensees") {
+        invalid(where + ": attribute 'fit' must be \"femorax\" or \"opensees\", found " + quoted(reg.fit));
+      }
+      reg.elements = g.dataset_int("elements").data;
+      reg.meta = read_meta(g);
+      g.finish();
+      m.uniform.push_back(std::move(reg));
+    }
+    u->finish();
   }
   d->finish();
 }
@@ -985,6 +1020,39 @@ void validate(Model& m) {
                            " and /damping/rayleigh/" + m.rayleigh[pair.second].id + " share " +
                            std::to_string(count) + " element(s); the later region's " +
                            "coefficients apply, as in OpenSees");
+    }
+  }
+
+  // Uniform regions: elements exist, the factor's series exists; overlaps as for Rayleigh.
+  {
+    std::unordered_map<std::int32_t, std::size_t> owner;
+    std::map<std::pair<std::size_t, std::size_t>, std::size_t> overlaps;
+    std::unordered_set<std::int32_t> known_series;
+    for (const auto& s : m.time_series) known_series.insert(s.tag);
+    for (std::size_t r = 0; r < m.uniform.size(); ++r) {
+      const std::string where = "/damping/uniform/" + m.uniform[r].id;
+      if (m.uniform[r].factor_series && !known_series.count(*m.uniform[r].factor_series)) {
+        invalid(where + ": factor_series: time series " + std::to_string(*m.uniform[r].factor_series) +
+                " does not exist");
+      }
+      std::unordered_set<std::int32_t> in_region;
+      for (const auto e : m.uniform[r].elements) {
+        if (!element_tags.count(e)) {
+          invalid(where + "/elements: element " + std::to_string(e) + " does not exist");
+        }
+        if (!in_region.insert(e).second) invalid(dup_message(where + "/elements: element", e));
+        const auto [it, fresh] = owner.emplace(e, r);
+        if (!fresh) {
+          ++overlaps[{it->second, r}];
+          it->second = r;
+        }
+      }
+    }
+    for (const auto& [pair, count] : overlaps) {
+      m.warnings.push_back("damping regions /damping/uniform/" + m.uniform[pair.first].id +
+                           " and /damping/uniform/" + m.uniform[pair.second].id + " share " +
+                           std::to_string(count) + " element(s); the later region's damping " +
+                           "applies, as in OpenSees");
     }
   }
 

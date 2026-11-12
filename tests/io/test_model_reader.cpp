@@ -59,7 +59,7 @@ class ReaderFixtures : public ::testing::Test {
 TEST_F(ReaderFixtures, ReadsExplicitSoilColumn) {
   const Model m = read_model(path("explicit.femorax.h5"));
   EXPECT_EQ(m.version.major, 0);
-  EXPECT_EQ(m.version.minor, 6);
+  EXPECT_EQ(m.version.minor, 7);
   EXPECT_EQ(m.ndm, 3);
   EXPECT_EQ(m.model_name, "layered_elastic_soil_column_explicit");
   EXPECT_TRUE(m.warnings.empty());

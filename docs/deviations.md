@@ -342,6 +342,10 @@ its peak (tolerance 5e-4). CPU and CUDA builds reproduced the event sequence exa
   stable explicit step is 0.890 of the undamped one (0.793 without the correction).
 - Effect on results: a different damping and stiffness with the default fit, by design;
   none with `fit = "opensees"`.
+- Also: OpenSees damps only some element types with Uniform damping and leaves the others,
+  SSPbrick included, undamped with a "Damping is yet to be implemented" warning per element
+  (a 1 x 1 x 10 SSPbrick column: 0.00 %). FemoraX damps SSPbrick through the same material
+  wrapper as stdBrick, so a Uniform region means the same damping on both elements.
 - Test: `UniformDamping.FemoraxFitGivesTheTargetAcrossTheBand`,
   `UniformDampedMaterial.TheCorrectionActsOnlyOnTheChangeSinceActivation`,
   `UniformDampedMaterial.ADampedStdBrickModeDecaysLikeTheSingleModeSpring`,

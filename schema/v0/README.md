@@ -51,6 +51,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.4 | nD materials `PressureDependMultiYield` and `PressureIndependMultiYield` (with the optional `pairs` dataset); process step `update_material_stage`; VTKHDF responses `stress3D6`, `strain3D6` |
 | 0.5 | Femora's retry and substep recovery defined: `max_retries`, `num_sublevels`, `num_substeps` (attributes since 0.0) with their rules |
 | 0.6 | pattern type `H5DRM` (the DRM data in its own file) |
+| 0.7 | optional `/damping/uniform` (Uniform damping per element region, section 3.7.1) |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
@@ -262,7 +263,32 @@ matching OpenSees, where the last `region` command wins. The reader prints a war
 names the regions and the number of elements affected.
 
 Not in v0: node regions (`-node`, nodal Rayleigh), the global `rayleigh` command, and
-other damping types.
+damping types other than Rayleigh and Uniform (3.7.1).
+
+### 3.7.1 `/damping/uniform/<index>` *(optional, 0.7)*
+
+Uniform (frequency-independent) damping per element region, as Femora writes
+`damping Uniform <tag> <ratio> <freq1> <freq2> [-activateTime Ta] [-deactivateTime Td]
+[-fact tsTag]` and attaches it with `region <tag> -ele <tags...> -damp <tag>`. One child per
+region command that names a Uniform damping, ordered like `/damping/rayleigh`. Femora's
+region and damping tags may be kept as `femora_tag` / `femora_name` metadata.
+
+| Item | Shape, type | Meaning |
+|---|---|---|
+| attr `ratio` | float64 | damping ratio over the band (> 0); Femora's `dampingRatio` (OpenSees' class works with twice it) |
+| attr `freq1`, `freq2` | float64 | the band in Hz, 0 < `freq1` < `freq2` |
+| attr `activate_time`, `deactivate_time` | float64, optional | the damping acts for `activate_time` < t < `deactivate_time` (defaults 0 and 1e20, as OpenSees); `activate_time` < `deactivate_time` |
+| attr `factor_series` | int32, optional | `-fact`: a time series whose value scales the damping; must exist. FemoraX refuses it as unsupported until implemented |
+| attr `fit` | string, optional | `"femorax"` (default) or `"opensees"`: how the filter weights are fitted (docs/design.md, docs/deviations.md) |
+| `elements` | `[M]` int32 | element tags in the region |
+
+With `fit = "femorax"` the measured damping ratio is `ratio` within 5 % over the band and the
+stiffness at `sqrt(freq1 freq2)` is the specified one; `"opensees"` reproduces OpenSees'
+filters (the damping falls off towards `freq2` and the response stiffens). An element in
+several Uniform regions takes the last one in file order, as in OpenSees (the reader warns);
+an element may be in a Rayleigh region and a Uniform region at once, and gets both. Every
+element type FemoraX supports is damped, SSPbrick included (OpenSees leaves SSPbrick
+undamped: docs/deviations.md).
 
 ### 3.8 `/time_series/<tag>` *(optional)*
 

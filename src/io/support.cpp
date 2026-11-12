@@ -1,6 +1,8 @@
 #include "io/support.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <unordered_map>
 #include <cstdint>
 #include <string>
 #include <variant>
@@ -33,6 +35,36 @@ void check_supported(const Model& m, const Capabilities& caps) {
     if (const auto* n = std::get_if<NodeRecorder>(&r.data); n && !n->time_series.empty()) {
       unsupported("Node recorder " + r.name + " with -timeSeries (absolute response) is not available yet");
     }
+  }
+  // Uniform damping (docs/design.md, "Frequency-independent damping").
+  for (const auto& r : m.uniform) {
+    const std::string where = "/damping/uniform/" + r.id;
+    if (!caps.uniform_damping) unsupported("Uniform damping (" + where + ") is not available yet");
+    if (r.factor_series) {
+      unsupported("Uniform damping with a time-series factor (-fact, " + where +
+                  ") is not available yet; remove the factor or use activate_time / deactivate_time");
+    }
+  }
+  if (!m.uniform.empty()) {
+    // The multi-yield materials are wrapped in their 20-surface bucket only (compile/registry.hpp).
+    std::unordered_map<std::int32_t, const NDMaterial*> material_of_tag;
+    for (const auto& mat : m.materials) material_of_tag[mat.tag] = &mat;
+    std::unordered_map<std::int32_t, const NDMaterial*> material_of_element;
+    for (const auto& g : m.elements)
+      for (const auto e : g.tags) material_of_element[e] = material_of_tag.at(g.material);
+    for (const auto& r : m.uniform)
+      for (const auto e : r.elements) {
+        const NDMaterial& mat = *material_of_element.at(e);
+        int surfaces = 0;
+        if (const auto* d = std::get_if<PressureDependMultiYieldData>(&mat.data)) surfaces = d->noYieldSurf;
+        if (const auto* d = std::get_if<PressureIndependMultiYieldData>(&mat.data)) surfaces = d->noYieldSurf;
+        if (std::abs(surfaces) > 20) {
+          unsupported("Uniform damping (/damping/uniform/" + r.id + ") on " + material_type_name(mat) +
+                      " with " + std::to_string(std::abs(surfaces)) + " yield surfaces (material " +
+                      std::to_string(mat.tag) + "): damped multi-yield materials are built for at most 20 " +
+                      "surfaces so far");
+        }
+      }
   }
   for (const auto& p : m.drm_patterns) {
     const std::string where = "/patterns/" + std::to_string(p.tag);
