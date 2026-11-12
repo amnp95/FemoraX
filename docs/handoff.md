@@ -62,11 +62,17 @@ Done (all on master, each after `scripts/check.sh`):
   says so (an unsupported component, exit 3: "has Uniform damping"; a material that can yield
   stays an invalid model). Ask the user: leave the DRM layer undamped, or extend the DRM
   force kernel to damped elastic layers.
-- Rerun the full plastic basin to confirm 2.61 ms/step is gone (fix 1, 7fa1e74). On
-  Stampede3: the models and the DRM file are in its $SCRATCH, which Vista does not see.
-- Remove the worktree (on Stampede3): `git worktree remove $SCRATCH/fx_before`.
-- Push from Stampede3: Vista's SSH key is not on GitHub (commits 70d73e0, d6cf8e7 and later
-  were made on Vista).
+- Confirmed (2026-11-12, Vista gg node, 144 threads, `flat_gather_cached`): the full
+  plastic basin's explicit stage runs at 0.805 ms/step against 0.792 for the elastic basin
+  (137,000 steps; whole runs 2 min 52 s and 2 min 41 s). Before the re-check fixes the
+  plastic basin took 2.61 ms/step on Stampede3 (twice its elastic step). Logs:
+  `run_vista.log` in each basin folder.
+- Data on Vista: the DRM file and the basin models are in Vista's scratch at the same paths
+  as on Stampede3 (`/scratch/08189/amnp95/drm_inputs`, `.../femorax_runs/basin_site2_*`;
+  Stampede3's copies remain there). Scratch is purged after inactivity; to copy again, run
+  `/work2/08189/amnp95/femorax_data/copy_from_stampede3.sh` on Stampede3, then move the files
+  from /work to Vista's scratch.
+- Push from Stampede3 (the repository is shared): Vista's SSH key is not on GitHub.
 
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
