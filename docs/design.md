@@ -797,6 +797,50 @@ and a Uniform region gets both (as OpenSees allows). Later, optional: per-group 
 Beams, shells and springs get it with their own milestones by declaring their damping
 quantities.
 
+## Damped DRM layer (plan approved by the user, 2026-11-12)
+
+**Decision with the user (2026-11-12):** the DRM layer is soil. Damping assigned to the soil
+applies to the DRM-layer elements too, and the DRM forces include the layer's damping, so
+the free field is reproduced by a damped layer exactly as by an undamped one. A deliberate
+difference from OpenSees, whose H5DRMLoadPattern forces use the layer's mass and stiffness
+only (with a damped layer there the forces are inconsistent by about the damping ratio times
+the stiffness forces). Today FemoraX refuses a damped DRM-layer element (unsupported).
+
+**Formulation.** For a DRM element with boundary nodes b and exterior nodes e, with the free
+field u0 (and its velocity v0, acceleration a0) at its nodes, the effective forces are the
+element's own response to the free field restricted to one side,
+`Peff_b = -[M a0_e + F(u0_e, v0_e)]_b` and `Peff_e = [M a0_b + F(u0_b, v0_b)]_e`, where `F` is
+the element's force for a linear material: today `K u`; with damping
+`K u + C v` (Rayleigh: `alphaM M v + (betaK + betaKinit + betaKcomm) K v`, the layer's
+coefficients) plus the Uniform damping stress of the restricted field. The Uniform filters
+are linear but have memory, so each of the two restricted fields of a DRM element has its
+own filter state per Gauss point, updated at every load evaluation with the step context,
+committed and reverted with the model's state (the stiffness correction acts on the change
+since activation, as in the wrapper). The layer's material must still be linear (elastic,
+with or without damping); a material that can yield stays refused.
+
+**Inputs.** The velocity of the free field: the H5DRM file's velocity dataset when it has
+one (to be checked in OpenSees' format and SW4's files), otherwise from the displacement
+samples (central difference), verified against a file that carries both.
+
+**Cost** (estimate, to be measured with a benchmark): the DRM layer is a one-element shell,
+a few percent of the elements; per DRM element the force kernel about doubles (one more
+strain-to-stress pass and the filter update). Memory: two filter states per Gauss point,
+about 15 KB per damped stdBrick DRM element with 8 filters (both buffers); about 50 MB for a
+basin-sized layer. Reading the histories stays the expensive part of DRM (streaming, step 4
+of milestone 4).
+
+**Verification.** The free-field test (`test_drm_free_field`) with damping: the free field of
+a damped laminar column, computed by FemoraX, drives a damped box inside a damped DRM layer;
+the box must move as the free field to rounding (2.2e-14 today without damping), for
+Rayleigh and for Uniform damping, explicit and implicit, and the scattered field outside must
+vanish. The same run with the old forces measures the inconsistency they leave.
+
+**Steps (one commit each, after approval):** (1) the free-field velocity input and the
+Rayleigh terms; (2) the Uniform damping state and terms; (3) the deviation entry, the
+support table and the basin with Uniform damping in all its soil. To be done together with
+the H5DRM streaming rework of the same kernel.
+
 ## Time integration and algorithms
 
 - Explicit: ExplicitDifference and CentralDifference (lumped mass), no solver.

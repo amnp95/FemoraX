@@ -118,6 +118,17 @@ Default tolerances (until a component states otherwise):
 
 ## Entries
 
+### H5DRM — a pattern factor other than 1 is refused (2026-11-10, milestone 4)
+- OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp`, commit 955ceb0
+- Difference: OpenSees reads the pattern's `factor` and stores it, but never applies it to
+  the DRM forces. FemoraX refuses a factor other than 1 as an unsupported component, with a
+  message to scale the DRM file instead (`io/support.cpp`).
+- Why: a model with factor 2 would run at factor 1 in OpenSees and at factor 2 in a FemoraX
+  that applied it: the same input would mean different things. Refusing keeps the meaning
+  unambiguous until Femora and OpenSees agree.
+- Effect on results: none for factor 1 (Femora's default).
+- Test: the fixture `h5drm_factor` (`tests/io/make_fixtures.py`).
+
 ### Tolerances of other compilers and GPUs — Intel's math library, borderline retries (decided 2026-11-11)
 
 **What.** Two checks are looser outside the GCC host builds, and only there:
