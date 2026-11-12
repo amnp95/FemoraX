@@ -738,7 +738,11 @@ evaluations bit for bit, and give the same bits in every kernel variant.
    and a run just below the limit is stable.
 7. Plane-wave attenuation in an elastic column against the analytical constant-Q solution
    (frequency-independent attenuation over the band), and the Hayward basin with Uniform in
-   the soil against Rayleigh.
+   the soil against Rayleigh. Plane wave done (2026-11-12,
+   `UniformDampingWave.PlaneWaveAttenuationIsTheConstantQOne`): a 2 Hz Ricker S wave in a
+   600 m column (Vs 200 m/s, 5 % over 0.1-10 Hz): the spectral ratio between 100 and 300 m
+   matches the damped material's complex modulus within 0.2 % over 0.7-4 Hz, and the measured
+   damping is 0.963-0.976 of the target (the fit's range: 0.962-1.015). The basin: next.
 8. Undamped models: bit-identical and the same memory as before.
 
 ### Schema 0.7 (proposal; asks the user before any change)

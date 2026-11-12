@@ -1038,6 +1038,119 @@ TEST(UniformDampedKernels, DampedMultiYieldColumnsTakeTheStageAndEveryVariantAgr
   }
 }
 
+// ---------------------------------------------------------------------------------------
+// Verification item 7: plane-wave attenuation. A vertical S wave in a uniform, Uniform-damped
+// elastic column (laminar, 1 x 1 x 600 stdBrick of 1 m, Vs = 200 m/s; 5 % over 0.1-10 Hz,
+// FemoraX's fit), driven from the base by a 2 Hz Ricker pulse in velocity. Between receivers
+// at 100 m and 300 m the spectral ratio of the absolute velocity is exp(-|Im k| dz), with the
+// wavenumber k = w sqrt(rho / (G Mc(w))) of the damped material's complex modulus
+// Mc = 1 - kcorr + sum_i 2 eta alpha_i i w / (i w + omegac_i) (the continuous limit of the
+// filters), and the attenuation is that of constant Q: Im k = w zeta / c within the fit's 5 %.
+// Relative formulation, as UniformExcitation: f = -M 1 ag on the free x equations; rigid
+// motion carries no strain, so the absolute field is the wave driven by the base motion.
+TEST(UniformDampingWave, PlaneWaveAttenuationIsTheConstantQOne) {
+  constexpr int NZ = 600;
+  const double rho = 2.0, Vs = 200.0, nu = 0.3, G = rho * Vs * Vs, E = 2.0 * G * (1.0 + nu);
+  femorax::testing::ColumnSpec spec;
+  spec.nx = spec.ny = 1;
+  spec.nz = NZ;
+  spec.dz = 1.0;
+  spec.damping = false;
+  io::Model m = femorax::testing::soil_column(spec);
+  for (auto& mat : m.materials) mat.data = io::ElasticIsotropicData{E, nu, rho};
+  for (auto& g : m.elements) g.body_force = {0.0, 0.0, 0.0};
+  io::UniformDampingRegion r;
+  r.id = "soil";
+  r.ratio = 0.05;
+  r.freq1 = 0.1;
+  r.freq2 = 10.0;
+  for (const auto& g : m.elements) r.elements.insert(r.elements.end(), g.tags.begin(), g.tags.end());
+  m.uniform.push_back(r);
+  compile::CompileOptions co;
+  co.renumbering = compile::Renumbering::Off;
+  const auto c = compile::compile_model(m, co);
+  exec::InternalForce k(c, exec::GeometryCache::On);
+  const std::int32_t neq = c.dofs.num_equations;
+  // x equations, and the receivers' x equations (node tag(0, 0, level) = 1 + 4 level)
+  std::vector<double> xdir(static_cast<std::size_t>(neq), 0.0);
+  std::int32_t q1 = -1, q2 = -1;
+  const int z1 = 100, z2 = 300;
+  for (std::int32_t i = 0; i < c.dofs.num_nodes(); ++i) {
+    const std::int32_t q = c.dofs.equation(i, 0);
+    if (q < 0) continue;
+    xdir[static_cast<std::size_t>(q)] = 1.0;
+    if (c.dofs.node_tag[i] == 1 + 4 * z1) q1 = q;
+    if (c.dofs.node_tag[i] == 1 + 4 * z2) q2 = q;
+  }
+  ASSERT_GE(q1, 0);
+  ASSERT_GE(q2, 0);
+  // the base motion: a Ricker velocity pulse and its derivative
+  const double fc = 2.0, t0 = 1.0, a = kPi * kPi * fc * fc;
+  auto vg = [&](double t) { const double x = t - t0; return (1.0 - 2.0 * a * x * x) * std::exp(-a * x * x); };
+  auto ag = [&](double t) {
+    const double x = t - t0;
+    return std::exp(-a * x * x) * (-6.0 * a * x + 4.0 * a * a * x * x * x);
+  };
+  const double dt = 1e-3, T = 4.2;  // the top's reflection reaches 300 m at 4.5 s
+  const int steps = static_cast<int>(std::lround(T / dt));
+  ASSERT_LT(dt, k.min_critical_dt(ExplicitScheme::ExplicitDifference));
+  std::vector<double> u(static_cast<std::size_t>(neq), 0.0), v(u.size(), 0.0), rec1, rec2;
+  auto hu = Kokkos::create_mirror_view(k.u);
+  Kokkos::deep_copy(k.v, 0.0);
+  const auto def = exec::default_force_settings();
+  for (int n = 0; n <= steps; ++n) {
+    const double t = n * dt;
+    for (std::int32_t q = 0; q < neq; ++q) hu(q) = u[static_cast<std::size_t>(q)];
+    Kokkos::deep_copy(k.u, hu);
+    k.step = StepContext{t + dt, dt, 1};
+    k.compute(def);
+    auto hf = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, k.f);
+    k.commit_state();
+    // leapfrog: v at n + 1/2, u at n + 1; the recorded velocity at n is the mean of the two
+    // half steps
+    const double v1_old = v[static_cast<std::size_t>(q1)], v2_old = v[static_cast<std::size_t>(q2)];
+    for (std::int32_t q = 0; q < neq; ++q) {
+      const auto j = static_cast<std::size_t>(q);
+      const double mq = c.lumped_mass[j];
+      const double acc = (-mq * ag(t) * xdir[j] - hf(q)) / mq;
+      v[j] += dt * acc;
+      u[j] += dt * v[j];
+    }
+    rec1.push_back(0.5 * (v1_old + v[static_cast<std::size_t>(q1)]) + vg(t));
+    rec2.push_back(0.5 * (v2_old + v[static_cast<std::size_t>(q2)]) + vg(t));
+  }
+  // spectra (discrete Fourier sums) and the comparison over the pulse's band
+  const auto fl = registry::uniform_damping_filters(r);
+  const double eta = uniform_damping_eta(r.ratio);
+  double worst_exact = 0.0, zmin = 1e9, zmax = 0.0;
+  for (double f = 0.7; f <= 4.01; f += 0.1) {
+    const double w = 2.0 * kPi * f;
+    std::complex<double> s1 = 0.0, s2 = 0.0;
+    for (std::size_t n = 0; n < rec1.size(); ++n) {
+      const std::complex<double> e = std::exp(std::complex<double>(0.0, -w * static_cast<double>(n) * dt));
+      s1 += rec1[n] * e;
+      s2 += rec2[n] * e;
+    }
+    const double measured = std::log(std::abs(s2) / std::abs(s1));  // ln of the ratio, < 0
+    std::complex<double> Mc = 1.0 - fl.kcorr;
+    for (int i = 0; i < fl.nFilter; ++i)
+      Mc += 2.0 * eta * fl.alpha[i] * std::complex<double>(0.0, w) / std::complex<double>(fl.omegac[i], w);
+    const std::complex<double> kw = w * std::sqrt(rho / (G * Mc));
+    const double predicted = -std::fabs(kw.imag()) * (z2 - z1);
+    worst_exact = std::max(worst_exact, std::fabs(measured / predicted - 1.0));
+    // the constant-Q attenuation: Im k = w zeta / c, with c the phase velocity w / Re k
+    const double c_phase = w / kw.real();
+    const double zeta_measured = -measured * c_phase / (w * (z2 - z1));
+    zmin = std::min(zmin, zeta_measured / r.ratio);
+    zmax = std::max(zmax, zeta_measured / r.ratio);
+  }
+  std::printf("[ plane wave, 5 %% over 0.1-10 Hz: attenuation within %.2e of the complex modulus over 0.7-4 Hz; "
+              "measured damping %.3f-%.3f of the target ]\n", worst_exact, zmin, zmax);
+  EXPECT_LE(worst_exact, 0.02);
+  EXPECT_GE(zmin, 0.95);
+  EXPECT_LE(zmax, 1.05);
+}
+
 }  // namespace
 
 
