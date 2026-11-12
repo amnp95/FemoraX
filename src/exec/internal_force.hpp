@@ -160,10 +160,16 @@ class InternalForce {
                   const Vec& du, const Vec& da, const Vec& slots, std::int64_t base);
 
   // Smallest stable explicit step over the elements of the chosen batches (docs/design.md,
-  // "Stable time step"): all of them, or only those whose material has state (whose step can
-  // change during a stage) or has none (whose step is fixed for the stage).
-  enum class Batches { All, WithState, WithoutState };
+  // "Stable time step"): all of them, or only those whose stable step can change during a
+  // stage (contracts.hpp, stability_may_change), or only those whose step cannot.
+  enum class Batches { All, Changing, Fixed };
   double min_critical_dt(ExplicitScheme scheme, Batches which = Batches::All) const;
+  bool stability_may_change() const;
+  // The periodic re-check: prepare at the start of an explicit stage (the reference omega^2
+  // per element of ScaledStability materials), then a lower bound of the Changing batches'
+  // stable step (exact for the batches without ScaledStability).
+  void prepare_stability_bounds();
+  double min_critical_dt_bound(ExplicitScheme scheme) const;
 
   static int default_elements_per_team();
   int max_elements_per_team() const;  // smallest over the batches' scratch needs

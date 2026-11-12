@@ -1213,6 +1213,51 @@ struct SSPbrick {
   // (contracts.hpp; Kstab included). Runs once per element at each stable step check, so the
   // 24 x 24 matrix in one thread is acceptable here.
   FEMORAX_HD static double max_omega_sq(const Params& p, const double (*xe)[NDM], PointArray<const double> committed) {
+    return max_omega_sq_with(p, xe, [&](double (*dd)[NSTRESS]) { stability_tangent<Mat>(p.mat, committed.point(0), dd); });
+  }
+  // ScaledStability materials (contracts.hpp): reference values once per stage, the bound at
+  // each re-check. With the point's factor s the stiffness is Kstab + s K_ref (Kstab
+  // constant), and w(s), its largest omega^2, is convex in s (a maximum of functions linear
+  // in s). ref[k] = w(s_k) at s_k = 2^((k - 4) / 2), 0.25 to 16: between two of them the chord
+  // lies above w; below s_0, w(s) <= w(s_0); above the last, w(s) <= (s / s_last) w(s_last)
+  // (Kstab + s K_ref <= (s / s_last) (Kstab + s_last K_ref)). A hair above, so rounding never
+  // makes the bound too small.
+  static constexpr int NSTABILITY_REFERENCE = 13;
+  FEMORAX_HD static double stability_grid(int k) { return std::exp2(0.5 * (k - 4)); }
+  FEMORAX_HD static void max_omega_sq_reference(const Params& p, const double (*xe)[NDM], Strided<double> ref)
+    requires ScaledStability<Mat>
+  {
+    for (int k = 0; k < NSTABILITY_REFERENCE; ++k) {
+      const double sk = stability_grid(k);
+      ref[k] = max_omega_sq_with(p, xe, [&](double (*dd)[NSTRESS]) {
+        Mat::stability_reference(p.mat, dd);
+        for (int a = 0; a < NSTRESS; ++a)
+          for (int b = 0; b < NSTRESS; ++b) dd[a][b] *= sk;
+      });
+    }
+  }
+  FEMORAX_HD static double max_omega_sq_bound(const Params& p, Strided<const double> ref,
+                                              PointArray<const double> committed)
+    requires ScaledStability<Mat>
+  {
+    constexpr int L = NSTABILITY_REFERENCE - 1;
+    const double s = Mat::stability_scale(p.mat, committed.point(0));
+    double w;
+    if (s <= stability_grid(0)) {
+      w = ref[0];
+    } else if (s >= stability_grid(L)) {
+      w = s / stability_grid(L) * ref[L];
+    } else {
+      int k = 0;
+      while (k < L - 1 && s > stability_grid(k + 1)) ++k;
+      const double s0 = stability_grid(k), s1 = stability_grid(k + 1);
+      w = ref[k] + (s - s0) / (s1 - s0) * (ref[k + 1] - ref[k]);
+    }
+    return w * (1.0 + 1e-12);
+  }
+
+  template <class TangentAt>
+  FEMORAX_HD static double max_omega_sq_with(const Params& p, const double (*xe)[NDM], const TangentAt& tangent_at) {
     double xl[3][8];
     local_coords(xe, xl);
     const RecomputedGeometry geo(xl, p);
@@ -1223,7 +1268,7 @@ struct SSPbrick {
     for (int a = 0; a < NDOF; ++a)
       for (int b = 0; b < NDOF; ++b) A[a][b] = element_term_entry(p, c, a, b);
     double dd[NSTRESS][NSTRESS];
-    stability_tangent<Mat>(p.mat, committed.point(0), dd);
+    tangent_at(dd);
     for (int j = 0; j < NNODE; j++)
       for (int k = 0; k < NNODE; k++) {
         double stiffJK[3][3];

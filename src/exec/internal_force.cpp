@@ -103,6 +103,12 @@ struct InternalForce::Batch {
   virtual std::int64_t device_bytes() const = 0;
   virtual int max_elements_per_team() const = 0;
   virtual double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const = 0;
+  // Whether the stable step can change during a stage (contracts.hpp, stability_may_change).
+  virtual bool stability_may_change() const = 0;
+  // The cheap re-check (ScaledStability materials): the reference omega^2 per element, at the
+  // start of a stage; then the stable step from the bound. Other batches: the exact check.
+  virtual void prepare_stability_bound(const Vec& coords, Index N) = 0;
+  virtual double min_critical_dt_bound(const Vec& coords, Index N, ExplicitScheme s) const = 0;
   // Matrix-free operator (resolved settings): y (or the diagonal) through `out`.
   virtual void run_operator(const OperatorSettings& s, bool diagonal, const OperatorCoefficients& k, Out out,
                             const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
@@ -136,6 +142,10 @@ struct TypedBatch final : InternalForce::Batch {
   static constexpr bool kCompact = kernels::kCompactable<Elem>;
   struct NoCompact {};
   std::conditional_t<kCompact, kernels::DevCompact<Elem>, NoCompact> compact;
+  // The cheap stable-step re-check: only where the step can change and the material scales.
+  static constexpr bool kBound =
+      kernels::kScaledStability<Elem> && femorax::stability_may_change<typename Elem::Material>();
+  Vec omega_ref;  // per element, the reference omega^2 (kBound)
 
   std::vector<kernels::DevParams<Elem>> host_params;
   std::vector<std::int32_t> param_material;
@@ -157,6 +167,9 @@ struct TypedBatch final : InternalForce::Batch {
     }
     b.params = upload("batch_params", ps);
     kernels::init_state<Elem>(b);
+    if constexpr (kBound) {
+      omega_ref = Vec("batch_reference_omega_sq", static_cast<std::size_t>(Elem::NSTABILITY_REFERENCE) * b.padded);
+    }
     if constexpr (kCompact) {
       using R = kernels::Replay<typename Elem::Material>;
       const auto points = static_cast<std::size_t>(Elem::NGP) * b.padded;
@@ -260,7 +273,8 @@ struct TypedBatch final : InternalForce::Batch {
                                      b.color_elements.extent(0)) * 4 +
            static_cast<std::int64_t>(b.params.extent(0) * sizeof(kernels::DevParams<Elem>)) +
            static_cast<std::int64_t>(b.geometry.extent(0) + b.constants.extent(0) + t.constant.extent(0) +
-                                     t.stored.extent(0) + b.state[0].extent(0) + b.state[1].extent(0)) * 8 +
+                                     t.stored.extent(0) + b.state[0].extent(0) + b.state[1].extent(0) +
+                                     omega_ref.extent(0)) * 8 +
            compact_bytes();
   }
   std::int64_t compact_bytes() const {
@@ -274,6 +288,15 @@ struct TypedBatch final : InternalForce::Batch {
   }
   double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const override {
     return kernels::min_critical_dt<Elem>(b, coords, N, s);
+  }
+  bool stability_may_change() const override { return femorax::stability_may_change<typename Elem::Material>(); }
+  void prepare_stability_bound(const Vec& coords, Index N) override {
+    if constexpr (kBound) kernels::reference_omega_sq<Elem>(b, coords, N, omega_ref);
+    else (void)coords, (void)N;
+  }
+  double min_critical_dt_bound(const Vec& coords, Index N, ExplicitScheme s) const override {
+    if constexpr (kBound) return kernels::min_critical_dt_bound<Elem>(b, omega_ref, s);
+    else return kernels::min_critical_dt<Elem>(b, coords, N, s);
   }
   void run_operator(const OperatorSettings& s, bool diagonal, const OperatorCoefficients& k, Out out,
                     const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
@@ -471,10 +494,28 @@ std::int64_t InternalForce::device_bytes() const {
 double InternalForce::min_critical_dt(ExplicitScheme scheme, Batches which) const {
   double m = 1e300;
   for (const auto& b : batches_) {
-    if (which == Batches::WithState && !b->has_state()) continue;
-    if (which == Batches::WithoutState && b->has_state()) continue;
+    if (which == Batches::Changing && !b->stability_may_change()) continue;
+    if (which == Batches::Fixed && b->stability_may_change()) continue;
     m = std::min(m, b->min_critical_dt(coords_, nnodes_, scheme));
   }
+  return m;
+}
+
+bool InternalForce::stability_may_change() const {
+  for (const auto& b : batches_)
+    if (b->stability_may_change()) return true;
+  return false;
+}
+
+void InternalForce::prepare_stability_bounds() {
+  for (auto& b : batches_)
+    if (b->stability_may_change()) b->prepare_stability_bound(coords_, nnodes_);
+}
+
+double InternalForce::min_critical_dt_bound(ExplicitScheme scheme) const {
+  double m = 1e300;
+  for (const auto& b : batches_)
+    if (b->stability_may_change()) m = std::min(m, b->min_critical_dt_bound(coords_, nnodes_, scheme));
   return m;
 }
 

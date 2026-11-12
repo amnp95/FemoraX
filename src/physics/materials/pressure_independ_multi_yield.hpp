@@ -172,7 +172,24 @@ struct PressureIndependMultiYield {
   // stiffest response the next step can show; unloading is elastic). Not an OpenSees
   // function.
   FEMORAX_HD static void stability_tangent(const Params& p, Strided<const double> committed, double (*D)[NSTRAIN]) {
-    double G = committed[STATE::G], K = committed[STATE::K];
+    double G, K;
+    stability_moduli(p, committed, G, K);
+    elastic_tangent(G, K, D);
+  }
+  // The same tangent as a factor of the reference elastic tangent (contracts.hpp,
+  // ScaledStability): G and K are the reference moduli times one factor (paramScaling scales
+  // both by the same value), so the factor is G over the reference shear modulus.
+  FEMORAX_HD static void stability_reference(const Params& p, double (*D)[NSTRAIN]) {
+    elastic_tangent(p.refShearModulus, p.refBulkModulus, D);
+  }
+  FEMORAX_HD static double stability_scale(const Params& p, Strided<const double> committed) {
+    double G, K;
+    stability_moduli(p, committed, G, K);
+    return G / p.refShearModulus;
+  }
+  FEMORAX_HD static void stability_moduli(const Params& p, Strided<const double> committed, double& G, double& K) {
+    G = committed[STATE::G];
+    K = committed[STATE::K];
     if (p.loadStage == 1 && committed[STATE::E2P] == 0.0 && p.frictionAngle != 0.) {
       soil::T2 stress;
       stress.load(committed, STATE::STRESS);
@@ -183,7 +200,6 @@ struct PressureIndependMultiYield {
       G *= scale;
       K *= scale;
     }
-    elastic_tangent(G, K, D);
   }
 
   // What a recorder reads after a commit (element output): getStress, which redoes the

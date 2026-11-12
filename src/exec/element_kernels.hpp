@@ -18,6 +18,7 @@
 #include "physics/common/inner.hpp"
 #include "physics/common/strided.hpp"
 #include "physics/contracts.hpp"
+#include "physics/explicit_stability.hpp"
 
 namespace femorax::exec::kernels {
 
@@ -376,6 +377,57 @@ double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, Expl
         }
         const DevParams<Elem>& pr = params(param(e));
         const double dt = Elem::critical_dt(pr.p, pr.damp, scheme, xe, state_of<Elem>(sc, e, P));
+        if (dt < m) m = dt;
+      },
+      Kokkos::Min<double>(result));
+  return result;
+}
+
+// The cheap periodic re-check for materials with ScaledStability (contracts.hpp): each
+// element's omega^2 with the reference tangent, once per stage, into `ref` (per element)...
+template <class Elem>
+inline constexpr bool kScaledStability = requires(const typename Elem::Params& p, const double (*xe)[Elem::NDM],
+                                                  Strided<double> r, Strided<const double> rc,
+                                                  PointArray<const double> c) {
+  Elem::NSTABILITY_REFERENCE;
+  Elem::max_omega_sq_reference(p, xe, r);
+  { Elem::max_omega_sq_bound(p, rc, c) } -> std::same_as<double>;
+};
+
+template <class Elem>
+void reference_omega_sq(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec& ref) {
+  const auto node = b.node, param = b.param;
+  const auto params = b.params;
+  const Index P = b.padded;
+  Kokkos::parallel_for(
+      "element_reference_omega_sq", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count),
+      KOKKOS_LAMBDA(const Index e) {
+        double xe[Elem::NNODE][Elem::NDM];
+        for (int a = 0; a < Elem::NNODE; ++a) {
+          const Index n = node(a * P + e);
+          for (int d = 0; d < Elem::NDM; ++d) xe[a][d] = coords(d * N + n);
+        }
+        Elem::max_omega_sq_reference(params(param(e)).p, xe, Strided<double>{ref.data() + e, P});
+      });
+}
+
+// ... and at each re-check the stable step from the bound: the largest factor of the
+// element's points times its reference omega^2 (never below the true omega^2, so the step
+// is never overstated).
+template <class Elem>
+double min_critical_dt_bound(const DevBatch<Elem>& b, const Vec& ref, ExplicitScheme scheme) {
+  const auto param = b.param;
+  const auto params = b.params;
+  const auto sc = b.state[b.current];
+  const Index P = b.padded;
+  double result = 0.0;
+  Kokkos::parallel_reduce(
+      "element_critical_dt_bound", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count),
+      KOKKOS_LAMBDA(const Index e, double& m) {
+        const DevParams<Elem>& pr = params(param(e));
+        const double w2 =
+            Elem::max_omega_sq_bound(pr.p, Strided<const double>{ref.data() + e, P}, state_of<Elem>(sc, e, P));
+        const double dt = stable_dt(scheme, pr.damp, w2);
         if (dt < m) m = dt;
       },
       Kokkos::Min<double>(result));

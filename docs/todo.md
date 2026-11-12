@@ -85,5 +85,6 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     112 threads, 2026-11-12): every 100 steps, about 1.1 ms per step on average, so it doubles
     the step time of a model whose every batch has material state (the plastic basin: 2.61
     against 1.30 ms/step elastic). Since 2026-11-12 the check covers only the batches with
-    state (a damped region no longer pays for the whole model). Next: a cheaper per-element
-    estimate, or an interval set from how fast the limit moves.
+    state (a damped region no longer pays for the whole model). Done the same day: the
+    re-check covers only batches whose stable step can change, with a bound from reference
+    eigenvalues stored once per stage (docs/design.md, "Stable time step").

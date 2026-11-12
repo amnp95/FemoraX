@@ -623,10 +623,39 @@ struct StdBrick {
   }
 
   // Largest omega^2 of K phi = omega^2 M phi with the lumped mass and the material's
-  // stability tangent (contracts.hpp). Runs once per element at each stable step check, so
-  // holding the 24x24 matrix in one thread is acceptable here.
+  // stability tangent (contracts.hpp). Holds the 24x24 matrix in one thread and solves its
+  // eigenproblem: the expensive check, once per stage (and at re-checks of materials without
+  // ScaledStability).
   FEMORAX_HD static double max_omega_sq(const Params& p, const double (*xe)[NDM],
                                         PointArray<const double> committed) {
+    return max_omega_sq_with(p, xe, [&](int i, double (*dd)[NSTRESS]) {
+      stability_tangent<Mat>(p.mat, committed.point(i), dd);
+    });
+  }
+  // ScaledStability materials (contracts.hpp): omega^2 with the reference tangent at every
+  // point, once per stage, and the bound from the points' factors at each re-check (the
+  // largest factor times the reference; a hair above it, so rounding never makes the bound
+  // smaller than the eigenvalue it bounds).
+  static constexpr int NSTABILITY_REFERENCE = 1;  // values per element
+  FEMORAX_HD static void max_omega_sq_reference(const Params& p, const double (*xe)[NDM], Strided<double> ref)
+    requires ScaledStability<Mat>
+  {
+    ref[0] = max_omega_sq_with(p, xe, [&](int, double (*dd)[NSTRESS]) { Mat::stability_reference(p.mat, dd); });
+  }
+  FEMORAX_HD static double max_omega_sq_bound(const Params& p, Strided<const double> ref,
+                                              PointArray<const double> committed)
+    requires ScaledStability<Mat>
+  {
+    double s = 0.0;
+    for (int i = 0; i < NGP; ++i) {
+      const double si = Mat::stability_scale(p.mat, committed.point(i));
+      s = si > s ? si : s;
+    }
+    return s * ref[0] * (1.0 + 1e-12);
+  }
+
+  template <class TangentAt>
+  FEMORAX_HD static double max_omega_sq_with(const Params& p, const double (*xe)[NDM], const TangentAt& tangent_at) {
     double xl[3][8];
     local_coords(xe, xl);
     double m[NNODE];
@@ -638,7 +667,7 @@ struct StdBrick {
       PointShape s;
       point_geometry(xl, i, s);
       double dd[NSTRESS][NSTRESS];
-      stability_tangent<Mat>(p.mat, committed.point(i), dd);
+      tangent_at(i, dd);
       for (int j = 0; j < NNODE; j++)
         for (int k = 0; k < NNODE; k++) {
           double stiffJK[3][3];

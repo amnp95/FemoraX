@@ -304,6 +304,28 @@ FEMORAX_HD void stability_tangent(const typename M::Params& p, Strided<const dou
   else M::committed_tangent(p, committed, D);
 }
 
+// Whether the stable-step tangent can change during a stage; the explicit time loop re-checks
+// the stable step only where it can. Optional constant STABILITY_CONSTANT; without it, a
+// material without state is constant and one with state is not.
+template <class M>
+constexpr bool stability_may_change() {
+  if constexpr (requires { M::STABILITY_CONSTANT; }) return !M::STABILITY_CONSTANT;
+  else return M::NSTATE > 0;
+}
+
+// Optional: the stable-step tangent is a fixed reference tangent times one factor >= 0 per
+// point,
+//   stability_tangent(p, committed) = stability_scale(p, committed) * stability_reference(p).
+// The stiffness of an element whose points all use the reference is a sum of positive
+// semidefinite terms, so the element's largest omega^2 is at most the largest factor of its
+// points times that of the reference: the periodic re-check needs one eigenvalue per element
+// and stage, then only the factors (elements: max_omega_sq_reference, max_omega_sq_bound).
+template <class M>
+concept ScaledStability = requires(const typename M::Params& p, Strided<const double> c, double (*D)[M::NSTRAIN]) {
+  { M::stability_scale(p, c) } -> std::same_as<double>;
+  M::stability_reference(p, D);
+};
+
 // An (element, material) pair that can be instantiated as a batch.
 template <class E, class M>
 concept CompatiblePair = Element<E> && Material<M> && (E::MATERIAL_KIND == M::KIND);

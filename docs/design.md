@@ -270,6 +270,28 @@ confinement (reference moduli times `getModulusFactor` of the committed stress).
 a single mode and a column just below and just above `dt_crit` for both schemes, with and
 without each damping term.
 
+**The periodic re-check, made cheap (2026-11-12).** The exact check builds each element's
+24 x 24 stiffness and solves its eigenproblem (about 110 ms for the 46,080-element basin on a
+112-core spr node, against 1.3 ms for a force evaluation), so re-checking every 100 steps
+doubled the step time of plastic models. Two rules make it cheap without ever overstating
+the step:
+- Only batches whose stable step can change are re-checked (`stability_may_change` in
+  `contracts.hpp`: a material without state cannot, and a material declares
+  `STABILITY_CONSTANT` when its stable tangent is fixed despite state; Uniform damping on
+  ElasticIsotropic is). The others keep the value from the start of the stage.
+- A material whose stability tangent is a fixed reference times one factor per point
+  (`ScaledStability`: PressureDependMultiYield, PressureIndependMultiYield and the damped
+  wrapper of either) lets elements bound their omega^2 from the factors alone: at the start
+  of each explicit stage every element stores reference eigenvalues
+  (`max_omega_sq_reference`), and each re-check only reads its points' factors
+  (`max_omega_sq_bound`). stdBrick: the largest factor times the reference (exact when every
+  point has the same factor). SSPbrick (with its constant Kstab): the eigenvalue at 13
+  factors from 0.25 to 16, interpolated linearly, an upper bound because the eigenvalue is
+  convex in the factor. The bound is never below the true value; when it puts the step below
+  `dt`, the exact check decides, so a run stops only when the stable step itself is below
+  `dt`. The stage summary's smallest limit is the bound's (within about 1 % of the exact one
+  on the test columns).
+
 ## Element kernels
 
 Applies from the stdBrick kernel on. The goal is that every element runs in the thread

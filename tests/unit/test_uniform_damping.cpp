@@ -772,10 +772,11 @@ TEST(UniformDampedKernels, DampedBatchesStaticEqualUndampedAndEveryVariantAgrees
   }
 }
 
-TEST(UniformDampedKernels, TheStableStepSplitsIntoBatchesWithAndWithoutState) {
-  // A column damped in half its elements: the damped batch has state (its filters), the rest
-  // does not. The time loop computes the stateless batches' step once per stage and re-checks
-  // only the batches with state; their minimum is the whole model's.
+TEST(UniformDampedKernels, DampedElasticSoilHasAFixedStableStep) {
+  // A column damped in half its elements. The damped batch has state (its filters), but its
+  // stable step is the elastic one times a constant, so it cannot change during a stage
+  // (STABILITY_CONSTANT): no batch needs the periodic re-check, and the fixed batches' step is
+  // the whole model's.
   auto m = damped_column(false, io::ElementType::StdBrick);
   io::UniformDampingRegion r;
   r.id = "half";
@@ -788,12 +789,14 @@ TEST(UniformDampedKernels, TheStableStepSplitsIntoBatchesWithAndWithoutState) {
   const auto c = compile::compile_model(m, compile::CompileOptions{});
   ASSERT_EQ(c.batches.size(), 2u);
   exec::InternalForce k(c, exec::GeometryCache::On);
+  EXPECT_TRUE(k.has_state());
+  EXPECT_FALSE(k.stability_may_change());
   using B = exec::InternalForce::Batches;
   const auto s = ExplicitScheme::ExplicitDifference;
-  const double all = k.min_critical_dt(s), with = k.min_critical_dt(s, B::WithState),
-               without = k.min_critical_dt(s, B::WithoutState);
-  EXPECT_EQ(all, std::min(with, without));
-  EXPECT_LT(with, without);  // the damped elements are stiffer (the filters' stiffening)
+  EXPECT_EQ(k.min_critical_dt(s), k.min_critical_dt(s, B::Fixed));
+  EXPECT_EQ(k.min_critical_dt(s, B::Changing), 1e300);  // nothing to re-check
+  static_assert(!stability_may_change<UniformDamped<ElasticIsotropic, 8>>());
+  static_assert(stability_may_change<UniformDamped<PressureIndependMultiYield<20>, 8>>());
 }
 
 TEST(UniformDampedKernels, TheStableStepAccountsForTheStiffening) {
@@ -870,6 +873,69 @@ TEST(UniformDampedMaterial, AWrappedPimyIsThePlainMaterialInStaticSteps) {
     Cw = Tw;
     Cm = Tm;
   }
+}
+
+TEST(UniformDampedMaterial, MultiYieldStabilityTangentsAreAReferenceTimesAFactor) {
+  // contracts.hpp, ScaledStability: along a strain path through the stage switch and into
+  // yielding, stability_tangent = stability_scale * stability_reference at every step, for
+  // PIMY, PDMY and the damped PIMY (the cheap stable-step re-check relies on it).
+  UniformDampingFilters fl;
+  ASSERT_TRUE(uniform_damping_fit_femorax(0.05, 0.1, 10.0, 0.05, fl));
+  io::NDMaterial sand;
+  sand.tag = 1;
+  sand.data = loose_sand_data();
+  using P20D = PressureDependMultiYield<20>;
+  const auto pdmy = registry::PressureDependMultiYieldEntry<20>::params(sand);
+  auto check = [&]<class M>(typename M::Params p, const char* name) {
+    static_assert(ScaledStability<M>);
+    std::array<double, M::NSTATE> C{}, T{};
+    M::initial_state(p, {C.data(), 1});
+    M::initial_state(p, {T.data(), 1});
+    double worst = 0.0, smin = 1e300, smax = 0.0;
+    for (int n = 0; n < 60; ++n) {
+      if (n == 5) p.loadStage = 1;
+      const double g = n < 5 ? 0.0 : 0.002 * (n - 5);
+      const double eps[6] = {-2e-4 - 1e-5 * n, -2e-4, -4e-4 - 2e-5 * n, g, 0.4 * g, -0.2 * g};
+      double sig[6], D[6][6], Ds[6][6], Dr[6][6];
+      M::update(p, {C.data(), 1}, {T.data(), 1}, eps, sig, D);
+      C = T;
+      M::stability_tangent(p, {C.data(), 1}, Ds);
+      M::stability_reference(p, Dr);
+      const double sc = M::stability_scale(p, {C.data(), 1});
+      smin = std::min(smin, sc);
+      smax = std::max(smax, sc);
+      double scale = 0.0;
+      for (int a = 0; a < 6; ++a)
+        for (int b = 0; b < 6; ++b) scale = std::max(scale, std::fabs(Ds[a][b]));
+      for (int a = 0; a < 6; ++a)
+        for (int b = 0; b < 6; ++b) worst = std::max(worst, std::fabs(Ds[a][b] - sc * Dr[a][b]) / scale);
+    }
+    std::printf("[ %s: stability tangent = factor x reference within %.1e; factors %.3f-%.3f ]\n", name, worst, smin,
+                smax);
+    EXPECT_LE(worst, 1e-14);
+    EXPECT_GT(smax, smin);  // the path changes the factor
+  };
+  io::NDMaterial clay;
+  clay.tag = 2;
+  auto frictional = basin_clay_data();
+  frictional.frictionAng = 30.0;  // pressure-dependent moduli: the factor follows the confinement
+  frictional.pressDependCoe = 0.5;
+  frictional.cohesi = 5.0;
+  frictional.refPress = 80.0;
+  clay.data = frictional;
+  check.template operator()<P20>(registry::PressureIndependMultiYieldEntry<20>::params(clay),
+                                 "PressureIndependMultiYield");
+  check.template operator()<P20D>(pdmy, "PressureDependMultiYield");
+  // the wrapper: the material's factor, the reference times the constant multiplier
+  const auto pw = damped_pimy_params(fl);
+  std::array<double, DampedP20::NSTATE> C{};
+  DampedP20::initial_state(pw, {C.data(), 1});
+  double Ds[6][6], Dr[6][6];
+  DampedP20::stability_tangent(pw, {C.data(), 1}, Ds);
+  DampedP20::stability_reference(pw, Dr);
+  const double sc = DampedP20::stability_scale(pw, {C.data(), 1});
+  for (int a = 0; a < 6; ++a)
+    for (int b = 0; b < 6; ++b) EXPECT_NEAR(Ds[a][b], sc * Dr[a][b], 1e-14 * std::fabs(Dr[0][0]));
 }
 
 TEST(UniformDampedMaterial, AYieldingPointStopsAddingDamping) {

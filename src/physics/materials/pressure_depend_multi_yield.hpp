@@ -206,14 +206,17 @@ struct PressureDependMultiYield {
   // the volumetric softening Hv only lowers the bulk modulus). Stage 0 is linear elastic
   // with the reference moduli. Not an OpenSees function: OpenSees has no stable step check.
   FEMORAX_HD static void stability_tangent(const Params& p, Strided<const double> committed, double (*D)[NSTRAIN]) {
-    if (p.loadStage != 1) {
-      elastic_tangent(p, 1.0, D);
-      return;
-    }
+    elastic_tangent(p, stability_scale(p, committed), D);
+  }
+  // The same tangent as a factor of the reference elastic tangent (contracts.hpp,
+  // ScaledStability): the reference moduli times getModulusFactor (1 in stage 0).
+  FEMORAX_HD static void stability_reference(const Params& p, double (*D)[NSTRAIN]) { elastic_tangent(p, 1.0, D); }
+  FEMORAX_HD static double stability_scale(const Params& p, Strided<const double> committed) {
+    if (p.loadStage != 1) return 1.0;
     const Point<SerialInner> w(p, SerialInner{}, committed, Strided<double>{});
     soil::T2 stress;
     stress.load(committed, STATE::STRESS);
-    elastic_tangent(p, w.getModulusFactor(stress), D);
+    return w.getModulusFactor(stress);
   }
 
   // What a recorder reads after a commit (element output): getStress, which redoes the

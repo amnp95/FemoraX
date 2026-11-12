@@ -53,6 +53,20 @@ Done (all on master, each after `scripts/check.sh`):
   reads `damping Uniform` and `region ... -damp`; the run summary reports the fit. `-fact`
   is refused as unsupported until implemented.
 
+**Start here (2026-11-12):** the cheap stable-step re-check is committed (fixes 2 and 3:
+`stability_may_change` / `STABILITY_CONSTANT` and `ScaledStability` in `contracts.hpp`,
+`max_omega_sq_reference` / `max_omega_sq_bound` in stdBrick and SSPbrick; docs/design.md
+"Stable time step"). Then:
+- Found: the elastic basin with Uniform damping on all soil (regions 1-7;
+  `$SCRATCH/femorax_runs/basin_site2_elastic/speed/uniform_all.femorax.h5`) is refused
+  before shaking: "H5DRM pattern 1: element 11233 lies on the DRM boundary and its material
+  has history state (it can yield)". The damped regions include DRM-layer elements (the
+  open DRM decision). Fix the message (damped elastic cannot yield: name Uniform damping),
+  and ask the user: leave the DRM layer undamped, or extend the DRM force kernel to damped
+  elastic layers.
+- Rerun the full plastic basin to confirm 2.61 ms/step is gone (fix 1, 7fa1e74).
+- Remove the worktree: `git worktree remove $SCRATCH/fx_before`.
+
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
    yielding is done) and benchmarks of the damped kernels.

@@ -303,10 +303,10 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       st.dt = an->dt;
       const bool ed = an->integrator == io::Integrator::ExplicitDifference;
       const ExplicitScheme scheme = ed ? ExplicitScheme::ExplicitDifference : ExplicitScheme::CentralDifference;
-      // Batches without material state keep their stable step for the whole stage: computed
-      // once here; the periodic re-check below covers only the batches with state.
-      const double fixed_dt = force.min_critical_dt(scheme, InternalForce::Batches::WithoutState);
-      st.critical_dt = std::min(fixed_dt, force.min_critical_dt(scheme, InternalForce::Batches::WithState));
+      // Batches whose stable step cannot change keep it for the whole stage: computed once
+      // here; the periodic re-check below covers only the others, with the cheap bound.
+      const double fixed_dt = force.min_critical_dt(scheme, InternalForce::Batches::Fixed);
+      st.critical_dt = std::min(fixed_dt, force.min_critical_dt(scheme, InternalForce::Batches::Changing));
       if (an->dt > st.critical_dt) {
         char msg[256];
         std::snprintf(msg, sizeof(msg), "stage \"%s\": dt = %.6g exceeds the stable step %.6g of %s",
@@ -315,7 +315,8 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         if (opt.verbose) std::printf("femorax: warning: %s\n", msg);
       }
       st.min_critical_dt = st.critical_dt;
-      const bool recheck = opt.stable_step_check_interval > 0 && force.has_state();
+      const bool recheck = opt.stable_step_check_interval > 0 && force.stability_may_change();
+      if (recheck) force.prepare_stability_bounds();
       bool warned = false;
       // domainChanged: the integrator starts from the committed state.
       const double dt = an->dt;
@@ -353,7 +354,10 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         if (recheck && k % opt.stable_step_check_interval == 0) {
           // History materials change their stiffness during the stage (PressureDependMultiYield
           // with confinement), so the stable step can fall below dt.
-          const double dtc = std::min(fixed_dt, force.min_critical_dt(scheme, InternalForce::Batches::WithState));
+          // The bound never overstates the step; when it falls below dt, the exact check
+          // decides, so a run stops only when the stable step itself is below dt.
+          double dtc = std::min(fixed_dt, force.min_critical_dt_bound(scheme));
+          if (dt > dtc) dtc = std::min(fixed_dt, force.min_critical_dt(scheme, InternalForce::Batches::Changing));
           st.min_critical_dt = std::min(st.min_critical_dt, dtc);
           if (dt > dtc && !warned) {
             char msg[384];

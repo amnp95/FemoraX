@@ -47,6 +47,9 @@ struct UniformDamped {
   static constexpr TangentSymmetry TANGENT = Mat::TANGENT;
   // The tangent depends on the step size (the stiffness multiplier).
   static constexpr bool CONSTANT_TANGENT = false;
+  // The stable step's tangent is the material's times a constant (stability_tangent below), so
+  // it changes during a stage only if the material's does (contracts.hpp).
+  static constexpr bool STABILITY_CONSTANT = !stability_may_change<Mat>();
 
   struct Params {
     typename Mat::Params mat;
@@ -127,12 +130,31 @@ struct UniformDamped {
   // The stable step's tangent: the material's, times the largest stiffness multiplier less the
   // correction (1 + 2 eta sum alpha_i - kcorr, its limit for a vanishing step), a bound that
   // needs no step size.
-  FEMORAX_HD static void stability_tangent(const Params& p, Strided<const double> committed, double (*D)[NSTRAIN]) {
-    femorax::stability_tangent<Mat>(p.mat, material_part(committed), D);
+  FEMORAX_HD static double stability_multiplier(const Params& p) {
     double km = 1.0 - p.fl.kcorr;
     for (int i = 0; i < p.fl.nFilter; ++i) km += 2.0 * p.eta * p.fl.alpha[i];
+    return km;
+  }
+  FEMORAX_HD static void stability_tangent(const Params& p, Strided<const double> committed, double (*D)[NSTRAIN]) {
+    femorax::stability_tangent<Mat>(p.mat, material_part(committed), D);
+    const double km = stability_multiplier(p);
     for (int a = 0; a < NSTRAIN; ++a)
       for (int c = 0; c < NSTRAIN; ++c) D[a][c] *= km;
+  }
+  // The material's reference and factor (contracts.hpp, ScaledStability), the constant
+  // multiplier on the reference.
+  FEMORAX_HD static void stability_reference(const Params& p, double (*D)[NSTRAIN])
+    requires ScaledStability<Mat>
+  {
+    Mat::stability_reference(p.mat, D);
+    const double km = stability_multiplier(p);
+    for (int a = 0; a < NSTRAIN; ++a)
+      for (int c = 0; c < NSTRAIN; ++c) D[a][c] *= km;
+  }
+  FEMORAX_HD static double stability_scale(const Params& p, Strided<const double> committed)
+    requires ScaledStability<Mat>
+  {
+    return Mat::stability_scale(p.mat, material_part(committed));
   }
 
   // What a recorder reads (getStress): the material's own stress, without the damping stress,

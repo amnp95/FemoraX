@@ -404,6 +404,42 @@ TEST(MaterialState, OperatorUsesTheStateAndRecomputedFallsBackToStored) {
 // moduli start at getModulusFactor of the residual pressure (about 7% of the reference) and
 // grow with the confinement, so the stable step shrinks during the stage. A dt that is
 // stable at the start stops the run at the first periodic check after it is not.
+TEST(MaterialState, TheStableStepBoundNeverOverstatesTheStep) {
+  // The periodic re-check (contracts.hpp, ScaledStability): each element's reference omega^2
+  // once per stage, then the largest factor of its points times it. Through the stage switch
+  // and loading the bound's step is never above the exact one, equal to it while every point
+  // has the same factor, and close to it otherwise.
+  for (const auto& [kind, type] : kColumns) {
+    SCOPED_TRACE(std::string(kind) + " " + io::to_string(type));
+    const Compiled c = compile_model(column(type, kind), CompileOptions{});
+    InternalForce k(c, exec::GeometryCache::On);
+    ASSERT_TRUE(k.stability_may_change());
+    k.prepare_stability_bounds();
+    using B = InternalForce::Batches;
+    for (const auto scheme : {ExplicitScheme::ExplicitDifference, ExplicitScheme::CentralDifference}) {
+      const double exact = k.min_critical_dt(scheme, B::Changing), bound = k.min_critical_dt_bound(scheme);
+      EXPECT_LE(bound, exact);
+      EXPECT_NEAR(bound / exact, 1.0, 1e-11);  // stage 0: every factor is 1
+    }
+    double lo = 1.0;
+    for (int step = 1; step <= 10; ++step) {
+      if (step == 3) {
+        EXPECT_TRUE(k.set_material_stage(0, 1));
+        EXPECT_TRUE(k.set_material_stage(1, 1));
+      }
+      run(k, field(c, step, 1.0), field(c, step, 0.01), exec::default_force_settings());
+      k.commit_state();
+      const auto scheme = ExplicitScheme::ExplicitDifference;
+      const double exact = k.min_critical_dt(scheme, B::Changing), bound = k.min_critical_dt_bound(scheme);
+      EXPECT_LE(bound, exact) << step;
+      lo = std::min(lo, bound / exact);
+    }
+    std::printf("[ %s %s column: the bound's stable step is %.4f-1 of the exact one ]\n", io::to_string(type), kind,
+                lo);
+    EXPECT_GT(lo, 0.5);
+  }
+}
+
 TEST(MaterialState, ExplicitStageStopsWhenTheStableStepFallsBelowDt) {
   auto model = [](double dt, int steps) {
     io::Model m = column(io::ElementType::SSPbrick);
