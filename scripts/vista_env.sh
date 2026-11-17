@@ -16,6 +16,11 @@ module load cmake/4.1.1 hdf5/1.14.6 eigen/3.4.0 ninja/1.12.1 python3/3.11.8 > /d
 for m in gcc/13.2.0 cmake/4.1.1 hdf5/1.14.6 eigen/3.4.0 ninja/1.12.1 python3/3.11.8; do
   module is-loaded "$m" || echo "vista_env.sh: module $m did not load" >&2
 done
+# gh nodes (Grace + H200): CUDA for the vista-cuda-hopper90 preset.
+if command -v nvidia-smi > /dev/null && nvidia-smi -L > /dev/null 2>&1; then
+  module load cuda/12.6 > /dev/null 2>&1
+  module is-loaded cuda/12.6 || echo "vista_env.sh: module cuda/12.6 did not load" >&2
+fi
 module unload xalt > /dev/null 2>&1  # TACC's usage tracking preloads a library into every program
 unset LD_PRELOAD
 export HDF5_ROOT=$TACC_HDF5_DIR

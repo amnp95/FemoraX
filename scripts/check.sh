@@ -10,6 +10,7 @@
 #                               # (ASan cannot run on its compute nodes: CMakePresets.json)
 #                               # (source scripts/stampede3_env.sh first; on a compute node)
 #                               # Vista: vista-cpu-debug, vista-cpu-release, vista-cpu-ubsan
+#                               # (plus vista-cuda-hopper90 on gh nodes)
 #                               # (source scripts/vista_env.sh first; on a compute node)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -21,6 +22,10 @@ if [[ "${host}" == *.stampede3.tacc.utexas.edu ]]; then
   presets="s3-cpu-debug s3-cpu-release s3-cpu-ubsan"
 elif [[ "${host}" == *.vista.tacc.utexas.edu ]]; then
   presets="vista-cpu-debug vista-cpu-release vista-cpu-ubsan"
+  # gh nodes: the H200 too
+  if command -v nvidia-smi > /dev/null && nvidia-smi -L > /dev/null 2>&1; then
+    presets="${presets} vista-cuda-hopper90"
+  fi
 elif command -v nvidia-smi > /dev/null && nvidia-smi -L > /dev/null 2>&1 && [ -x /usr/local/cuda-13.1/bin/nvcc ]; then
   cmake -P cmake/FetchKokkosSource.cmake > /dev/null  # nvcc_wrapper for the CUDA preset
   presets="${presets} cuda-ampere86"
