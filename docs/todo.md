@@ -97,3 +97,20 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     Discussed with the user: keep the exact build for check.sh and the OpenSees comparisons,
     add a production build (fused, perhaps tuned for the CPU) whose tests compare at a
     tolerance as the CUDA build's do, and take benchmarks from it. Not decided or done.
+16. **Large models on the H200 (Vista gh, GH200, 2026-11-17).** `femorax_bench --filter
+    explicit_force_pdmy` (laminar soil columns n^3, dense and loose Ottawa sand,
+    PressureDependMultiYield, cached geometry, gather scatter): the best variant's force
+    evaluation, elastic / mixed / fully plastic state:
+    - stdBrick: 48^3 2.9 / 7.9 / 13.5 ms, 64^3 6.6 / 18.2 / 31.5 ms, 80^3 12.6 / 34.7 /
+      61.7 ms: linear in the elements, about 24 ns (elastic) and 120 ns (plastic) per
+      element; best: team_gather_ept4 (elastic, mixed), the compacted corrector (plastic).
+    - SSPbrick: 48^3 0.6 / 1.4 / 1.9 ms, 64^3 1.2 / 2.8 / 3.8 ms, 80^3 2.2 / 5.1 / 7.4 ms:
+      about 4 and 14 ns per element; best: flat_gather (with or without compaction).
+    - Memory: 96^3 ran out at 89.7 GB (the benchmark holds the three states at once): about
+      30 KB per plastic stdBrick element, so one plastic stdBrick model of about 3 million
+      elements fits the H200 (elastic stdBrick: about 3 KB, 25-30 million).
+    - The auto-tune picked team_gather_ept2 for the basin; plastic models gain up to 3x
+      with ept4 or the compacted path: check that the auto-tune finds them on full runs.
+    Next: a generator for large laminar soil boxes (gravity, the switch to plastic, base
+    shaking, no DRM) to run full analyses at 1-20 million elements, with the setup time
+    measured (about 50 s for the 46,080-element basin, likely the DRM file).
