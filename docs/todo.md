@@ -114,3 +114,22 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     Next: a generator for large laminar soil boxes (gravity, the switch to plastic, base
     shaking, no DRM) to run full analyses at 1-20 million elements, with the setup time
     measured (about 50 s for the 46,080-element basin, likely the DRM file).
+17. **Full runs on the H200 (Vista gh, 2026-11-17).**
+    - Site 2 basin, full 27.4 s (137,000 explicit steps): plastic 53.6 s of stepping
+      (0.391 ms/step), 1 min 55 s in all; elastic 41.1 s (0.300 ms/step), 1 min 37 s
+      (Grace CPU: 2 min 52 s and 2 min 41 s). Forced variants on the plastic basin:
+      team_gather_ept2 0.390, ept4 0.401, ept4 compacted 0.462, flat compacted 0.544 ms/step:
+      the auto-tune's choice (ept2) is the best there (one plastic region). Setup about 50 s
+      of each run: the DRM file (the soil boxes below set up in seconds).
+    - Laminar soil boxes, PressureIndependMultiYield clay, no gravity, 0.3 g 2 Hz base
+      shaking, 2000 explicit steps of 5e-4 (generator: /scratch/08189/amnp95/femorax_bench/
+      make_box.py on Vista, an experiment, not in the repository):
+      | box | step | GPU memory | compile + setup | whole run |
+      |---|---|---|---|---|
+      | 100^3 stdBrick (1 M) | 23.5 ms | 29.9 GB | 2.0 + 0.9 s | 55 s |
+      | 100^3 SSPbrick (1 M) | 10.5 ms | 5.4 GB | 2.1 + 0.8 s | 50 s |
+      | 200^3 SSPbrick (8 M) | 81.0 ms | 43.4 GB | 17.7 + 6.4 s | 382 s |
+      Linear in the elements. Limits on one H200: about 3 M plastic stdBrick, about 16 M
+      plastic SSPbrick. The 8 M run spends about 195 s outside stepping and setup: the
+      auto-tune timing every variant (colored ones included) on the full model; time it on
+      a sample of the batches for large models.
