@@ -385,14 +385,15 @@ double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, Expl
 
 // The cheap periodic re-check for materials with ScaledStability (contracts.hpp): each
 // element's omega^2 with the reference tangent, once per stage, into `ref` (per element)...
+// The element declares STABILITY_BOUND (it provides NSTABILITY_REFERENCE,
+// max_omega_sq_reference and max_omega_sq_bound) and its material ScaledStability. A plain
+// trait, not a requires-expression over the element's functions: nvcc 12.4-12.6 (cicc)
+// crashes on that expression in this translation unit (Vista gh, 2026-11-17).
 template <class Elem>
-inline constexpr bool kScaledStability = requires(const typename Elem::Params& p, const double (*xe)[Elem::NDM],
-                                                  Strided<double> r, Strided<const double> rc,
-                                                  PointArray<const double> c) {
-  Elem::NSTABILITY_REFERENCE;
-  Elem::max_omega_sq_reference(p, xe, r);
-  { Elem::max_omega_sq_bound(p, rc, c) } -> std::same_as<double>;
-};
+inline constexpr bool kScaledStability = [] {
+  if constexpr (requires { Elem::STABILITY_BOUND; }) return Elem::STABILITY_BOUND && ScaledStability<typename Elem::Material>;
+  else return false;
+}();
 
 template <class Elem>
 void reference_omega_sq(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec& ref) {

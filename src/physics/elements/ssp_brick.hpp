@@ -1223,6 +1223,7 @@ struct SSPbrick {
   // (Kstab + s K_ref <= (s / s_last) (Kstab + s_last K_ref)). A hair above, so rounding never
   // makes the bound too small.
   static constexpr int NSTABILITY_REFERENCE = 13;
+  static constexpr bool STABILITY_BOUND = true;  // the launch layer's cheap re-check (element_kernels.hpp)
   FEMORAX_HD static double stability_grid(int k) { return std::exp2(0.5 * (k - 4)); }
   FEMORAX_HD static void max_omega_sq_reference(const Params& p, const double (*xe)[NDM], Strided<double> ref)
     requires ScaledStability<Mat>

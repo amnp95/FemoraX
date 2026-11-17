@@ -637,6 +637,7 @@ struct StdBrick {
   // largest factor times the reference; a hair above it, so rounding never makes the bound
   // smaller than the eigenvalue it bounds).
   static constexpr int NSTABILITY_REFERENCE = 1;  // values per element
+  static constexpr bool STABILITY_BOUND = true;  // the launch layer's cheap re-check (element_kernels.hpp)
   FEMORAX_HD static void max_omega_sq_reference(const Params& p, const double (*xe)[NDM], Strided<double> ref)
     requires ScaledStability<Mat>
   {
