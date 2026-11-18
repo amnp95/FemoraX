@@ -243,7 +243,7 @@ Correctness before every commit; performance on TACC:
 
 ## Current milestone
 
-Milestone 4: DRM basin (H5DRM, absorbing boundaries; next: streaming the DRM histories,
-a stored OpenSees DRM box, implicit DRM, then Femora's basin example; docs/handoff.md and
-design.md, Roadmap). Milestone 2 (nonlinear layered soil column) is done. Update this line
+Milestone 4: DRM basin (H5DRM, absorbing boundaries; the DRM histories are streamed; next:
+the damped DRM layer (design.md, approved), a stored OpenSees DRM box, implicit DRM, then
+Femora's basin example; docs/handoff.md and design.md, Roadmap). Milestone 2 (nonlinear layered soil column) is done. Update this line
 when the milestone changes.
