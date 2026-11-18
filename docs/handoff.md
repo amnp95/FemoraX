@@ -120,6 +120,11 @@ Next steps (in order; each one commit; step 4 done):
    (50 s; fixed first, commit f2e8f22).
 4b. The damped DRM layer, step 1 (Rayleigh terms) done 2026-11-17 (docs/design.md); next its
    step 2 (Uniform damping state in the DRM kernel, a file's velocity dataset when present).
+   Effect on the elastic Site 2 basin (full 27.4 s, H200; its soil regions, DRM layer
+   included, have light Rayleigh damping): surface-centre displacement within 0.14 % of its
+   peak, acceleration 1.2 %; a DRM exterior node (scattered field) 0.84 % / 0.91 % (its
+   acceleration peak 0.859 -> 0.856); largest nodal change 3.4e-4 m at 10 s. The whole run
+   now takes 44.7 s on the H200 (96.6 s before the DRM reader fix and streaming).
 5. A tiny stored OpenSees DRM box reference (run once, stored), compared in the check.
 6. H5DRM in implicit stages: `form_unbalance` applies the forces, not verified yet
    (docs/todo.md item 10): a free field from the same Newmark recurrence, and the step-5
