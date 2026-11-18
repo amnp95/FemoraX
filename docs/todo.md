@@ -156,3 +156,9 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     SSPbrick (one point), buckets matched to the fit (7 filters in the bucket of 8), one state
     copy in explicit stages, filtering strains for elastic materials (no stored activation
     stress), team layouts for the damped batch.
+19. **Split `src/exec/internal_force.cpp` for the CUDA build (high priority).** It instantiates
+    every element x material entry x kernel variant in one translation unit: nvcc compiles it
+    on one core in about 14 minutes (Vista gh, 2026-11-18), most of every GPU check. Split it
+    into one file per element-material pair (or per kernel family), so the build compiles
+    them in parallel: expected 2-3 minutes with 72 cores. A build-structure change only (no
+    change in results); it also speeds up the laptop's CUDA and the SYCL builds.

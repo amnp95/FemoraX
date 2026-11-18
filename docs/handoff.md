@@ -119,6 +119,16 @@ Next steps (in order; each one commit; step 4 done):
    the element's own force with a DRM state per side) done 2026-11-18 (docs/design.md). Next:
    the basin with Uniform damping in all its soil against Rayleigh (Uniform verification 7);
    a file's velocity dataset when present.
+   Basin with Uniform damping (5 % over 0.1-10 Hz) in all its soil, DRM layer included,
+   absorber Rayleigh (2026-11-18, H200, full 27.4 s, 108.7 s against 44.7 s with Rayleigh):
+   surface-centre displacement peak 0.136 -> 0.133 m, acceleration 9.69 -> 8.50 m/s2; surface
+   acceleration spectra Uniform / Rayleigh 1.00 (0.2-1 Hz), 0.81 (1-3), 0.73 (3-6), 0.60
+   (6-10): the basin's Rayleigh (alphaM 0.94, betaK 5.3e-4 in region 1) damps 15 % at 0.5 Hz
+   but only 2-3 % at 3-15 Hz. DRM exterior node: acceleration peak 0.86 -> 1.18 m/s2 (+38 %):
+   the DRM is exact only when the box's soil is the medium of the free field (SW4's, with its
+   Q); Uniform's dispersion (x0.93-1.09 over the band) and 5 % differ from it, as Rayleigh
+   does differently. Next: Uniform damping matched to SW4's Q for Site 2 (ask the user for
+   the SW4 attenuation settings), then compare the scattered fields.
    Effect on the elastic Site 2 basin (full 27.4 s, H200; its soil regions, DRM layer
    included, have light Rayleigh damping): surface-centre displacement within 0.14 % of its
    peak, acceleration 1.2 %; a DRM exterior node (scattered field) 0.84 % / 0.91 % (its
