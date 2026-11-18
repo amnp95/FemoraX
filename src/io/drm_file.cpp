@@ -132,6 +132,11 @@ DrmReader::DrmReader(const std::string& path) : impl_(std::make_unique<Impl>(pat
 
 DrmReader::~DrmReader() = default;
 
+bool hdf5_thread_safe() {
+  hbool_t ts = 0;
+  return H5is_library_threadsafe(&ts) >= 0 && ts;
+}
+
 void read_drm_block(const std::string& path, const std::string& name, std::int64_t row_begin, std::int64_t row_count,
                     std::int64_t sample_begin, std::int64_t sample_count, std::vector<double>& out) {
   DrmReader(path).read(name, row_begin, row_count, sample_begin, sample_count, out);

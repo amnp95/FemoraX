@@ -1,7 +1,11 @@
 #include "exec/drm_load.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <future>
+#include <limits>
 #include <map>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -30,7 +34,8 @@ std::int64_t DrmLoad::device_bytes(std::int64_t nodes, std::int64_t element_dofs
          (static_cast<std::int64_t>(equations) + 1) * 8 + static_cast<std::int64_t>(equations) * 8;
 }
 
-DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, InternalForce& force)
+DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, InternalForce& force,
+                 std::int64_t window_samples_requested)
     : pattern_(p), file_(io::read_drm_header(p.path)), setup_(compile::setup_drm(p, file_, c)), force_(force),
       neq_(c.dofs.num_equations) {
   node_slot_ = upload("drm_node_slot", setup_.node_slot);
@@ -64,19 +69,78 @@ DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, Internal
   du_ = Vec("drm_u", static_cast<std::size_t>(3 * nodes));
   da_ = Vec("drm_a", static_cast<std::size_t>(3 * nodes));
 
-  // The matched nodes' histories, whole (step 3; streamed in time blocks in step 4).
+  // The history window (streamed: the class comment in drm_load.hpp).
   const std::int64_t T = file_.samples;
-  std::vector<double> hu(static_cast<std::size_t>(3 * nodes * T)), ha(hu.size()), block;
-  const io::DrmReader reader(file_.path);  // the file opened once for every row
-  for (std::int64_t sl = 0; sl < nodes; ++sl) {
-    const std::int64_t row = setup_.row[static_cast<std::size_t>(sl)];
-    reader.read("displacement", row, 3, 0, T, block);
-    std::copy(block.begin(), block.end(), hu.begin() + 3 * sl * T);
-    reader.read("acceleration", row, 3, 0, T, block);
-    std::copy(block.begin(), block.end(), ha.begin() + 3 * sl * T);
+  W_ = window_samples(nodes, T, window_samples_requested);
+  row_min_ = std::numeric_limits<std::int64_t>::max();
+  std::int64_t row_end = 0;
+  for (const auto r : setup_.row) {
+    row_min_ = std::min<std::int64_t>(row_min_, r);
+    row_end = std::max<std::int64_t>(row_end, r + 3);
   }
-  hist_u_ = upload("drm_history_u", hu);
-  hist_a_ = upload("drm_history_a", ha);
+  if (nodes == 0) row_min_ = 0;
+  row_count_ = row_end - row_min_;
+  reader_ = std::make_unique<io::DrmReader>(file_.path);
+  async_ = W_ < T && io::hdf5_thread_safe();
+  hist_u_ = Vec("drm_history_u", static_cast<std::size_t>(3 * nodes * W_));
+  hist_a_ = Vec("drm_history_a", static_cast<std::size_t>(3 * nodes * W_));
+}
+
+DrmLoad::~DrmLoad() {
+  if (prefetch_.valid()) prefetch_.wait();
+}
+
+std::int64_t DrmLoad::window_samples(std::int64_t nodes, std::int64_t samples, std::int64_t requested) {
+  std::int64_t w = requested;
+  if (w <= 0) {
+    constexpr std::int64_t budget = std::int64_t{256} << 20;  // bytes for both histories
+    w = nodes > 0 ? budget / (2 * 3 * nodes * 8) : samples;
+  }
+  return std::max<std::int64_t>(std::min<std::int64_t>(w, samples), std::min<std::int64_t>(2, samples));
+}
+
+void DrmLoad::read_window(std::int64_t s0, std::vector<double>& hu, std::vector<double>& ha) const {
+  const std::int64_t T = file_.samples, nodes = static_cast<std::int64_t>(setup_.node.size());
+  const std::int64_t n = std::min(W_, T - s0);
+  hu.assign(static_cast<std::size_t>(3 * nodes * W_), 0.0);
+  ha.assign(hu.size(), 0.0);
+  std::vector<double> block;
+  for (int h = 0; h < 2; ++h) {
+    reader_->read(h == 0 ? "displacement" : "acceleration", row_min_, row_count_, s0, n, block);
+    std::vector<double>& out = h == 0 ? hu : ha;
+    for (std::int64_t sl = 0; sl < nodes; ++sl) {
+      const std::int64_t row = setup_.row[static_cast<std::size_t>(sl)] - row_min_;
+      for (int c = 0; c < 3; ++c)
+        std::copy_n(block.begin() + (row + c) * n, n, out.begin() + (3 * sl + c) * W_);
+    }
+  }
+}
+
+void DrmLoad::ensure(std::int64_t k1, std::int64_t k2) {
+  if (s0_ >= 0 && k1 >= s0_ && k2 < s0_ + W_) return;
+  const std::int64_t T = file_.samples;
+  const std::int64_t target = std::min(k1, std::max<std::int64_t>(T - W_, 0));
+  if (prefetch_.valid()) prefetch_.get();  // rethrows a read error of the reader thread
+  if (pf_s0_ == target) {
+    std::swap(win_u_, pf_u_);
+    std::swap(win_a_, pf_a_);
+  } else {
+    read_window(target, win_u_, win_a_);
+  }
+  pf_s0_ = -1;
+  using Host = Kokkos::View<const double*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+  Kokkos::deep_copy(hist_u_, Host(win_u_.data(), win_u_.size()));
+  Kokkos::deep_copy(hist_a_, Host(win_a_.data(), win_a_.size()));
+  s0_ = target;
+  // Read the next window ahead: it starts at this window's last sample (or ends at the
+  // file's last sample), as ensure() will ask for it.
+  const std::int64_t next = std::min(s0_ + W_ - 1, std::max<std::int64_t>(T - W_, 0));
+  if (next > s0_) {
+    if (async_) {
+      pf_s0_ = next;
+      prefetch_ = std::async(std::launch::async, [this, next] { read_window(next, pf_u_, pf_a_); });
+    }
+  }
 }
 
 void DrmLoad::apply(double t, const Vec& f) {
@@ -94,12 +158,14 @@ void DrmLoad::apply(double t, const Vec& f) {
     dtau = 0.0;
   }
   const std::int64_t k1 = std::min<std::int64_t>(i1, T - 1);
+  ensure(std::min(k1, i2), std::max(k1, i2));
+  const std::int64_t W = W_, s0 = s0_;
   const auto hu = hist_u_, ha = hist_a_, du = du_, da = da_;
   const auto nodes = static_cast<Index>(du_.extent(0) / 3);
   Kokkos::parallel_for(
       "drm_motion", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, nodes), KOKKOS_LAMBDA(const Index sl) {
         for (int c = 0; c < 3; ++c) {
-          const std::int64_t r = (3 * static_cast<std::int64_t>(sl) + c) * T;
+          const std::int64_t r = (3 * static_cast<std::int64_t>(sl) + c) * W - s0;
           double d1 = hu(r + k1), d2 = hu(r + i2), a1 = ha(r + k1), a2 = ha(r + i2);
           if (c == 2) {  // the file's z axis points down
             d1 = -d1;

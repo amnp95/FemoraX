@@ -164,7 +164,8 @@ std::int64_t estimate_device_bytes(const io::Model& model, const compile::Compil
     const compile::DrmSetup s = compile::setup_drm(p, f, c);
     std::int64_t dofs = 0;
     for (const auto& e : s.elements) dofs += c.batches[static_cast<std::size_t>(e.batch)].ndof;
-    bytes += DrmLoad::device_bytes(static_cast<std::int64_t>(s.node.size()), dofs, f.samples, c.dofs.num_equations);
+    const auto nodes = static_cast<std::int64_t>(s.node.size());
+    bytes += DrmLoad::device_bytes(nodes, dofs, DrmLoad::window_samples(nodes, f.samples), c.dofs.num_equations);
   }
   return bytes;
 }
@@ -211,7 +212,8 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   Kokkos::deep_copy(u, 0.0);
   GroundMotions motions(model);
   std::vector<std::unique_ptr<DrmLoad>> drm;
-  for (const auto& p : model.drm_patterns) drm.push_back(std::make_unique<DrmLoad>(p, c, force));
+  for (const auto& p : model.drm_patterns)
+    drm.push_back(std::make_unique<DrmLoad>(p, c, force, opt.drm_window_samples));
   Recorders recorders(model, c, opt.vtkhdf_single_precision);
   recorders.attach(force);
   rep.setup_seconds = now() - t_setup;

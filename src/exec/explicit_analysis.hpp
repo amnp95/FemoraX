@@ -39,6 +39,8 @@ struct RunOptions {
   int stable_step_check_interval = 100;  // 0: only at the start of each stage
   bool verbose = true;
   bool vtkhdf_single_precision = false;  // VTKHDF responses as float32 (computation stays FP64)
+  // H5DRM: history samples on the device per pattern (0: from a 256 MB budget; tests set 2).
+  std::int64_t drm_window_samples = 0;
 };
 
 struct StageReport {

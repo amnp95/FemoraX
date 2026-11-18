@@ -59,6 +59,10 @@ class DrmReader {
   std::unique_ptr<Impl> impl_;
 };
 
+// Whether the HDF5 library was built thread-safe (H5is_library_threadsafe): only then may a
+// DrmReader read on one thread while other threads use HDF5 (the recorders).
+bool hdf5_thread_safe();
+
 // One block with a reader of its own (opens and closes the file: for single reads only).
 void read_drm_block(const std::string& path, const std::string& name, std::int64_t row_begin, std::int64_t row_count,
                     std::int64_t sample_begin, std::int64_t sample_count, std::vector<double>& out);

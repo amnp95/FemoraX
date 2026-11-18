@@ -223,6 +223,18 @@ TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) {
               S, inside.size(), kSteps, worst / scale, scale);
   EXPECT_GT(scale, 1e-6);
   EXPECT_LE(worst, 1e-10 * scale);
+
+  // Streaming (drm_load.hpp): history windows of 2 samples (a new window every step) and of 7
+  // (boundaries at odd steps) give the same bits as the whole history on the device.
+  for (const std::int64_t w : {2, 7}) {
+    SCOPED_TRACE("window " + std::to_string(w));
+    exec::RunOptions ow = o;
+    ow.drm_window_samples = w;
+    exec::run_model(box, ow);
+    const auto rw = read_rows(bd);
+    ASSERT_EQ(rw.size(), rb.size());
+    for (std::size_t n = 0; n < rb.size(); ++n) ASSERT_EQ(rw[n], rb[n]) << "step " << n;
+  }
 }
 
 }  // namespace

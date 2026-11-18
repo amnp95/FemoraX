@@ -104,12 +104,20 @@ Done (commits `14de063`, `b4a32fa`, `5024299`):
    it but never applies it). `test_drm_free_field`: a box inside a DRM layer reproduces a
    free field to 2.2e-14 (explicit).
 
-Next steps (in order; each one commit):
+Next steps (in order; each one commit; step 4 done):
 
-4. Stream the DRM histories in time blocks (double buffering: a reader thread, pinned host
-   buffers, asynchronous copies, block size from a memory budget), with a test that block
-   size 1 equals the whole history in memory. Today the whole history is on the device
-   (the Hayward Site 2 file: 0.6 GB as FP64).
+4. Stream the DRM histories in time blocks. Done (2026-11-17, Vista gh): `DrmLoad` keeps a
+   window of W samples on the device (W from a 256 MB budget, `RunOptions::
+   drm_window_samples` to set it), moves it forward when the interpolation's samples leave
+   it (consecutive windows share a sample), reads each window with one HDF5 read through an
+   `io::DrmReader` that keeps the file open, and reads the next window ahead on a thread when
+   HDF5 is thread-safe (`io::hdf5_thread_safe`; synchronously otherwise). The host-to-device
+   copy of a window is synchronous (about 30 MB, sub-millisecond on GH200). Tests: the DRM
+   box with W = 2 and W = 7 equals the whole history bit for bit; the Site 2 basin (5000
+   steps, H200) writes bit-identical output; its run takes 4.7 s (elastic) and 10.6 s
+   (plastic) instead of 8.7 and 14.5 s, setup 0.13 s, the history window 256 MB instead of
+   0.6 GB. Before this step the setup read every node's history with its own file open
+   (50 s; fixed first, commit f2e8f22).
 5. A tiny stored OpenSees DRM box reference (run once, stored), compared in the check.
 6. H5DRM in implicit stages: `form_unbalance` applies the forces, not verified yet
    (docs/todo.md item 10): a free field from the same Newmark recurrence, and the step-5
