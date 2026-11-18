@@ -146,7 +146,9 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     about 34 ns per damped element per step against about 7 ns for an average undamped one
     (on Stampede3's CPUs the same region cost nothing measurable). On the GPU the filter
     state (66 doubles per Gauss point, read and written every step) matters; part of the
-    30 us may be the separate batch's launch. Next: a benchmark of a fully damped column
-    (`femorax_bench`), to know the cost of damping all the soil before relying on it, and
-    then the options (state in FP64 but fewer filters per bucket, team layouts for the
-    damped batch).
+    30 us may be the separate batch's launch. Fully damped plastic soil boxes (1 M PIMY
+    elements, every element Uniform-damped, 2000 steps, same day): stdBrick 23.5 -> 30.8
+    ms/step (+31 %), 29.9 -> 35.2 GB; SSPbrick 10.5 -> 13.3 ms/step (+26 %), 5.4 -> 6.1 GB.
+    For plastic soil a moderate cost; elastic soil (cheaper per element) will show a larger
+    relative cost: measure it with an elastic box next, then the options (fewer filters per
+    bucket, team layouts for the damped batch).
