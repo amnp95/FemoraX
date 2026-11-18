@@ -81,6 +81,8 @@ class DrmLoad {
   };
   std::vector<BatchList> lists_;
   Vec du_, da_;            // the free-field motion of the matched nodes, [3 * nodes]
+  Vec dv_;                 // and its velocity, when a DRM element has Rayleigh damping
+  bool damped_ = false;    // some DRM element has Rayleigh damping (docs/design.md, "Damped DRM layer")
   Vec hist_u_, hist_a_;    // the window: [(3 * slot + c) * W + (k - s0)]
   std::int64_t W_ = 0, s0_ = -1;
   std::int64_t row_min_ = 0, row_count_ = 0;  // the file rows the matched nodes span

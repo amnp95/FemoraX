@@ -157,7 +157,7 @@ class InternalForce {
   // kernels::launch_drm_forces) into slots(base + a * n + i).
   void drm_forces(int batch, const Kokkos::View<std::int32_t*, Space>& elems,
                   const Kokkos::View<std::uint32_t*, Space>& masks, const Kokkos::View<std::int32_t*, Space>& node_slot,
-                  const Vec& du, const Vec& da, const Vec& slots, std::int64_t base);
+                  const Vec& du, const Vec& da, const Vec& dv, bool damped, const Vec& slots, std::int64_t base);
 
   // Smallest stable explicit step over the elements of the chosen batches (docs/design.md,
   // "Stable time step"): all of them, or only those whose stable step can change during a

@@ -149,8 +149,8 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
 template <class Elem, bool Cached>
 void launch_drm_forces(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const Vec& coords, Index N,
                        const Kokkos::View<Index*, Space>& elems, const Kokkos::View<std::uint32_t*, Space>& masks,
-                       const Kokkos::View<Index*, Space>& node_slot, const Vec& du, const Vec& da, const Vec& slots,
-                       std::int64_t base) {
+                       const Kokkos::View<Index*, Space>& node_slot, const Vec& du, const Vec& da, const Vec& dv,
+                       bool damped, const Vec& slots, std::int64_t base) {
   static_assert(MatrixFreeElement<Elem>, "DRM forces need a MatrixFreeElement");
   using Mat = typename Elem::Material;
   constexpr int NNODE = Elem::NNODE, NDOF = Elem::NDOF, NDM = Elem::NDM, NS = Mat::NSTRAIN;
@@ -173,7 +173,15 @@ void launch_drm_forces(const DevBatch<Elem>& b, const DevTangents<Elem>& t, cons
           const Index sl = node_slot(node(a * P + e));
           const bool boundary = ((mask >> a) & 1u) != 0;
           for (int c = 0; c < 3; ++c) {
-            const double uu = du(3 * static_cast<std::int64_t>(sl) + c), aa = da(3 * static_cast<std::int64_t>(sl) + c);
+            double uu = du(3 * static_cast<std::int64_t>(sl) + c), aa = da(3 * static_cast<std::int64_t>(sl) + c);
+            if (damped) {
+              // The layer's Rayleigh damping (docs/design.md, "Damped DRM layer"): for an
+              // elastic layer C v = alphaM M v + (betaK + betaKinit + betaKcomm) K v, so the
+              // operator below applies M (a + alphaM v) + K (u + beta v).
+              const double vv = dv(3 * static_cast<std::int64_t>(sl) + c);
+              uu += (pr.damp.betaK + pr.damp.betaKinit + pr.damp.betaKcomm) * vv;
+              aa += pr.damp.alphaM * vv;
+            }
             ue_x[3 * a + c] = boundary ? 0.0 : uu;
             ae_x[3 * a + c] = boundary ? 0.0 : aa;
             ue_b[3 * a + c] = boundary ? uu : 0.0;

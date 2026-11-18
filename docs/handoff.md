@@ -118,6 +118,8 @@ Next steps (in order; each one commit; step 4 done):
    (plastic) instead of 8.7 and 14.5 s, setup 0.13 s, the history window 256 MB instead of
    0.6 GB. Before this step the setup read every node's history with its own file open
    (50 s; fixed first, commit f2e8f22).
+4b. The damped DRM layer, step 1 (Rayleigh terms) done 2026-11-17 (docs/design.md); next its
+   step 2 (Uniform damping state in the DRM kernel, a file's velocity dataset when present).
 5. A tiny stored OpenSees DRM box reference (run once, stored), compared in the check.
 6. H5DRM in implicit stages: `form_unbalance` applies the forces, not verified yet
    (docs/todo.md item 10): a free field from the same Newmark recurrence, and the step-5

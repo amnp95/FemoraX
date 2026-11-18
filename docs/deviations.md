@@ -118,6 +118,24 @@ Default tolerances (until a component states otherwise):
 
 ## Entries
 
+### H5DRM — the DRM forces include the layer's Rayleigh damping (decided with the user, 2026-11-12)
+- OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp` (`CalculateBoundaryForces`),
+  commit 955ceb0
+- Difference: OpenSees' effective forces use the DRM elements' mass and stiffness only
+  (`-M_be a_e - K_be u_e`, `M_eb a_b + K_eb u_b`), even when the elements have Rayleigh
+  damping; FemoraX adds the layer's damping, `C v` with `C = alphaM M + (betaK + betaKinit +
+  betaKcomm) K` for the elastic layer, applied as `M (a + alphaM v) + K (u + beta v)`. The
+  free field's velocity: central differences of the file's displacement samples,
+  interpolated like the displacement (a file's own velocity dataset: later). Undamped DRM
+  layers are unchanged, bit for bit.
+- Why: the DRM layer is soil; with damping in the layer and not in the forces the free field
+  is not reproduced (docs/design.md, "Damped DRM layer").
+- Effect on results: models whose DRM layer has Rayleigh damping (Femora's basin: its soil
+  regions include the layer) differ from OpenSees by the damping force of the free field in
+  the layer. A damped box inside a damped layer follows the damped free field within 8.5e-4
+  of its peak displacement; with OpenSees' forces within 4.1e-2.
+- Test: `DrmFreeField.ADampedBoxInsideADampedLayerMovesAsTheFreeField`.
+
 ### H5DRM — a pattern factor other than 1 is refused (2026-11-10, milestone 4)
 - OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp`, commit 955ceb0
 - Difference: OpenSees reads the pattern's `factor` and stores it, but never applies it to

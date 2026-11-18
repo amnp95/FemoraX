@@ -43,6 +43,7 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
 | Rayleigh, frequency Rayleigh (per region) | in progress (1a) | |
+| Rayleigh in the H5DRM layer | supported, deviation | the DRM forces include the layer's damping (OpenSees omits it; docs/deviations.md) |
 | Uniform (`damping Uniform`, per region with `-damp`) | supported (schema 0.7) | stdBrick and SSPbrick with ElasticIsotropic, PressureIndependMultiYield and PressureDependMultiYield (20 surfaces); explicit and implicit stages; `-activateTime`, `-deactivateTime`; FemoraX's fit by default, OpenSees' with `fit = "opensees"` (docs/deviations.md); not yet: `-fact`, multi-yield materials with more than 20 surfaces, damped DRM-layer elements |
 | modal, secant stiffness proportional | not planned | Uniform damping covers them (docs/design.md) |
 

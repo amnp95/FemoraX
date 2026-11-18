@@ -91,14 +91,19 @@ void add_node_recorder(io::Model& m, const std::string& name, const std::string&
   m.process.push_back({"0" + name, "", io::RecorderStep{name}});
 }
 
-TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) {
+// damped: Rayleigh damping (the synthetic column's coefficients) in the free-field column
+// and in the whole box, DRM layer included: the DRM forces then carry the layer's damping
+// (docs/design.md, "Damped DRM layer"), with the free field's velocity from central
+// differences of its displacement samples. Returns the largest difference from the free
+// field over the box's inside, relative to the largest displacement.
+double free_field_box(bool damped) {
   // 1. The free field: a 1 x 1 x 8 laminar column, base pulse in x.
   femorax::testing::ColumnSpec cs;
   cs.nx = cs.ny = 1;
   cs.nz = kNz;
   cs.dz = kDz;
   cs.element = io::ElementType::SSPbrick;
-  cs.damping = false;
+  cs.damping = damped;
   io::Model col = femorax::testing::soil_column(cs);
   io::PathSeries ps;
   ps.tag = 1;
@@ -119,7 +124,8 @@ TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) {
   o.renumbering = compile::Renumbering::Off;
   exec::run_model(col, o);
   const auto rd = read_rows(cd), ra = read_rows(ca);
-  ASSERT_EQ(rd.size(), static_cast<std::size_t>(kSteps));
+  EXPECT_EQ(rd.size(), static_cast<std::size_t>(kSteps));
+  if (rd.size() != static_cast<std::size_t>(kSteps)) return 1.0;
 
   // Total motion: relative + ground, the ground displacement by ExplicitDifference's own
   // recurrence (v += dt a_n, u += dt v, a at the new time) from rest.
@@ -206,7 +212,8 @@ TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) {
   io::check_supported(box, io::Capabilities{});
   exec::run_model(box, o);
   const auto rb = read_rows(bd);
-  ASSERT_EQ(rb.size(), static_cast<std::size_t>(kSteps));
+  EXPECT_EQ(rb.size(), static_cast<std::size_t>(kSteps));
+  if (rb.size() != static_cast<std::size_t>(kSteps)) return 1.0;
 
   double worst = 0.0, scale = 0.0;
   for (int n = 0; n < kSteps; ++n)
@@ -218,11 +225,10 @@ TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) {
         worst = std::max(worst, std::abs(rb[static_cast<std::size_t>(n)][1 + 3 * q + static_cast<std::size_t>(c)] - want));
       }
     }
-  std::printf("[ DRM box: %zu stations, %zu nodes inside the layer, %d steps: largest difference from the free "
+  std::printf("[ DRM box%s: %zu stations, %zu nodes inside the layer, %d steps: largest difference from the free "
               "field %.2e of its largest displacement %.3e ]\n",
-              S, inside.size(), kSteps, worst / scale, scale);
+              damped ? " (Rayleigh-damped)" : "", S, inside.size(), kSteps, worst / scale, scale);
   EXPECT_GT(scale, 1e-6);
-  EXPECT_LE(worst, 1e-10 * scale);
 
   // Streaming (drm_load.hpp): history windows of 2 samples (a new window every step) and of 7
   // (boundaries at odd steps) give the same bits as the whole history on the device.
@@ -232,9 +238,20 @@ TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) {
     ow.drm_window_samples = w;
     exec::run_model(box, ow);
     const auto rw = read_rows(bd);
-    ASSERT_EQ(rw.size(), rb.size());
-    for (std::size_t n = 0; n < rb.size(); ++n) ASSERT_EQ(rw[n], rb[n]) << "step " << n;
+    EXPECT_EQ(rw.size(), rb.size());
+    if (rw.size() != rb.size()) return 1.0;
+    for (std::size_t n = 0; n < rb.size(); ++n) EXPECT_EQ(rw[n], rb[n]) << "step " << n;
   }
+  return worst / scale;
+}
+
+TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) { EXPECT_LE(free_field_box(false), 1e-10); }
+
+// With the layer's damping in the DRM forces: 8.5e-4 (the velocity's central differences
+// and the half-step damping of ExplicitDifference); with OpenSees' forces (mass and stiffness
+// only) the same box is off by 4.1e-2 (measured 2026-11-17).
+TEST(DrmFreeField, ADampedBoxInsideADampedLayerMovesAsTheFreeField) {
+  EXPECT_LE(free_field_box(true), 2e-3);
 }
 
 }  // namespace

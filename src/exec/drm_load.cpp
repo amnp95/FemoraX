@@ -54,6 +54,8 @@ DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, Internal
     for (const auto* e : list) {
       elems.push_back(e->element);
       masks.push_back(e->boundary_mask);
+      const Rayleigh& d = hb.params[static_cast<std::size_t>(hb.param[static_cast<std::size_t>(e->element)])].damping;
+      damped_ |= d.alphaM != 0.0 || d.betaK != 0.0 || d.betaKinit != 0.0 || d.betaKcomm != 0.0;
     }
     lists_.push_back({bi, upload("drm_elements", elems), upload("drm_masks", masks), base});
     for (std::int64_t i = 0; i < n; ++i)
@@ -68,10 +70,13 @@ DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, Internal
   gather_ = SlotGather(base, neq_, pairs);
   du_ = Vec("drm_u", static_cast<std::size_t>(3 * nodes));
   da_ = Vec("drm_a", static_cast<std::size_t>(3 * nodes));
+  if (damped_) dv_ = Vec("drm_v", static_cast<std::size_t>(3 * nodes));
 
   // The history window (streamed: the class comment in drm_load.hpp).
   const std::int64_t T = file_.samples;
   W_ = window_samples(nodes, T, window_samples_requested);
+  // The velocity's central differences need a sample on each side of the two interpolated.
+  if (damped_) W_ = std::min<std::int64_t>(std::max<std::int64_t>(W_, 4), T);
   row_min_ = std::numeric_limits<std::int64_t>::max();
   std::int64_t row_end = 0;
   for (const auto r : setup_.row) {
@@ -158,9 +163,15 @@ void DrmLoad::apply(double t, const Vec& f) {
     dtau = 0.0;
   }
   const std::int64_t k1 = std::min<std::int64_t>(i1, T - 1);
-  ensure(std::min(k1, i2), std::max(k1, i2));
+  if (damped_) {
+    ensure(std::max<std::int64_t>(std::min(k1, i2) - 1, 0), std::min(std::max(k1, i2) + 1, T - 1));
+  } else {
+    ensure(std::min(k1, i2), std::max(k1, i2));
+  }
   const std::int64_t W = W_, s0 = s0_;
-  const auto hu = hist_u_, ha = hist_a_, du = du_, da = da_;
+  const bool damped = damped_;
+  const double inv_dt = 1.0 / dt;
+  const auto hu = hist_u_, ha = hist_a_, du = du_, da = da_, dv = dv_;
   const auto nodes = static_cast<Index>(du_.extent(0) / 3);
   Kokkos::parallel_for(
       "drm_motion", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, nodes), KOKKOS_LAMBDA(const Index sl) {
@@ -175,9 +186,21 @@ void DrmLoad::apply(double t, const Vec& f) {
           }
           du(3 * static_cast<std::int64_t>(sl) + c) = d1 * (1 - dtau) + d2 * (dtau);
           da(3 * static_cast<std::int64_t>(sl) + c) = a1 * (1 - dtau) + a2 * (dtau);
+          if (damped) {
+            // The free field's velocity: central differences of the displacement samples
+            // (one-sided at the record's ends), interpolated like the displacement.
+            auto vel = [&](std::int64_t k) {
+              const std::int64_t lo = k > 0 ? k - 1 : k, hi = k < T - 1 ? k + 1 : k;
+              if (hi == lo) return 0.0;  // a single sample
+              const double v = (hu(r + hi) - hu(r + lo)) * inv_dt / static_cast<double>(hi - lo);
+              return c == 2 ? -v : v;
+            };
+            dv(3 * static_cast<std::int64_t>(sl) + c) = vel(k1) * (1 - dtau) + vel(i2) * dtau;
+          }
         }
       });
-  for (const auto& l : lists_) force_.drm_forces(l.batch, l.elems, l.masks, node_slot_, du_, da_, gather_.slots(), l.base);
+  for (const auto& l : lists_)
+    force_.drm_forces(l.batch, l.elems, l.masks, node_slot_, du_, da_, dv_, damped_, gather_.slots(), l.base);
   gather_.gather(forces_);
   solvers::VectorOps::axpy(-1.0, forces_, f);
 }

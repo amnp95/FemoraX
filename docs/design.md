@@ -844,6 +844,12 @@ vanish. The same run with the old forces measures the inconsistency they leave.
 Rayleigh terms; (2) the Uniform damping state and terms; (3) the deviation entry, the
 support table and the basin with Uniform damping in all its soil. To be done together with
 the H5DRM streaming rework of the same kernel.
+Step 1 done (2026-11-17): the free field's velocity from central differences of the
+displacement samples (the Site 2 file has no velocity dataset; reading one when present is
+for step 2), the window kept at 4 samples or more; the kernel applies
+`M (a + alphaM v) + K (u + beta v)`; only when a DRM element has Rayleigh damping, so undamped
+layers keep their bits. A damped box inside a damped layer: 8.5e-4 of the peak displacement
+from the free field, against 4.1e-2 with OpenSees' forces.
 
 ## Time integration and algorithms
 
