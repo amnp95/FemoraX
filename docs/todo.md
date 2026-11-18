@@ -149,6 +149,10 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     30 us may be the separate batch's launch. Fully damped plastic soil boxes (1 M PIMY
     elements, every element Uniform-damped, 2000 steps, same day): stdBrick 23.5 -> 30.8
     ms/step (+31 %), 29.9 -> 35.2 GB; SSPbrick 10.5 -> 13.3 ms/step (+26 %), 5.4 -> 6.1 GB.
-    For plastic soil a moderate cost; elastic soil (cheaper per element) will show a larger
-    relative cost: measure it with an elastic box next, then the options (fewer filters per
-    bucket, team layouts for the damped batch).
+    For plastic soil a moderate cost. Elastic (ElasticIsotropic, 1 M stdBrick, the same box):
+    2.72 -> 9.34 ms/step (3.4x), 2.45 -> 10.9 GB (4.4x): the filter state (66 doubles per
+    Gauss point, both buffers) is most of the work and memory of a damped elastic element.
+    Still about 10 min for a 30 s record of a 1 M damped elastic box on one H200. Options:
+    SSPbrick (one point), buckets matched to the fit (7 filters in the bucket of 8), one state
+    copy in explicit stages, filtering strains for elastic materials (no stored activation
+    stress), team layouts for the damped batch.
