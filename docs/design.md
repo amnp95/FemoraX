@@ -899,6 +899,70 @@ GPU gains most, because almost all the work is element state determination.
   small elements. PML3D carries its own integration parameters; check its OpenSees
   implementation before supporting it in explicit runs.
 
+## Local time stepping (plan, 2026-11-17; waiting for the user's approval)
+
+**The problem.** An explicit stage steps every element at the smallest stable step of the
+model. A few stiff or small elements set it for everything: structures in soil (beams and
+columns: dt ~ L/c with c ~ 3500-5100 m/s, and ~ L^2 in bending; the user's basin-with-
+buildings run needed 5e-5 against 2e-4 for the soil), refined meshes near a structure,
+penalty interfaces and contact, and the damping stiffening. Discussed with the user
+(2026-11-12): production explicit codes scale rotary inertia and mass for this; the modern
+answer is local time stepping (LTS), where each part of the mesh advances at its own stable
+step, explicit throughout (no Newton, so no convergence problems), with the cost in
+proportion to the stiff part.
+
+**Method.** Multilevel explicit LTS for second-order systems: Diaz & Grote (2009, energy-
+conserving leapfrog LTS) and its Newmark form on GPUs (Rietmann et al., 2017, SPECFEM). Levels
+p = 0..L with steps dt_p = dt / m^p (m = 2 by default): each element gets the coarsest level
+whose step is at most its own stable step (`critical_dt`), and each equation the finest level
+of the elements that touch it. One coarse step: the coarse elements' forces are evaluated
+once; the fine equations take m^p substeps in which only the fine elements are evaluated,
+with the coarse contribution held as in the method (so the scheme is second order and
+conserves a discrete energy without damping); then the coarse equations advance. With one
+level the stage is today's ExplicitDifference / CentralDifference, bit for bit.
+
+**What changes in FemoraX** (the physics layer does not: elements and materials never see
+time steps beyond the `StepContext` they already receive):
+- *Compile step:* levels per element and per equation; batches split by level (a batch key
+  gains the level); index lists of each level's equations; the lumped mass per level.
+- *Explicit time loop:* the multilevel step; forces per level (the force kernels already run
+  per batch; the gather sums each level's slots); state commits per batch at the batch's
+  own substeps (commit is a per-batch buffer swap); the `StepContext` per batch carries the
+  level's `dT`, so Uniform damping's filters see their own step.
+- *Stable-step checks* per level; the run summary reports the levels, their elements and the
+  cost saved against a single step.
+- *Loads:* ground motion and H5DRM forces evaluated at the substep times of the equations they
+  load (the DRM layer is soil: normally the coarse level).
+- *Recorders* sample at coarse steps.
+- *GPU:* a fine level of a few thousand elements runs m^p small launches per coarse step;
+  launch overhead can rival the soil's step (0.3 ms for the basin on an H200). Mitigation:
+  capture the substeps in a Kokkos Graph, or fuse small levels into one launch; measured
+  before choosing.
+- *Multi-GPU (later):* the fine equations' halo is exchanged at every substep.
+
+**Damping (the research part).** The published schemes are undamped (or with simple mass
+damping). Rayleigh stiffness damping, ExplicitDifference's half-step velocity and the Uniform
+filters need their own derivation and stability analysis: first the undamped scheme, then
+mass damping, then stiffness damping and Uniform, each with its stability limit per level.
+
+**Options and defaults.** Off by default (FemoraX-only option, compatibility level 3: an
+OpenSees run of the same model uses one step); a schema addition when it is ready (asked
+first): an explicit stage's `local_time_stepping` (levels, ratio), or automatic levels from
+the elements' stable steps.
+
+**Verification.** (1) A 1D bar with a refined (or stiffer) segment: LTS against a single-step
+run at the fine step and the analytical wave solution, second-order convergence, stability
+up to each level's limit, energy conservation without damping. (2) A soil column with a stiff
+inclusion (later: a beam), against the single-step run. (3) With one level, today's results
+bit for bit. (4) Timing: the basin-with-buildings shape (soil coarse, structure fine) against
+a single step.
+
+**Steps (one commit each, after approval).** (1) A host prototype of the undamped multilevel
+scheme on a 1D bar, the tests of (1). (2) Levels in the compile step (no behaviour change).
+(3) The undamped LTS in the explicit time loop, tests (2)-(3). (4) Mass then stiffness
+damping, then Uniform. (5) The GPU launch strategy, benchmarks. (6) The schema option. Before
+or with the beams (milestone 3), which are its first real use.
+
 ## Linear solvers
 
 Decided for milestone 1b (2026-11-06): **the implicit path is matrix-free.** Goals: every
