@@ -55,6 +55,8 @@ class DrmLoad {
   std::int32_t tag() const { return pattern_.tag; }
   // f -= the DRM forces at time t.
   void apply(double t, const Vec& f);
+  // With the model's commit: the DRM elements' own states (Uniform damping) become committed.
+  void commit();
   const compile::DrmSetup& setup() const { return setup_; }
   const io::DrmFile& file() const { return file_; }
   // Device bytes of a pattern with this many matched nodes, DRM element DOFs and history
@@ -78,6 +80,10 @@ class DrmLoad {
     Kokkos::View<std::int32_t*, Space> elems;
     Kokkos::View<std::uint32_t*, Space> masks;
     std::int64_t base;
+    // Linear materials with state (Uniform-damped elastic): the DRM elements' own state for
+    // the free field's two sides, committed and trial (InternalForce::drm_needs_state).
+    Vec state[2];
+    int current = 0;
   };
   std::vector<BatchList> lists_;
   Vec du_, da_;            // the free-field motion of the matched nodes, [3 * nodes]

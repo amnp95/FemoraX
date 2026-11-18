@@ -228,6 +228,79 @@ void launch_drm_forces(const DevBatch<Elem>& b, const DevTangents<Elem>& t, cons
       });
 }
 
+// A material whose response is linear but has state (Uniform damping on an elastic material:
+// the state is the damping's filters): the DRM forces need the element's own force, not its
+// constant tangent (docs/design.md, "Damped DRM layer").
+template <class Mat>
+inline constexpr bool kLinearWithState = [] {
+  if constexpr (requires { typename Mat::Base; }) return Mat::Base::NSTATE == 0 && Mat::NSTATE > 0;
+  else return false;
+}();
+
+// H5DRM effective forces of the DRM elements of a batch whose material is linear with state:
+// the same split as launch_drm_forces, but y_e = F(u_e, v_e) + M a_e with F the element's own
+// force (compute<false>: stiffness, Rayleigh damping, the material's damping stress) for the
+// free field restricted to the exterior nodes, from its own state (sc / st: committed and
+// trial, [state of DRM element i on the exterior side, then of i + n on the boundary side],
+// the per-point layout of state_of with 2 n elements); y_b likewise. No body force.
+template <class Elem>
+void launch_drm_forces_compute(const DevBatch<Elem>& b, const Vec& coords, Index N,
+                               const Kokkos::View<Index*, Space>& elems,
+                               const Kokkos::View<std::uint32_t*, Space>& masks,
+                               const Kokkos::View<Index*, Space>& node_slot, const Vec& du, const Vec& da,
+                               const Vec& dv, const Vec& sc, const Vec& st, const Vec& slots, std::int64_t base) {
+  constexpr int NNODE = Elem::NNODE, NDOF = Elem::NDOF, NDM = Elem::NDM;
+  const auto node = b.node, param = b.param;
+  const auto params = b.params;
+  const StepContext step = b.step;
+  const Index P = b.padded;
+  const Index n = static_cast<Index>(elems.extent(0));
+  if (n == 0) return;
+  const bool has_v = dv.extent(0) > 0;
+  Kokkos::parallel_for(
+      "element_drm_forces_compute", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, n),
+      KOKKOS_LAMBDA(const Index i) {
+        const Index e = elems(i);
+        const std::uint32_t mask = masks(i);
+        const DevParams<Elem>& pr = params(param(e));
+        typename Elem::Params pz = pr.p;  // the DRM forces carry no body force
+        pz.b[0] = pz.b[1] = pz.b[2] = 0.0;
+        double ue_x[NDOF], ve_x[NDOF], ae_x[NDOF], ue_b[NDOF], ve_b[NDOF], ae_b[NDOF], xe[NNODE][NDM];
+        for (int a = 0; a < NNODE; ++a) {
+          const Index nd = node(a * P + e);
+          for (int d = 0; d < NDM; ++d) xe[a][d] = coords(d * N + nd);
+          const std::int64_t sl = 3 * static_cast<std::int64_t>(node_slot(nd));
+          const bool boundary = ((mask >> a) & 1u) != 0;
+          for (int c = 0; c < 3; ++c) {
+            const double uu = du(sl + c), aa = da(sl + c), vv = has_v ? dv(sl + c) : 0.0;
+            ue_x[3 * a + c] = boundary ? 0.0 : uu;
+            ve_x[3 * a + c] = boundary ? 0.0 : vv;
+            ae_x[3 * a + c] = boundary ? 0.0 : aa;
+            ue_b[3 * a + c] = boundary ? uu : 0.0;
+            ve_b[3 * a + c] = boundary ? vv : 0.0;
+            ae_b[3 * a + c] = boundary ? aa : 0.0;
+          }
+        }
+        double fx[NDOF], fb[NDOF];
+        Elem::template compute<false>(pz, with_step(pr.damp, step), xe, ue_x, ve_x, state_of<Elem>(sc, i, 2 * n),
+                                      state_of<Elem>(st, i, 2 * n), fx, nullptr);
+        Elem::template compute<false>(pz, with_step(pr.damp, step), xe, ue_b, ve_b,
+                                      state_of<Elem>(sc, n + i, 2 * n), state_of<Elem>(st, n + i, 2 * n), fb,
+                                      nullptr);
+        double Me[NDOF * NDOF];
+        Elem::mass(pz, xe, Me);
+        for (int a = 0; a < NDOF; ++a) {
+          double mx = 0.0, mb = 0.0;
+          for (int k = 0; k < NDOF; ++k) {
+            mx += Me[a * NDOF + k] * ae_x[k];
+            mb += Me[a * NDOF + k] * ae_b[k];
+          }
+          const bool boundary = ((mask >> (a / 3)) & 1u) != 0;
+          slots(base + static_cast<std::int64_t>(a) * n + i) = boundary ? (-mx - fx[a]) : (mb + fb[a]);
+        }
+      });
+}
+
 // State determination for the Stored source: D at every point at displacement u.
 template <class Elem, bool Cached>
 void launch_store_tangents(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const Vec& coords, Index N,

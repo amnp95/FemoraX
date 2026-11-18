@@ -150,4 +150,8 @@ void GroundMotions::apply_drm(double t, const Kokkos::View<double*, Space>& f) c
   for (auto* d : drm_) d->apply(t, f);
 }
 
+void GroundMotions::commit_drm() const {
+  for (auto* d : drm_) d->commit();
+}
+
 }  // namespace femorax::exec

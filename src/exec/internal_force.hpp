@@ -157,7 +157,13 @@ class InternalForce {
   // kernels::launch_drm_forces) into slots(base + a * n + i).
   void drm_forces(int batch, const Kokkos::View<std::int32_t*, Space>& elems,
                   const Kokkos::View<std::uint32_t*, Space>& masks, const Kokkos::View<std::int32_t*, Space>& node_slot,
-                  const Vec& du, const Vec& da, const Vec& dv, bool damped, const Vec& slots, std::int64_t base);
+                  const Vec& du, const Vec& da, const Vec& dv, bool damped, const Vec& sc, const Vec& st,
+                  const Vec& slots, std::int64_t base);
+  // Whether batch `batch`'s DRM forces use the element's own force with a DRM state of their
+  // own (a linear material with state: Uniform-damped elastic), and the doubles of that state
+  // per DRM element and buffer (both sides of the split).
+  bool drm_needs_state(int batch) const;
+  std::int64_t drm_state_doubles(int batch) const;
 
   // Smallest stable explicit step over the elements of the chosen batches (docs/design.md,
   // "Stable time step"): all of them, or only those whose stable step can change during a

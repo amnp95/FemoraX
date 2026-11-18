@@ -115,22 +115,17 @@ DrmSetup setup_drm(const io::H5DrmPattern& p, const io::DrmFile& f, const Compil
       ++s.drm_elements;
       if (nb == 0 || nb == b.nnode) continue;
       if (b.nstate > 0) {
-        // A damped elastic element is linear (its state is the damping's filters), but the
-        // DRM forces use a constant elastic stiffness: not supported yet. A material that can
-        // yield makes the method invalid.
+        // A damped elastic element is linear (its state is the damping's filters): its DRM
+        // forces come from its own force with a state of their own (exec/drm_load.hpp). A
+        // material that can yield makes the method invalid.
         bool damped_linear = false;
         registry::for_each_pair([&]<class E, class M>(int index) {
           if constexpr (registry::is_damped_entry<M>)
             if (index == b.pair) damped_linear = M::Material::Base::NSTATE == 0;
         });
-        if (damped_linear) {
-          throw io::UnsupportedComponent(
-              "unsupported component: H5DRM pattern " + std::to_string(p.tag) + ": element " +
-              std::to_string(b.tag[static_cast<std::size_t>(e)]) +
-              " lies on the DRM boundary and has Uniform damping (/damping/uniform). The DRM forces are "
-              "computed with the layer's constant elastic stiffness, which does not include the damping yet: "
-              "leave the elements of the DRM layer out of the Uniform damping regions, or run this model with "
-              "the OpenSees backend.");
+        if (damped_linear) {  // linear with damping state: the DRM forces carry it (drm_load.hpp)
+          s.elements.push_back({static_cast<std::int32_t>(bi), e, mask});
+          continue;
         }
         throw io::ModelError("H5DRM pattern " + std::to_string(p.tag) + ": element " +
                              std::to_string(b.tag[static_cast<std::size_t>(e)]) +

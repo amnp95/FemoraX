@@ -165,10 +165,14 @@ TEST(DrmSetup, TheFirstOfTwoEqualStationsIsTaken) {
   for (std::size_t k = 0; k < s.node.size(); ++k) EXPECT_NE(s.station[k], static_cast<std::int32_t>(d.internal.size() - 1));
 }
 
-TEST(DrmSetup, UniformDampingInTheLayerIsUnsupported) {
-  // Damped elastic soil stays linear, but the DRM forces do not include the damping yet:
-  // an unsupported component with a message that names it, not an invalid model.
+TEST(DrmSetup, UniformDampingInTheLayerIsAccepted) {
+  // Damped elastic soil stays linear: its DRM elements are found as for elastic soil (the DRM
+  // forces carry the damping, exec/drm_load.hpp).
   io::Model m = column();
+  const auto c0 = compiled(m);
+  const std::string path = temp_file("ring_damped.h5drm");
+  femorax::testing::write_drm_file(path, ring_stations(m));
+  const auto s0 = compile::setup_drm(pattern(path), io::read_drm_header(path), c0);
   io::UniformDampingRegion r;
   r.id = "soil";
   r.ratio = 0.05;
@@ -177,14 +181,9 @@ TEST(DrmSetup, UniformDampingInTheLayerIsUnsupported) {
   for (const auto& g : m.elements) r.elements.insert(r.elements.end(), g.tags.begin(), g.tags.end());
   m.uniform.push_back(r);
   const auto c = compiled(m);
-  const std::string path = temp_file("ring_damped.h5drm");
-  femorax::testing::write_drm_file(path, ring_stations(m));
-  try {
-    compile::setup_drm(pattern(path), io::read_drm_header(path), c);
-    FAIL() << "expected the refusal";
-  } catch (const io::UnsupportedComponent& e) {
-    EXPECT_NE(std::string(e.what()).find("has Uniform damping"), std::string::npos) << e.what();
-  }
+  const auto s = compile::setup_drm(pattern(path), io::read_drm_header(path), c);
+  EXPECT_EQ(s.elements.size(), s0.elements.size());
+  EXPECT_GT(s.elements.size(), 0u);
 }
 
 TEST(DrmSetup, AHistoryMaterialInTheLayerIsRefused) {

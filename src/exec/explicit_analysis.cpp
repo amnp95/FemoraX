@@ -166,6 +166,9 @@ std::int64_t estimate_device_bytes(const io::Model& model, const compile::Compil
     for (const auto& e : s.elements) dofs += c.batches[static_cast<std::size_t>(e.batch)].ndof;
     const auto nodes = static_cast<std::int64_t>(s.node.size());
     bytes += DrmLoad::device_bytes(nodes, dofs, DrmLoad::window_samples(nodes, f.samples), c.dofs.num_equations);
+    // The DRM elements' own states (Uniform-damped elastic): both sides, both buffers.
+    for (const auto& e : s.elements) bytes += 2 * 2 * static_cast<std::int64_t>(c.batches[static_cast<std::size_t>(e.batch)].nstate) * 8;
+    bytes += 3 * nodes * 8;  // the free field's velocity
   }
   return bytes;
 }
@@ -352,6 +355,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         }
         ++k;
         force.commit_state();  // Domain::commit: the materials' trial state becomes committed
+        motions.commit_drm();
         recorders.record(time, u, v_rec, a);
         if (recheck && k % opt.stable_step_check_interval == 0) {
           // History materials change their stiffness during the stage (PressureDependMultiYield

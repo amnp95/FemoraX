@@ -96,15 +96,30 @@ void add_node_recorder(io::Model& m, const std::string& name, const std::string&
 // (docs/design.md, "Damped DRM layer"), with the free field's velocity from central
 // differences of its displacement samples. Returns the largest difference from the free
 // field over the box's inside, relative to the largest displacement.
-double free_field_box(bool damped) {
+enum class Damping { None, Rayleigh, Uniform };
+
+// All elements of a model in one Uniform damping region (5 % over 0.1-10 Hz).
+void damp_uniform(io::Model& m) {
+  io::UniformDampingRegion r;
+  r.id = "soil";
+  r.ratio = 0.05;
+  r.freq1 = 0.1;
+  r.freq2 = 10.0;
+  for (const auto& g : m.elements) r.elements.insert(r.elements.end(), g.tags.begin(), g.tags.end());
+  m.uniform.push_back(r);
+}
+
+double free_field_box(Damping damping) {
+
   // 1. The free field: a 1 x 1 x 8 laminar column, base pulse in x.
   femorax::testing::ColumnSpec cs;
   cs.nx = cs.ny = 1;
   cs.nz = kNz;
   cs.dz = kDz;
   cs.element = io::ElementType::SSPbrick;
-  cs.damping = damped;
+  cs.damping = damping == Damping::Rayleigh;
   io::Model col = femorax::testing::soil_column(cs);
+  if (damping == Damping::Uniform) damp_uniform(col);
   io::PathSeries ps;
   ps.tag = 1;
   ps.factor = 1.0;
@@ -153,6 +168,7 @@ double free_field_box(bool damped) {
   femorax::testing::ColumnSpec bs = cs;
   bs.nx = bs.ny = kBox;
   io::Model box = femorax::testing::soil_column(bs);
+  if (damping == Damping::Uniform) damp_uniform(box);
   box.equal_dof = {};
   const int NX = kBox + 1;
   auto tag = [&](int i, int j, int k) { return 1 + i + NX * (j + NX * k); };
@@ -227,7 +243,8 @@ double free_field_box(bool damped) {
     }
   std::printf("[ DRM box%s: %zu stations, %zu nodes inside the layer, %d steps: largest difference from the free "
               "field %.2e of its largest displacement %.3e ]\n",
-              damped ? " (Rayleigh-damped)" : "", S, inside.size(), kSteps, worst / scale, scale);
+              damping == Damping::Rayleigh ? " (Rayleigh-damped)" : damping == Damping::Uniform ? " (Uniform-damped)" : "",
+              S, inside.size(), kSteps, worst / scale, scale);
   EXPECT_GT(scale, 1e-6);
 
   // Streaming (drm_load.hpp): history windows of 2 samples (a new window every step) and of 7
@@ -245,13 +262,20 @@ double free_field_box(bool damped) {
   return worst / scale;
 }
 
-TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) { EXPECT_LE(free_field_box(false), 1e-10); }
+TEST(DrmFreeField, TheBoxInsideTheLayerMovesAsTheFreeField) { EXPECT_LE(free_field_box(Damping::None), 1e-10); }
 
 // With the layer's damping in the DRM forces: 8.5e-4 (the velocity's central differences
 // and the half-step damping of ExplicitDifference); with OpenSees' forces (mass and stiffness
 // only) the same box is off by 4.1e-2 (measured 2026-11-17).
 TEST(DrmFreeField, ADampedBoxInsideADampedLayerMovesAsTheFreeField) {
-  EXPECT_LE(free_field_box(true), 2e-3);
+  EXPECT_LE(free_field_box(Damping::Rayleigh), 2e-3);
+}
+
+// Uniform damping in the column and in the whole box, DRM layer included: the DRM forces come
+// from the layer elements' own force with a state of their own for each side, so the damping
+// stress of the free field is the same as in the column (no velocity estimate is needed).
+TEST(DrmFreeField, AUniformDampedBoxInsideAUniformDampedLayerMovesAsTheFreeField) {
+  EXPECT_LE(free_field_box(Damping::Uniform), 1e-10);
 }
 
 }  // namespace

@@ -44,6 +44,8 @@ class GroundMotions {
   // forces at time t from f, where the integrator applies loads.
   void activate_drm(DrmLoad* d) { drm_.push_back(d); }
   void apply_drm(double t, const Kokkos::View<double*, Space>& f) const;
+  // With the model's commit (the DRM elements' own states).
+  void commit_drm() const;
   bool has_drm() const { return !drm_.empty(); }
 
  private:

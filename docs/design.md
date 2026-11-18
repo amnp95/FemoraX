@@ -850,6 +850,16 @@ for step 2), the window kept at 4 samples or more; the kernel applies
 `M (a + alphaM v) + K (u + beta v)`; only when a DRM element has Rayleigh damping, so undamped
 layers keep their bits. A damped box inside a damped layer: 8.5e-4 of the peak displacement
 from the free field, against 4.1e-2 with OpenSees' forces.
+Step 2 done (2026-11-18) with a simpler design than planned: a DRM element whose material is
+linear with state (Uniform-damped elastic, `kernels::kLinearWithState`) gets its forces from
+its own `compute<false>` (stiffness, Rayleigh and the Uniform damping stress, no body force)
+for the free field restricted to each side, from a state of its own per side (committed and
+trial, held by the DRM pattern, committed with the model); the mass term from the element's
+own mass. No DRM-specific damping code: any later linear element or damping works the same
+way. The DRM setup accepts these elements; a material that can yield stays refused. A
+Uniform-damped box inside a Uniform-damped layer follows the free field within 1.9e-14 (the
+filters follow the stress history, so no velocity estimate enters). A file's velocity
+dataset: still for later (the Rayleigh terms use central differences).
 
 ## Time integration and algorithms
 

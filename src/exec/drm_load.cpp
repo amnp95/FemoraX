@@ -57,7 +57,14 @@ DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, Internal
       const Rayleigh& d = hb.params[static_cast<std::size_t>(hb.param[static_cast<std::size_t>(e->element)])].damping;
       damped_ |= d.alphaM != 0.0 || d.betaK != 0.0 || d.betaKinit != 0.0 || d.betaKcomm != 0.0;
     }
-    lists_.push_back({bi, upload("drm_elements", elems), upload("drm_masks", masks), base});
+    lists_.push_back({bi, upload("drm_elements", elems), upload("drm_masks", masks), base, {}, 0});
+    if (force.drm_needs_state(bi)) {
+      // Zero is the initial state of the damped elastic wrapper (filters at rest).
+      const auto doubles = static_cast<std::size_t>(force.drm_state_doubles(bi) * n);
+      lists_.back().state[0] = Vec("drm_state", doubles);
+      lists_.back().state[1] = Vec("drm_state", doubles);
+      damped_ = true;  // the element's force takes the free field's velocity (Rayleigh terms)
+    }
     for (std::int64_t i = 0; i < n; ++i)
       for (int a = 0; a < hb.ndof; ++a) {
         const std::int32_t q = hb.eq[static_cast<std::size_t>(a) * static_cast<std::size_t>(hb.padded) +
@@ -89,6 +96,11 @@ DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, Internal
   async_ = W_ < T && io::hdf5_thread_safe();
   hist_u_ = Vec("drm_history_u", static_cast<std::size_t>(3 * nodes * W_));
   hist_a_ = Vec("drm_history_a", static_cast<std::size_t>(3 * nodes * W_));
+}
+
+void DrmLoad::commit() {
+  for (auto& l : lists_)
+    if (l.state[0].extent(0) > 0) l.current = 1 - l.current;
 }
 
 DrmLoad::~DrmLoad() {
@@ -200,7 +212,8 @@ void DrmLoad::apply(double t, const Vec& f) {
         }
       });
   for (const auto& l : lists_)
-    force_.drm_forces(l.batch, l.elems, l.masks, node_slot_, du_, da_, dv_, damped_, gather_.slots(), l.base);
+    force_.drm_forces(l.batch, l.elems, l.masks, node_slot_, du_, da_, dv_, damped_, l.state[l.current],
+                      l.state[1 - l.current], gather_.slots(), l.base);
   gather_.gather(forces_);
   solvers::VectorOps::axpy(-1.0, forces_, f);
 }

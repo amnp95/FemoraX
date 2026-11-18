@@ -127,7 +127,10 @@ struct InternalForce::Batch {
   virtual void drm_forces(bool cached, const Vec& coords, Index N, const Kokkos::View<Index*, Space>& elems,
                           const Kokkos::View<std::uint32_t*, Space>& masks,
                           const Kokkos::View<Index*, Space>& node_slot, const Vec& du, const Vec& da,
-                          const Vec& dv, bool damped, const Vec& slots, std::int64_t base) = 0;
+                          const Vec& dv, bool damped, const Vec& sc, const Vec& st, const Vec& slots,
+                          std::int64_t base) = 0;
+  virtual bool drm_needs_state() const = 0;
+  virtual std::int64_t drm_state_doubles() const = 0;
   virtual void element_output(int which, const Kokkos::View<Index*, Space>& elems,
                               const Kokkos::View<Index*, Space>& rows, const Vec& out, std::int64_t offset,
                               const Vec& coords, Index N, const Vec& u) = 0;
@@ -290,6 +293,8 @@ struct TypedBatch final : InternalForce::Batch {
     return kernels::min_critical_dt<Elem>(b, coords, N, s);
   }
   bool stability_may_change() const override { return femorax::stability_may_change<typename Elem::Material>(); }
+  bool drm_needs_state() const override { return kernels::kLinearWithState<typename Elem::Material>; }
+  std::int64_t drm_state_doubles() const override { return 2 * static_cast<std::int64_t>(Elem::NSTATE); }
   void prepare_stability_bound(const Vec& coords, Index N) override {
     if constexpr (kBound) kernels::reference_omega_sq<Elem>(b, coords, N, omega_ref);
     else (void)coords, (void)N;
@@ -366,9 +371,14 @@ struct TypedBatch final : InternalForce::Batch {
   }
   void drm_forces(bool cached, const Vec& coords, Index N, const Kokkos::View<Index*, Space>& elems,
                   const Kokkos::View<std::uint32_t*, Space>& masks, const Kokkos::View<Index*, Space>& node_slot,
-                  const Vec& du, const Vec& da, const Vec& dv, bool damped, const Vec& slots,
-                  std::int64_t base) override {
-    if constexpr (MatrixFreeElement<Elem> && Elem::Material::CONSTANT_TANGENT) {
+                  const Vec& du, const Vec& da, const Vec& dv, bool damped, const Vec& sc, const Vec& st,
+                  const Vec& slots, std::int64_t base) override {
+    if constexpr (kernels::kLinearWithState<typename Elem::Material>) {
+      (void)cached, (void)damped;
+      kernels::launch_drm_forces_compute<Elem>(b, coords, N, elems, masks, node_slot, du, da, dv, sc, st, slots,
+                                               base);
+    } else if constexpr (MatrixFreeElement<Elem> && Elem::Material::CONSTANT_TANGENT) {
+      (void)sc, (void)st;
       if (cached && b.geometry.extent(0) > 0)
         kernels::launch_drm_forces<Elem, true>(b, t, coords, N, elems, masks, node_slot, du, da, dv, damped, slots,
                                                base);
@@ -376,7 +386,7 @@ struct TypedBatch final : InternalForce::Batch {
         kernels::launch_drm_forces<Elem, false>(b, t, coords, N, elems, masks, node_slot, du, da, dv, damped, slots,
                                                 base);
     } else {
-      (void)dv, (void)damped;
+      (void)dv, (void)damped, (void)sc, (void)st;
       (void)cached, (void)coords, (void)N, (void)elems, (void)masks, (void)node_slot, (void)du, (void)da,
           (void)slots, (void)base;
       Kokkos::abort("H5DRM: a DRM element needs an elastic material (compile/drm.cpp refuses the others)");
@@ -562,9 +572,18 @@ void InternalForce::compute(const ForceSettings& settings) {
 void InternalForce::drm_forces(int batch, const Kokkos::View<std::int32_t*, Space>& elems,
                                const Kokkos::View<std::uint32_t*, Space>& masks,
                                const Kokkos::View<std::int32_t*, Space>& node_slot, const Vec& du, const Vec& da,
-                               const Vec& dv, bool damped, const Vec& slots, std::int64_t base) {
+                               const Vec& dv, bool damped, const Vec& sc, const Vec& st, const Vec& slots,
+                               std::int64_t base) {
   batches_[static_cast<std::size_t>(batch)]->drm_forces(has_cache_, coords_, nnodes_, elems, masks, node_slot, du, da,
-                                                        dv, damped, slots, base);
+                                                        dv, damped, sc, st, slots, base);
+}
+
+bool InternalForce::drm_needs_state(int batch) const {
+  return batches_[static_cast<std::size_t>(batch)]->drm_needs_state();
+}
+
+std::int64_t InternalForce::drm_state_doubles(int batch) const {
+  return batches_[static_cast<std::size_t>(batch)]->drm_state_doubles();
 }
 
 bool InternalForce::has_split_material() const {

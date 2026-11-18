@@ -134,7 +134,12 @@ Default tolerances (until a component states otherwise):
   regions include the layer) differ from OpenSees by the damping force of the free field in
   the layer. A damped box inside a damped layer follows the damped free field within 8.5e-4
   of its peak displacement; with OpenSees' forces within 4.1e-2.
-- Test: `DrmFreeField.ADampedBoxInsideADampedLayerMovesAsTheFreeField`.
+- Uniform damping in the layer (2026-11-18): the forces are the layer elements' own force of
+  the free field (with the damping filters' state per element and side), so a Uniform-damped
+  box follows the free field within 1.9e-14. OpenSees has no counterpart here: its
+  UniformDamping acts on stdBrick (not SSPbrick) and its DRM forces ignore it.
+- Test: `DrmFreeField.ADampedBoxInsideADampedLayerMovesAsTheFreeField`,
+  `DrmFreeField.AUniformDampedBoxInsideAUniformDampedLayerMovesAsTheFreeField`.
 
 ### H5DRM — a pattern factor other than 1 is refused (2026-11-10, milestone 4)
 - OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp`, commit 955ceb0

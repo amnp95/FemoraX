@@ -57,11 +57,8 @@ Done (all on master, each after `scripts/check.sh`):
 `stability_may_change` / `STABILITY_CONSTANT` and `ScaledStability` in `contracts.hpp`,
 `max_omega_sq_reference` / `max_omega_sq_bound` in stdBrick and SSPbrick; docs/design.md
 "Stable time step"). Then:
-- The elastic basin with Uniform damping on all soil (regions 1-7) is refused before
-  shaking because its damped regions include DRM-layer elements. Since 2026-11-12 the message
-  says so (an unsupported component, exit 3: "has Uniform damping"; a material that can yield
-  stays an invalid model). Ask the user: leave the DRM layer undamped, or extend the DRM
-  force kernel to damped elastic layers.
+- The elastic basin with Uniform damping on all soil (regions 1-7): its DRM layer is damped
+  too; supported since 2026-11-18 (the user decided the layer is soil and is damped).
 - Confirmed (2026-11-12, Vista gg node, 144 threads, `flat_gather_cached`): the full
   plastic basin's explicit stage runs at 0.805 ms/step against 0.792 for the elastic basin
   (137,000 steps; whole runs 2 min 52 s and 2 min 41 s). Before the re-check fixes the
@@ -118,8 +115,10 @@ Next steps (in order; each one commit; step 4 done):
    (plastic) instead of 8.7 and 14.5 s, setup 0.13 s, the history window 256 MB instead of
    0.6 GB. Before this step the setup read every node's history with its own file open
    (50 s; fixed first, commit f2e8f22).
-4b. The damped DRM layer, step 1 (Rayleigh terms) done 2026-11-17 (docs/design.md); next its
-   step 2 (Uniform damping state in the DRM kernel, a file's velocity dataset when present).
+4b. The damped DRM layer: step 1 (Rayleigh terms) done 2026-11-17, step 2 (Uniform damping:
+   the element's own force with a DRM state per side) done 2026-11-18 (docs/design.md). Next:
+   the basin with Uniform damping in all its soil against Rayleigh (Uniform verification 7);
+   a file's velocity dataset when present.
    Effect on the elastic Site 2 basin (full 27.4 s, H200; its soil regions, DRM layer
    included, have light Rayleigh damping): surface-centre displacement within 0.14 % of its
    peak, acceleration 1.2 %; a DRM exterior node (scattered field) 0.84 % / 0.91 % (its

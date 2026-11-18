@@ -345,6 +345,7 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     // commit (the materials' trial state, from the last state determination at the
     // converged displacement), then record.
     force.commit_state();
+    motions.commit_drm();
     recorders.record(time, u, is_static ? s.v_committed : v, a);
     return true;
   };
