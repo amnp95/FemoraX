@@ -16,6 +16,7 @@
 // Other datasets (velocity, ...) may be present and are not read. Host code; HDF5's C API.
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,9 +38,28 @@ struct DrmFile {
 // the file and the dataset.
 DrmFile read_drm_header(const std::string& path);
 
-// Reads rows [row_begin, row_begin + row_count) and samples [sample_begin,
-// sample_begin + sample_count) of DRM_Data/<name> ("displacement" or "acceleration") into
-// out (row-major, [row_count, sample_count]).
+// Reads blocks of a DRM file's histories with the file and both datasets opened once.
+// Opening an HDF5 file on a parallel file system costs milliseconds (5.4 ms on Vista's
+// scratch), so a reader is kept for every block of a run: the Site 2 basin's setup read its
+// node histories with one open per node and history (9,814 opens, about 50 s).
+class DrmReader {
+ public:
+  explicit DrmReader(const std::string& path);
+  ~DrmReader();
+  DrmReader(const DrmReader&) = delete;
+  DrmReader& operator=(const DrmReader&) = delete;
+  // Rows [row_begin, row_begin + row_count) and samples [sample_begin, sample_begin +
+  // sample_count) of DRM_Data/<name> ("displacement" or "acceleration") into out (row-major,
+  // [row_count, sample_count]).
+  void read(const std::string& name, std::int64_t row_begin, std::int64_t row_count, std::int64_t sample_begin,
+            std::int64_t sample_count, std::vector<double>& out) const;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+// One block with a reader of its own (opens and closes the file: for single reads only).
 void read_drm_block(const std::string& path, const std::string& name, std::int64_t row_begin, std::int64_t row_count,
                     std::int64_t sample_begin, std::int64_t sample_count, std::vector<double>& out);
 

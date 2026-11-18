@@ -115,14 +115,37 @@ DrmFile read_drm_header(const std::string& path) {
   return f;
 }
 
+struct DrmReader::Impl {
+  std::string path;
+  Id file;
+  Id displacement{-1, H5Dclose}, acceleration{-1, H5Dclose};
+  explicit Impl(const std::string& p) : path(p), file(H5Fopen(p.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT), H5Fclose) {}
+};
+
+DrmReader::DrmReader(const std::string& path) : impl_(std::make_unique<Impl>(path)) {
+  if (impl_->file.id < 0) fail(path, "cannot open as an HDF5 file");
+  impl_->displacement.id = H5Dopen2(impl_->file.id, "DRM_Data/displacement", H5P_DEFAULT);
+  if (impl_->displacement.id < 0) fail(path, "cannot open DRM_Data/displacement");
+  impl_->acceleration.id = H5Dopen2(impl_->file.id, "DRM_Data/acceleration", H5P_DEFAULT);
+  if (impl_->acceleration.id < 0) fail(path, "cannot open DRM_Data/acceleration");
+}
+
+DrmReader::~DrmReader() = default;
+
 void read_drm_block(const std::string& path, const std::string& name, std::int64_t row_begin, std::int64_t row_count,
                     std::int64_t sample_begin, std::int64_t sample_count, std::vector<double>& out) {
-  Id file(H5Fopen(path.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT), H5Fclose);
-  if (file.id < 0) fail(path, "cannot open as an HDF5 file");
+  DrmReader(path).read(name, row_begin, row_count, sample_begin, sample_count, out);
+}
+
+void DrmReader::read(const std::string& name, std::int64_t row_begin, std::int64_t row_count,
+                     std::int64_t sample_begin, std::int64_t sample_count, std::vector<double>& out) const {
+  const std::string& path = impl_->path;
   const std::string ds = "DRM_Data/" + name;
-  Id d(H5Dopen2(file.id, ds.c_str(), H5P_DEFAULT), H5Dclose);
-  if (d.id < 0) fail(path, "cannot open " + ds);
-  Id space(H5Dget_space(d.id), H5Sclose);
+  hid_t did = -1;
+  if (name == "displacement") did = impl_->displacement.id;
+  else if (name == "acceleration") did = impl_->acceleration.id;
+  else fail(path, "no history " + ds);
+  Id space(H5Dget_space(did), H5Sclose);
   const hsize_t start[2] = {static_cast<hsize_t>(row_begin), static_cast<hsize_t>(sample_begin)};
   const hsize_t count[2] = {static_cast<hsize_t>(row_count), static_cast<hsize_t>(sample_count)};
   if (H5Sselect_hyperslab(space.id, H5S_SELECT_SET, start, nullptr, count, nullptr) < 0) {
@@ -130,7 +153,7 @@ void read_drm_block(const std::string& path, const std::string& name, std::int64
   }
   Id mem(H5Screate_simple(2, count, nullptr), H5Sclose);
   out.resize(static_cast<std::size_t>(row_count * sample_count));
-  if (H5Dread(d.id, H5T_NATIVE_DOUBLE, mem.id, space.id, H5P_DEFAULT, out.data()) < 0) {
+  if (H5Dread(did, H5T_NATIVE_DOUBLE, mem.id, space.id, H5P_DEFAULT, out.data()) < 0) {
     fail(path, "cannot read a block of " + ds);
   }
 }

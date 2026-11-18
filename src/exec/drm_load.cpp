@@ -67,11 +67,12 @@ DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, Internal
   // The matched nodes' histories, whole (step 3; streamed in time blocks in step 4).
   const std::int64_t T = file_.samples;
   std::vector<double> hu(static_cast<std::size_t>(3 * nodes * T)), ha(hu.size()), block;
+  const io::DrmReader reader(file_.path);  // the file opened once for every row
   for (std::int64_t sl = 0; sl < nodes; ++sl) {
     const std::int64_t row = setup_.row[static_cast<std::size_t>(sl)];
-    io::read_drm_block(file_.path, "displacement", row, 3, 0, T, block);
+    reader.read("displacement", row, 3, 0, T, block);
     std::copy(block.begin(), block.end(), hu.begin() + 3 * sl * T);
-    io::read_drm_block(file_.path, "acceleration", row, 3, 0, T, block);
+    reader.read("acceleration", row, 3, 0, T, block);
     std::copy(block.begin(), block.end(), ha.begin() + 3 * sl * T);
   }
   hist_u_ = upload("drm_history_u", hu);

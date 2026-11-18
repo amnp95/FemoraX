@@ -130,6 +130,13 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
       | 100^3 SSPbrick (1 M) | 10.5 ms | 5.4 GB | 2.1 + 0.8 s | 50 s |
       | 200^3 SSPbrick (8 M) | 81.0 ms | 43.4 GB | 17.7 + 6.4 s | 382 s |
       Linear in the elements. Limits on one H200: about 3 M plastic stdBrick, about 16 M
-      plastic SSPbrick. The 8 M run spends about 195 s outside stepping and setup: the
-      auto-tune timing every variant (colored ones included) on the full model; time it on
-      a sample of the batches for large models.
+      plastic SSPbrick. The 8 M run spends about 195 s outside stepping and setup. Not the
+      auto-tune (2026-11-17: the 1 M SSPbrick box takes the same 48 s with the variant
+      forced): the stable-step reference eigenvalues, 13 Jacobi solves per plastic SSPbrick
+      element at the start of each explicit stage (about 22 s per million elements on the
+      H200; stdBrick needs one). About 8 % of a 30 s record; later: a narrower factor grid
+      (0.5-4, 7 points: about 2x) or a cheaper bound.
+    - Fixed 2026-11-17: the basin's ~50 s setup was the DRM histories read with one HDF5
+      file open per node and history (9,814 opens of 5.4 ms on Vista's scratch);
+      `io::DrmReader` opens the file once: setup 5 s, the 5000-step basin runs in 8.7 s
+      (elastic) and 14.5 s (plastic) instead of about 60 s.
