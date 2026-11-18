@@ -140,3 +140,13 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
       file open per node and history (9,814 opens of 5.4 ms on Vista's scratch);
       `io::DrmReader` opens the file once: setup 5 s, the 5000-step basin runs in 8.7 s
       (elastic) and 14.5 s (plastic) instead of about 60 s.
+18. **Uniform damping's cost on the GPU.** Site 2 basin with Uniform damping (5 % over
+    0.1-10 Hz, 7 filters) on region 1 (872 elements, 1.9 % of the model), 20,000 explicit
+    steps on the H200 (2026-11-17), twice each: 0.366 ms/step against 0.335 undamped (+9 %),
+    about 34 ns per damped element per step against about 7 ns for an average undamped one
+    (on Stampede3's CPUs the same region cost nothing measurable). On the GPU the filter
+    state (66 doubles per Gauss point, read and written every step) matters; part of the
+    30 us may be the separate batch's launch. Next: a benchmark of a fully damped column
+    (`femorax_bench`), to know the cost of damping all the soil before relying on it, and
+    then the options (state in FP64 but fewer filters per bucket, team layouts for the
+    damped batch).
