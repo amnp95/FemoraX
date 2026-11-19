@@ -383,6 +383,27 @@ double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, Expl
   return result;
 }
 
+// Every element's own stable step (real elements, batch order) into out[0 .. count): the
+// levels of local time stepping (compile/lts_levels.hpp).
+template <class Elem>
+void element_critical_dts(const DevBatch<Elem>& b, const Vec& coords, Index N, ExplicitScheme scheme, const Vec& out) {
+  const auto node = b.node, param = b.param;
+  const auto params = b.params;
+  const auto sc = b.state[b.current];
+  const Index P = b.padded;
+  Kokkos::parallel_for(
+      "element_critical_dts", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count),
+      KOKKOS_LAMBDA(const Index e) {
+        double xe[Elem::NNODE][Elem::NDM];
+        for (int a = 0; a < Elem::NNODE; ++a) {
+          const Index n = node(a * P + e);
+          for (int d = 0; d < Elem::NDM; ++d) xe[a][d] = coords(d * N + n);
+        }
+        const DevParams<Elem>& pr = params(param(e));
+        out(e) = Elem::critical_dt(pr.p, pr.damp, scheme, xe, state_of<Elem>(sc, e, P));
+      });
+}
+
 // The cheap periodic re-check for materials with ScaledStability (contracts.hpp): each
 // element's omega^2 with the reference tangent, once per stage, into `ref` (per element)...
 // The element declares STABILITY_BOUND (it provides NSTABILITY_REFERENCE,

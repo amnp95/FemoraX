@@ -170,6 +170,9 @@ class InternalForce {
   // stage (contracts.hpp, stability_may_change), or only those whose step cannot.
   enum class Batches { All, Changing, Fixed };
   double min_critical_dt(ExplicitScheme scheme, Batches which = Batches::All) const;
+  // Every element's own stable step, per batch (the compile step's batch order, real elements):
+  // the input of the local time stepping levels (compile/lts_levels.hpp).
+  std::vector<std::vector<double>> element_critical_dts(ExplicitScheme scheme) const;
   bool stability_may_change() const;
   // The periodic re-check: prepare at the start of an explicit stage (the reference omega^2
   // per element of ScaledStability materials), then a lower bound of the Changing batches'

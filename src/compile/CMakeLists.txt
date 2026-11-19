@@ -4,6 +4,7 @@ add_library(femorax_compile
   dof_numbering.cpp
   renumber.cpp
   batches.cpp
+  lts_levels.cpp
   sparsity.cpp
   drm.cpp)
 add_library(femorax::compile ALIAS femorax_compile)

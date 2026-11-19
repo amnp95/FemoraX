@@ -52,6 +52,8 @@ struct InternalForce::Batch {
   virtual std::int64_t device_bytes() const = 0;
   virtual int max_elements_per_team() const = 0;
   virtual double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const = 0;
+  // Every element's own stable step (real elements, batch order), on the host.
+  virtual std::vector<double> element_critical_dts(const Vec& coords, Index N, ExplicitScheme s) const = 0;
   // Whether the stable step can change during a stage (contracts.hpp, stability_may_change).
   virtual bool stability_may_change() const = 0;
   // The cheap re-check (ScaledStability materials): the reference omega^2 per element, at the
@@ -240,6 +242,12 @@ struct TypedBatch final : InternalForce::Batch {
   }
   double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const override {
     return kernels::min_critical_dt<Elem>(b, coords, N, s);
+  }
+  std::vector<double> element_critical_dts(const Vec& coords, Index N, ExplicitScheme s) const override {
+    Vec d("element_critical_dts", static_cast<std::size_t>(b.count));
+    kernels::element_critical_dts<Elem>(b, coords, N, s, d);
+    const auto h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), d);
+    return std::vector<double>(h.data(), h.data() + h.extent(0));
   }
   bool stability_may_change() const override { return femorax::stability_may_change<typename Elem::Material>(); }
   bool drm_needs_state() const override { return kernels::kLinearWithState<typename Elem::Material>; }

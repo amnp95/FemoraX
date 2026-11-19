@@ -184,6 +184,12 @@ std::int64_t InternalForce::device_bytes() const {
   return n;
 }
 
+std::vector<std::vector<double>> InternalForce::element_critical_dts(ExplicitScheme scheme) const {
+  std::vector<std::vector<double>> out;
+  for (const auto& b : batches_) out.push_back(b->element_critical_dts(coords_, nnodes_, scheme));
+  return out;
+}
+
 double InternalForce::min_critical_dt(ExplicitScheme scheme, Batches which) const {
   double m = 1e300;
   for (const auto& b : batches_) {

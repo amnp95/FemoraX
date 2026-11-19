@@ -1081,7 +1081,17 @@ for leapfrog) and the paper's continuous L2 error is dominated by the interpolat
 convergence is measured against d'Alembert's solution at a generic time; at 0.99 of the
 stable step the fine region's highest modes make the error irregular (stable, but orders
 0.3-8 for p = 3, 5), at 0.9 it is clean (FemoraX's margin); without stabilization p = 5 at
-0.99 h_c blows up (1e35) on the finest mesh. Multilevel (more than two levels): step 3. (2) Levels in the compile step (no behaviour change).
+0.99 h_c blows up (1e35) on the finest mesh. Multilevel (more than two levels): step 3.
+(2) Done (2026-11-19), at the start of an explicit stage rather than in the compile step (the
+stable steps depend on the scheme, the damping and the material state):
+`InternalForce::element_critical_dts` (every element's own stable step from the device; their
+minimum is the stage's stable step, bit for bit) and `compile/lts_levels.hpp` (each element's
+level, each equation the finest of its elements, each element's touched level up to the finest
+of its equations, the elements beyond the last level reported, the work estimate
+global / LTS); nothing uses them yet. Found by its test: a laminar boundary's ties merge each
+level's side nodes into one equation, so a fine element on the side pulls the elements around
+the whole tied perimeter into its level's substeps (correct: a constraint group sits in one
+level; a cost to remember for fine elements at laminar boundaries).
 (3) The undamped LTS in the explicit time loop, tests (2)-(3). (4) Mass then stiffness
 damping, then Uniform, each with the same checks (the eigenvalue sweep, the energy decaying
 steadily, a global small-step reference). (5) The GPU launch strategy (each coarse step's
