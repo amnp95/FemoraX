@@ -966,7 +966,7 @@ per-element step to choose levels.
 - Still to discuss: the constraints the models need (rigidDiaphragm, rigidLink: exact
   transformation with block masses for rigid bodies) and the user's embedded interface.
 
-## Local time stepping (plan, 2026-11-17; waiting for the user's approval)
+## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
 **The problem.** An explicit stage steps every element at the smallest stable step of the
 model. A few stiff or small elements set it for everything: structures in soil (beams and
@@ -978,12 +978,33 @@ answer is local time stepping (LTS), where each part of the mesh advances at its
 step, explicit throughout (no Newton, so no convergence problems), with the cost in
 proportion to the stiff part.
 
+**Why LTS (literature review, 2026-11-19).** Compared with subcycling and implicit-explicit
+coupling (pays off only at step ratios of 100 or more; FemoraX's are 2-20; a solve per step),
+mass scaling (conventional scaling distorts the inertia: 0.8 % added mass gave a 19 % peak-
+force error in an LS-DYNA benchmark; selective scaling needs a solve per step and is
+inaccurate at low frequencies; reciprocal mass matrices gain 1.25-1.5x), and Chebyshev,
+exponential or multirate integrators (they pay off only as LTS, or need global Krylov
+reductions), stabilized multilevel leapfrog LTS is the one multi-rate explicit method proven
+on GPUs at scale (SPECFEM3D: Rietmann et al., J. Comput. Phys. 334, 2017,
+doi:10.1016/j.jcp.2016.11.012; SeisSol's clustered LTS with graph-captured GPU kernels).
+Complements: one force-based element per member (cuts the step ratio before LTS starts),
+opt-in conventional mass scaling for isolated tiny elements (reported, alphaM from the
+physical mass), implicit-explicit coupling kept in reserve for ratios in the hundreds.
+
 **Method.** Multilevel explicit LTS for second-order systems: Diaz & Grote (2009, energy-
-conserving leapfrog LTS) and its Newmark form on GPUs (Rietmann et al., 2017, SPECFEM). Levels
+conserving leapfrog LTS; SIAM J. Sci. Comput. 31(3), doi:10.1137/070709414) **with the
+Grote-Michel-Sauter stabilization** (Math. Comp. 2021, doi:10.1090/mcom/3650,
+arXiv:2005.13350): the original scheme "may become unstable at certain discrete values of the
+time step"; the stabilized one replaces its polynomial by a Chebyshev-damped one (nu = 0.05),
+is stable under a condition set by the coarse mesh only, stays explicit, second order and
+energy-conserving, and with nu = 0 is the original scheme. Step ratio 2 between levels. Levels
 p = 0..L with steps dt_p = dt / m^p (m = 2 by default): each element gets the coarsest level
 whose step is at most its own stable step (`critical_dt`), and each equation the finest level
-of the elements that touch it. One coarse step: the coarse elements' forces are evaluated
-once; the fine equations take m^p substeps in which only the fine elements are evaluated,
+of the elements that touch it (an element takes the coarsest level whose step is at most 0.9
+of its own stable step). One coarse step: the coarse elements' forces are evaluated
+once; the fine equations take m^p substeps. The fine substeps apply the stiffness rows of the
+fine equations, so in matrix-free form they evaluate **every element touching a fine
+equation: the fine elements plus the ring of coarse elements around them**,
 with the coarse contribution held as in the method (so the scheme is second order and
 conserves a discrete energy without damping); then the coarse equations advance. With one
 level the stage is today's ExplicitDifference / CentralDifference, bit for bit.
@@ -1007,8 +1028,16 @@ time steps beyond the `StepContext` they already receive):
   before choosing.
 - *Multi-GPU (later):* the fine equations' halo is exchanged at every substep.
 
-**Damping (the research part).** The published schemes are undamped (or with simple mass
-damping). Rayleigh stiffness damping, ExplicitDifference's half-step velocity and the Uniform
+**Constraints, nonlinearity and interfaces.** DOF elimination already merges a constraint
+group (equalDOF, later rigid links and diaphragms) into one equation, so a group sits in one
+level by construction. The scheme's split of the force into coarse and fine parts is proven for
+linear operators only: the level boundary is placed in elastic soil (plastic elements and
+penalty interfaces, with the soil attached to them, stay inside one level). Not covered by any
+published analysis: plasticity across levels, penalty interfaces, constraints spanning levels.
+
+**Damping (the research part).** The published schemes are undamped, or with diagonal (mass-
+type) damping only (Grote & Mitkova, arXiv:1205.0654: second order; an Adams-Bashforth LTS for
+higher order). Rayleigh stiffness damping, ExplicitDifference's half-step velocity and the Uniform
 filters need their own derivation and stability analysis: first the undamped scheme, then
 mass damping, then stiffness damping and Uniform, each with its stability limit per level.
 
@@ -1017,8 +1046,18 @@ OpenSees run of the same model uses one step); a schema addition when it is read
 first): an explicit stage's `local_time_stepping` (levels, ratio), or automatic levels from
 the elements' stable steps.
 
-**Verification.** (1) A 1D bar with a refined (or stiffer) segment: LTS against a single-step
-run at the fine step and the analytical wave solution, second-order convergence, stability
+**Verification** (each check is a proven property of the published scheme; read the arXiv
+papers in full before coding, to reproduce their recurrence and experiments exactly):
+(0) one level gives today's scheme bit for bit; an exact stability check on small models:
+the spectral radius of the scheme's one-step propagation matrix at most 1 over a fine sweep of
+the step up to the predicted limit, showing the unstabilized scheme's narrow unstable steps
+and none for the stabilized one (the key result of Grote, Michel & Sauter); the conserved
+quantity is the scheme's modified energy (with respect to its modified operator), not the plain
+kinetic plus strain energy; reproduce one published experiment (Diaz & Grote, or Grote,
+Michel & Sauter) against their reported results; long runs (millions of steps) for slow
+instabilities. (1) A 1D bar with a refined (or stiffer) segment: LTS against a single-step
+run at the fine step and the analytical wave solution, second-order convergence (Grote,
+Mehlin & Sauter, SIAM J. Numer. Anal. 2018, arXiv:1703.07965), stability
 up to each level's limit, energy conservation without damping. (2) A soil column with a stiff
 inclusion (later: a beam), against the single-step run. (3) With one level, today's results
 bit for bit. (4) Timing: the basin-with-buildings shape (soil coarse, structure fine) against
@@ -1027,8 +1066,12 @@ a single step.
 **Steps (one commit each, after approval).** (1) A host prototype of the undamped multilevel
 scheme on a 1D bar, the tests of (1). (2) Levels in the compile step (no behaviour change).
 (3) The undamped LTS in the explicit time loop, tests (2)-(3). (4) Mass then stiffness
-damping, then Uniform. (5) The GPU launch strategy, benchmarks. (6) The schema option. Before
-or with the beams (milestone 3), which are its first real use.
+damping, then Uniform, each with the same checks (the eigenvalue sweep, the energy decaying
+steadily, a global small-step reference). (5) The GPU launch strategy (each coarse step's
+launches captured in a Kokkos Graph, as SeisSol captures CUDA/HIP graphs; measured), benchmarks.
+(6) The schema option. Multi-GPU later: partitions weighted by each element's substeps
+(Rietmann et al., IPDPS 2015), the fine halo exchanged at every substep. Before the beams
+(milestone 3), which are its first real use (decided with the user, 2026-11-19).
 
 ## Linear solvers
 
