@@ -74,6 +74,11 @@ Done (all on master, each after `scripts/check.sh`):
 **Start here:** the typed-batch split is committed (2026-11-19); its GPU tests have not run
 since the split (only the H200 build, 2 min 15 s): run check.sh on the next gh node.
 
+**PML: on hold (the user, 2026-11-19):** the PML formulation needs to change before FemoraX
+implements it; do not plan or port OpenSees' PML3D until the user brings the new
+formulation. The absorber experiments (docs/todo.md item 13) show why an absorber better than
+mass damping is needed; meanwhile the basin keeps its Rayleigh absorber.
+
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
    yielding is done) and benchmarks of the damped kernels.
