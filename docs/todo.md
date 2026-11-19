@@ -161,4 +161,6 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     on one core in about 14 minutes (Vista gh, 2026-11-18), most of every GPU check. Split it
     into one file per element-material pair (or per kernel family), so the build compiles
     them in parallel: expected 2-3 minutes with 72 cores. A build-structure change only (no
-    change in results); it also speeds up the laptop's CUDA and the SYCL builds.
+    change in results); it also speeds up the laptop's CUDA and the SYCL builds. Done
+    2026-11-19: 16 generated units (`internal_force_batch.hpp`), the H200 build 14 min 35 s
+    -> 2 min 15 s; the GPU tests after the split: next gh session.

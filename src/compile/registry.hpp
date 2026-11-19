@@ -31,6 +31,16 @@ namespace femorax::registry {
 template <class... T>
 struct TypeList {};
 
+// The I-th type of a TypeList (compile-time selection of an entry).
+template <int I, class L>
+struct TypeAt;
+template <int I, class H, class... T>
+struct TypeAt<I, TypeList<H, T...>> : TypeAt<I - 1, TypeList<T...>> {};
+template <class H, class... T>
+struct TypeAt<0, TypeList<H, T...>> {
+  using type = H;
+};
+
 // --- Materials ---------------------------------------------------------------------------
 struct ElasticIsotropicEntry {
   using Material = ElasticIsotropic;

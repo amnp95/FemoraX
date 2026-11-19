@@ -71,6 +71,9 @@ Done (all on master, each after `scripts/check.sh`):
   from /work to Vista's scratch.
 - Push from Stampede3 (the repository is shared): Vista's SSH key is not on GitHub.
 
+**Start here:** the typed-batch split is committed (2026-11-19); its GPU tests have not run
+since the split (only the H200 build, 2 min 15 s): run check.sh on the next gh node.
+
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
    yielding is done) and benchmarks of the damped kernels.

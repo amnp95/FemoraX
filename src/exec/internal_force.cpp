@@ -1,4 +1,5 @@
 #include "exec/internal_force.hpp"
+#include "exec/internal_force_batch.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -77,358 +78,28 @@ std::string to_string(const OperatorSettings& s) {
   return std::string(to_string(s.scatter)) + "_" + to_string(s.geometry) + "_" + to_string(s.tangent);
 }
 
-using Index = std::int32_t;
 
-namespace {
-template <class T>
-Kokkos::View<T*, Space> upload(const char* label, const std::vector<T>& h) {
-  Kokkos::View<T*, Space> d(Kokkos::view_alloc(Kokkos::WithoutInitializing, std::string(label)),
-                            h.size());
-  auto m = Kokkos::create_mirror_view(d);
-  for (std::size_t i = 0; i < h.size(); ++i) m(i) = h[i];
-  Kokkos::deep_copy(d, m);
-  return d;
-}
-}  // namespace
 
-// Type-erased batch: the typed kernels behind one interface (virtual dispatch on the host,
-// once per batch per call; the launch layer may use it, physics may not).
-struct InternalForce::Batch {
-  virtual ~Batch() = default;
-  // Returns the number of points that took the plastic corrector (compacted path; 0 else).
-  virtual std::int64_t run(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
-                           const Vec& v, const Vec& f, const Vec& slots) = 0;
-  virtual bool split_material() const = 0;
-  virtual std::int64_t count() const = 0;
-  virtual std::int64_t device_bytes() const = 0;
-  virtual int max_elements_per_team() const = 0;
-  virtual double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const = 0;
-  // Whether the stable step can change during a stage (contracts.hpp, stability_may_change).
-  virtual bool stability_may_change() const = 0;
-  // The cheap re-check (ScaledStability materials): the reference omega^2 per element, at the
-  // start of a stage; then the stable step from the bound. Other batches: the exact check.
-  virtual void prepare_stability_bound(const Vec& coords, Index N) = 0;
-  virtual double min_critical_dt_bound(const Vec& coords, Index N, ExplicitScheme s) const = 0;
-  // Matrix-free operator (resolved settings): y (or the diagonal) through `out`.
-  virtual void run_operator(const OperatorSettings& s, bool diagonal, const OperatorCoefficients& k, Out out,
-                            const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
-                            const Vec& slots, int unit_dir) = 0;
-  virtual void store_tangents(const OperatorSettings& s, const Vec& coords, Index N, const Vec& u) = 0;
-  virtual std::int64_t enable_stored_tangents() = 0;  // returns the bytes allocated
-  virtual TangentSymmetry tangent_symmetry() const = 0;
-  virtual bool constant_tangent() const = 0;
-  // Material history state (none for materials without it).
-  virtual bool has_state() const = 0;
-  virtual void commit_state() = 0;
-  virtual void set_step(const StepContext& s) = 0;
-  // updateMaterialStage for the parameter sets of model material `material` (an index into
-  // model.materials); returns whether any set of this batch uses it.
-  virtual bool set_material_stage(std::int32_t material, int stage) = 0;
-  virtual void drm_forces(bool cached, const Vec& coords, Index N, const Kokkos::View<Index*, Space>& elems,
-                          const Kokkos::View<std::uint32_t*, Space>& masks,
-                          const Kokkos::View<Index*, Space>& node_slot, const Vec& du, const Vec& da,
-                          const Vec& dv, bool damped, const Vec& sc, const Vec& st, const Vec& slots,
-                          std::int64_t base) = 0;
-  virtual bool drm_needs_state() const = 0;
-  virtual std::int64_t drm_state_doubles() const = 0;
-  virtual void element_output(int which, const Kokkos::View<Index*, Space>& elems,
-                              const Kokkos::View<Index*, Space>& rows, const Vec& out, std::int64_t offset,
-                              const Vec& coords, Index N, const Vec& u) = 0;
-};
-
-namespace {
-
-template <class Elem>
-struct TypedBatch final : InternalForce::Batch {
-  kernels::DevBatch<Elem> b;
-  kernels::DevTangents<Elem> t;
-  static constexpr bool kCompact = kernels::kCompactable<Elem>;
-  struct NoCompact {};
-  std::conditional_t<kCompact, kernels::DevCompact<Elem>, NoCompact> compact;
-  // The cheap stable-step re-check: only where the step can change and the material scales.
-  static constexpr bool kBound =
-      kernels::kScaledStability<Elem> && femorax::stability_may_change<typename Elem::Material>();
-  Vec omega_ref;  // per element, the reference omega^2 (kBound)
-
-  std::vector<kernels::DevParams<Elem>> host_params;
-  std::vector<std::int32_t> param_material;
-
-  TypedBatch(const compile::Batch& hb, std::int64_t slot_offset, bool cache, const Vec& coords,
-             Index N) {
-    b.count = hb.count;
-    b.padded = hb.padded;
-    b.node = upload("batch_node", hb.node);
-    b.eq = upload("batch_eq", hb.eq);
-    b.param = upload("batch_param", hb.param);
-    b.color_elements = upload("batch_colors", hb.color_elements);
-    b.color_start = hb.color_start;
-    b.slot_offset = slot_offset;
-    std::vector<kernels::DevParams<Elem>>& ps = host_params;
-    for (const auto& p : hb.params) {
-      ps.push_back({p.template params<Elem>(), p.damping});
-      param_material.push_back(p.material);
-    }
-    b.params = upload("batch_params", ps);
-    kernels::init_state<Elem>(b);
-    if constexpr (kBound) {
-      omega_ref = Vec("batch_reference_omega_sq", static_cast<std::size_t>(Elem::NSTABILITY_REFERENCE) * b.padded);
-    }
-    if constexpr (kCompact) {
-      using R = kernels::Replay<typename Elem::Material>;
-      const auto points = static_cast<std::size_t>(Elem::NGP) * b.padded;
-      compact.results = Vec("batch_compact_results", static_cast<std::size_t>(R::NSTATE) * points);
-      compact.flag = Kokkos::View<std::int32_t*, Space>("batch_compact_flag", points);
-      compact.list = Kokkos::View<std::int32_t*, Space>("batch_compact_list", points);
-      compact.params = Kokkos::View<kernels::DevParams<kernels::ReplayElement<Elem>>*, Space>(
-          "batch_compact_params", ps.size());
-      upload_replay_params();
-    }
-    using Mat = typename Elem::Material;
-    if constexpr (Mat::CONSTANT_TANGENT) {
-      constexpr int NS = Mat::NSTRAIN;
-      std::vector<double> d(ps.size() * NS * NS);
-      for (std::size_t i = 0; i < ps.size(); ++i) {
-        double D[NS][NS];
-        Mat::initial_tangent(ps[i].p.mat, D);
-        for (int a = 0; a < NS; ++a)
-          for (int c = 0; c < NS; ++c) d[(i * NS + a) * NS + c] = D[a][c];
-      }
-      t.constant = upload("batch_constant_tangent", d);
-    }
-    if (cache) {
-      b.geometry = Vec("batch_geometry", static_cast<std::size_t>(Elem::NGEOM) * Elem::NGP * b.padded);
-      kernels::fill_geometry<Elem>(b, coords, N);
-      if constexpr (ElementTermElement<Elem>) {
-        b.constants = Vec("batch_element_constants", static_cast<std::size_t>(Elem::NCONST) * b.padded);
-        kernels::fill_constants<Elem>(b, coords, N);
-      }
-    }
-  }
-
-  // The parameter sets retyped for the Replay element (the same bytes: Replay's Params is
-  // the material's).
-  void upload_replay_params() {
-    if constexpr (kCompact) {
-      using RP = kernels::DevParams<kernels::ReplayElement<Elem>>;
-      static_assert(sizeof(RP) == sizeof(kernels::DevParams<Elem>) && std::is_trivially_copyable_v<RP>);
-      auto m = Kokkos::create_mirror_view(compact.params);
-      for (std::size_t i = 0; i < host_params.size(); ++i)
-        std::memcpy(static_cast<void*>(&m(i)), static_cast<const void*>(&host_params[i]), sizeof(RP));
-      Kokkos::deep_copy(compact.params, m);
-    }
-  }
-
-  bool split_material() const override { return kCompact; }
-
-  std::int64_t run(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
-                   const Vec& v, const Vec& f, const Vec& slots) override {
-    if constexpr (kCompact) {
-      if (s.material == MaterialPath::Compacted) return run_compacted(s, out, coords, N, u, v, f, slots);
-    }
-    run_kernels(b, s, out, coords, N, u, v, f, slots);
-    return 0;
-  }
-
-  std::int64_t run_compacted(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
-                             const Vec& v, const Vec& f, const Vec& slots) {
-    if constexpr (kCompact) {
-      if (s.geometry == Geometry::Cached) kernels::launch_predict<Elem, true>(b, compact, coords, N, u);
-      else kernels::launch_predict<Elem, false>(b, compact, coords, N, u);
-      const Index plastic = kernels::compact_plastic_points<Elem>(b, compact);
-      kernels::launch_correct<Elem>(b, compact, plastic);
-      run_kernels(kernels::replay_batch<Elem>(b, compact), s, out, coords, N, u, v, f, slots);
-      return plastic;
-    } else {
-      (void)s, (void)out, (void)coords, (void)N, (void)u, (void)v, (void)f, (void)slots;
-      return 0;
-    }
-  }
-
-  template <class E>
-  static void run_kernels(const kernels::DevBatch<E>& b, const ForceSettings& s, Out out, const Vec& coords, Index N,
-                          const Vec& u, const Vec& v, const Vec& f, const Vec& slots) {
-    const bool cached = s.geometry == Geometry::Cached;
-    auto launch = [&](Index begin, Index end, bool by_color) {
-      if (s.layout == Layout::Flat) {
-        if (cached) kernels::launch_flat<E, true>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
-        else kernels::launch_flat<E, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
-      } else {
-        if constexpr (PointwiseElement<E>) {
-          const int ept = s.elements_per_team;
-          if (cached) kernels::launch_team<E, true>(b, coords, N, u, v, f, slots, out, begin, end, by_color, ept);
-          else kernels::launch_team<E, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color, ept);
-        } else {
-          kernels::launch_flat<E, false>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
-        }
-      }
-    };
-    if (s.scatter == Scatter::Colored) {
-      for (std::size_t col = 0; col + 1 < b.color_start.size(); ++col)
-        launch(b.color_start[col], b.color_start[col + 1], true);
-    } else {
-      launch(0, b.count, false);
-    }
-  }
-
-  std::int64_t count() const override { return b.count; }
-  std::int64_t device_bytes() const override {
-    return static_cast<std::int64_t>(b.node.extent(0) + b.eq.extent(0) + b.param.extent(0) +
-                                     b.color_elements.extent(0)) * 4 +
-           static_cast<std::int64_t>(b.params.extent(0) * sizeof(kernels::DevParams<Elem>)) +
-           static_cast<std::int64_t>(b.geometry.extent(0) + b.constants.extent(0) + t.constant.extent(0) +
-                                     t.stored.extent(0) + b.state[0].extent(0) + b.state[1].extent(0) +
-                                     omega_ref.extent(0)) * 8 +
-           compact_bytes();
-  }
-  std::int64_t compact_bytes() const {
-    if constexpr (kCompact) {
-      return static_cast<std::int64_t>(compact.results.extent(0)) * 8 +
-             static_cast<std::int64_t>(compact.flag.extent(0) + compact.list.extent(0)) * 4 +
-             static_cast<std::int64_t>(compact.params.extent(0) * sizeof(kernels::DevParams<kernels::ReplayElement<Elem>>));
-    } else {
-      return 0;
-    }
-  }
-  double min_critical_dt(const Vec& coords, Index N, ExplicitScheme s) const override {
-    return kernels::min_critical_dt<Elem>(b, coords, N, s);
-  }
-  bool stability_may_change() const override { return femorax::stability_may_change<typename Elem::Material>(); }
-  bool drm_needs_state() const override { return kernels::kLinearWithState<typename Elem::Material>; }
-  std::int64_t drm_state_doubles() const override { return 2 * static_cast<std::int64_t>(Elem::NSTATE); }
-  void prepare_stability_bound(const Vec& coords, Index N) override {
-    if constexpr (kBound) kernels::reference_omega_sq<Elem>(b, coords, N, omega_ref);
-    else (void)coords, (void)N;
-  }
-  double min_critical_dt_bound(const Vec& coords, Index N, ExplicitScheme s) const override {
-    if constexpr (kBound) return kernels::min_critical_dt_bound<Elem>(b, omega_ref, s);
-    else return kernels::min_critical_dt<Elem>(b, coords, N, s);
-  }
-  void run_operator(const OperatorSettings& s, bool diagonal, const OperatorCoefficients& k, Out out,
-                    const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
-                    const Vec& slots, int unit_dir) override {
-    if constexpr (MatrixFreeElement<Elem>) {
-      const bool cached = s.geometry == Geometry::Cached;
-      const int src = s.tangent == TangentSource::Constant ? 0 : s.tangent == TangentSource::Stored ? 1 : 2;
-      auto launch = [&](Index begin, Index end, bool by_color) {
-        dispatch(cached, src, diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
-      };
-      if (s.scatter == Scatter::Colored) {
-        for (std::size_t col = 0; col + 1 < b.color_start.size(); ++col)
-          launch(b.color_start[col], b.color_start[col + 1], true);
-      } else {
-        launch(0, b.count, false);
-      }
-    } else {
-      Kokkos::abort("InternalForce: this element has no matrix-free operator (MatrixFreeElement)");
-    }
-  }
-
-  // The template instantiations: geometry x source x diagonal.
-  template <bool C, int S, bool D>
-  void go(const OperatorCoefficients& k, const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
-          const Vec& slots, Out out, Index begin, Index end, bool by_color, int unit_dir) {
-    kernels::launch_operator<Elem, C, S, D>(b, t, coords, N, k, u, x, y, slots, out, begin, end, by_color, unit_dir);
-  }
-  template <bool C, int S>
-  void go2(bool diagonal, const OperatorCoefficients& k, const Vec& coords, Index N, const Vec& u,
-           const Vec& x, const Vec& y, const Vec& slots, Out out, Index begin, Index end, bool by_color,
-           int unit_dir) {
-    if (diagonal) go<C, S, true>(k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
-    else go<C, S, false>(k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
-  }
-  template <bool C>
-  void go1(int src, bool diagonal, const OperatorCoefficients& k, const Vec& coords, Index N, const Vec& u,
-           const Vec& x, const Vec& y, const Vec& slots, Out out, Index begin, Index end, bool by_color,
-           int unit_dir) {
-    if (src == 0) go2<C, 0>(diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
-    else if (src == 1) go2<C, 1>(diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
-    else go2<C, 2>(diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
-  }
-  void dispatch(bool cached, int src, bool diagonal, const OperatorCoefficients& k, const Vec& coords, Index N,
-                const Vec& u, const Vec& x, const Vec& y, const Vec& slots, Out out, Index begin, Index end,
-                bool by_color, int unit_dir) {
-    if (cached) go1<true>(src, diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
-    else go1<false>(src, diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
-  }
-
-  void store_tangents(const OperatorSettings& s, const Vec& coords, Index N, const Vec& u) override {
-    if constexpr (MatrixFreeElement<Elem>) {
-      if (s.geometry == Geometry::Cached) kernels::launch_store_tangents<Elem, true>(b, t, coords, N, u);
-      else kernels::launch_store_tangents<Elem, false>(b, t, coords, N, u);
-    }
-  }
-  std::int64_t enable_stored_tangents() override {
-    if (t.stored.extent(0) > 0) return 0;
-    const auto n = static_cast<std::size_t>(kernels::Storage<Elem>::SIZE) * Elem::NGP * b.padded;
-    t.stored = Vec("batch_stored_tangent", n);
-    return static_cast<std::int64_t>(n) * 8;
-  }
-  TangentSymmetry tangent_symmetry() const override { return Elem::TANGENT; }
-  bool has_state() const override { return Elem::Material::NSTATE > 0; }
-  void element_output(int which, const Kokkos::View<Index*, Space>& elems, const Kokkos::View<Index*, Space>& rows,
-                      const Vec& out, std::int64_t offset, const Vec& coords, Index N, const Vec& u) override {
-    if (elems.extent(0) > 0) kernels::launch_element_output<Elem>(b, which, elems, rows, out, offset, coords, N, u);
-  }
-  void drm_forces(bool cached, const Vec& coords, Index N, const Kokkos::View<Index*, Space>& elems,
-                  const Kokkos::View<std::uint32_t*, Space>& masks, const Kokkos::View<Index*, Space>& node_slot,
-                  const Vec& du, const Vec& da, const Vec& dv, bool damped, const Vec& sc, const Vec& st,
-                  const Vec& slots, std::int64_t base) override {
-    if constexpr (kernels::kLinearWithState<typename Elem::Material>) {
-      (void)cached, (void)damped;
-      kernels::launch_drm_forces_compute<Elem>(b, coords, N, elems, masks, node_slot, du, da, dv, sc, st, slots,
-                                               base);
-    } else if constexpr (MatrixFreeElement<Elem> && Elem::Material::CONSTANT_TANGENT) {
-      (void)sc, (void)st;
-      if (cached && b.geometry.extent(0) > 0)
-        kernels::launch_drm_forces<Elem, true>(b, t, coords, N, elems, masks, node_slot, du, da, dv, damped, slots,
-                                               base);
-      else
-        kernels::launch_drm_forces<Elem, false>(b, t, coords, N, elems, masks, node_slot, du, da, dv, damped, slots,
-                                                base);
-    } else {
-      (void)dv, (void)damped, (void)sc, (void)st;
-      (void)cached, (void)coords, (void)N, (void)elems, (void)masks, (void)node_slot, (void)du, (void)da,
-          (void)slots, (void)base;
-      Kokkos::abort("H5DRM: a DRM element needs an elastic material (compile/drm.cpp refuses the others)");
-    }
-  }
-  void commit_state() override { b.current = 1 - b.current; }
-  void set_step(const StepContext& s) override { b.step = s; }
-  bool set_material_stage(std::int32_t material, int stage) override {
-    using MP = typename Elem::Material::Params;
-    // The material's own loadStage, or the wrapped material's (UniformDamped keeps it in mat).
-    constexpr bool own = requires(MP q) { q.loadStage = 0; };
-    constexpr bool wrapped = requires(MP q) { q.mat.loadStage = 0; };
-    if constexpr (own || wrapped) {
-      bool any = false;
-      for (std::size_t i = 0; i < host_params.size(); ++i)
-        if (param_material[i] == material) {
-          if constexpr (own) host_params[i].p.mat.loadStage = stage;
-          else host_params[i].p.mat.mat.loadStage = stage;
-          any = true;
-        }
-      if (any) {
-        auto m = Kokkos::create_mirror_view(b.params);
-        for (std::size_t i = 0; i < host_params.size(); ++i) m(i) = host_params[i];
-        Kokkos::deep_copy(b.params, m);
-        upload_replay_params();
-      }
-      return any;
-    } else {
-      (void)material;
-      (void)stage;
-      return false;
-    }
-  }
-  bool constant_tangent() const override { return Elem::Material::CONSTANT_TANGENT; }
-
-  int max_elements_per_team() const override {
-    const auto max_bytes = Kokkos::TeamPolicy<Space>::scratch_size_max(0);
-    return std::max(1, static_cast<int>(max_bytes / (kernels::TeamScratch<Elem>::PER_ELEMENT * sizeof(double))));
-  }
-};
-
-}  // namespace
+// The typed batches are instantiated in internal_force_pairs_<k>.cpp (internal_force_batch.hpp).
+namespace batch_impl {
+extern template void register_batches<0>(BatchFactory*);
+extern template void register_batches<1>(BatchFactory*);
+extern template void register_batches<2>(BatchFactory*);
+extern template void register_batches<3>(BatchFactory*);
+extern template void register_batches<4>(BatchFactory*);
+extern template void register_batches<5>(BatchFactory*);
+extern template void register_batches<6>(BatchFactory*);
+extern template void register_batches<7>(BatchFactory*);
+extern template void register_batches<8>(BatchFactory*);
+extern template void register_batches<9>(BatchFactory*);
+extern template void register_batches<10>(BatchFactory*);
+extern template void register_batches<11>(BatchFactory*);
+extern template void register_batches<12>(BatchFactory*);
+extern template void register_batches<13>(BatchFactory*);
+extern template void register_batches<14>(BatchFactory*);
+extern template void register_batches<15>(BatchFactory*);
+}  // namespace batch_impl
+using batch_impl::upload;
 
 InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
     : u("u", static_cast<std::size_t>(c.dofs.num_equations)),
@@ -474,14 +145,19 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
   }
 
   for (const auto& hb : c.batches) batch_tags_.push_back(hb.tag);
+  std::vector<batch_impl::BatchFactory> factory(static_cast<std::size_t>(registry::num_elements * registry::num_materials),
+                                                nullptr);
+  [&]<int... K>(std::integer_sequence<int, K...>) {
+    (batch_impl::register_batches<K>(factory.data()), ...);
+  }(std::make_integer_sequence<int, batch_impl::kSplitUnits>{});
   for (std::size_t i = 0; i < c.batches.size(); ++i) {
     const auto& hb = c.batches[i];
+    bool cacheable = false;
     registry::for_each_pair([&]<class E, class M>(int index) {
-      if (index != hb.pair) return;
-      using Elem = typename E::template Element<typename M::Material>;
-      batches_.push_back(std::make_unique<TypedBatch<Elem>>(
-          hb, offsets[i], has_cache_ && Elem::GEOMETRY_CACHEABLE, coords_, nnodes_));
+      if (index == hb.pair) cacheable = E::template Element<typename M::Material>::GEOMETRY_CACHEABLE;
     });
+    batches_.push_back(factory[static_cast<std::size_t>(hb.pair)](hb, offsets[i], has_cache_ && cacheable, coords_,
+                                                                  nnodes_));
   }
   gather_ = SlotGather(nslots, neq_, pairs);
   Kokkos::fence();
