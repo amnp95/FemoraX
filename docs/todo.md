@@ -201,10 +201,10 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     SW4's station output is in the new file's frame (no sign change). Left: 10-20 % low at
     8-10 Hz (the 4 m linear mesh: about 9 elements per wavelength at 10 Hz in the top layer),
     and a shift of one sample (the file's `tstart` = dt puts its first sample at dt).
-    Proposal for the user (schema): a DRM file has one frame and FemoraX reads it as is;
-    a transformation T applies to points and motions; an explicit OpenSees-compatibility
-    option keeps the z flip for files made for OpenSees; the box computed from the stations
-    when `drmbox_*` is missing; a deviation entry. Also check `tstart` against SW4's first
+    Approved by the user (2026-11-19): a DRM file has one frame and FemoraX reads it as is;
+    a transformation T applies to points and motions; no OpenSees-compatibility option; the
+    box computed from the stations when `drmbox_*` is missing; a major schema version bump
+    (older H5DRM model files refused with a message); a deviation entry. Also check `tstart` against SW4's first
     sample. Other observations from the same runs: P waves get the shear damping ratio (SW4:
     `xip` = `xis` / 2; per-group ratios in Uniform damping would fix it); and two runs pinned
     one per socket (56 threads, numactl) took 10.3-10.5 min each against 15.7 min for one
