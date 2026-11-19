@@ -997,7 +997,12 @@ Grote-Michel-Sauter stabilization** (Math. Comp. 2021, doi:10.1090/mcom/3650,
 arXiv:2005.13350): the original scheme "may become unstable at certain discrete values of the
 time step"; the stabilized one replaces its polynomial by a Chebyshev-damped one (nu = 0.05),
 is stable under a condition set by the coarse mesh only, stays explicit, second order and
-energy-conserving, and with nu = 0 is the original scheme. Step ratio 2 between levels. Levels
+energy-conserving, and with nu = 0 is the original scheme. Step ratio 2 between levels.
+Reproduced in 1D before any FemoraX code (`docs/research/time_step_remedies/prototype/`): one
+level is exactly leapfrog, the unstabilized scheme's first unstable step appears at 0.7097 h_c
+for p = 2 (the paper: 0.7104 h_c), and nu = 0.01 removes every unstable step. The fine
+substeps apply the stiffness to the fine DOFs' values only (A Pi_f z, a column restriction): the
+elements touching a fine DOF, evaluated with the coarse DOFs set to zero. Levels
 p = 0..L with steps dt_p = dt / m^p (m = 2 by default): each element gets the coarsest level
 whose step is at most its own stable step (`critical_dt`), and each equation the finest level
 of the elements that touch it (an element takes the coarsest level whose step is at most 0.9
