@@ -124,6 +124,17 @@ plain elimination (more surface points than beam DOFs): a soft bonded surface la
 kinematic coupling slaving the beam node to its perimeter. Order agreed: beams first (after
 LTS 3b), then rigid links / diaphragms, then embedded piles.
 
+**Curated components and the performance gate (the user, 2026-11-19):** Femora supports only
+the OpenSees components judged useful, so one model runs in both solvers; each new component
+passes a gate first: its explicit stable step (declared; cost; isolable by LTS), GPU fit
+(compile-time sizes, no divergent iterations), the mass standard, and a TACC GPU benchmark.
+Candidates noted with their risks (docs/design.md, "What Femora can emit" for the agreed list):
+u-p elements for liquefaction (water's fast P wave shrinks the step: LTS or reduced fluid
+compressibility), zeroLength with PySimple1 / TzSimple1 / QzSimple1 springs and viscous
+dashpots (zero mass, stiff springs), Steel02 and cyclic concretes (divergent branches), shells
+(step ~ thickness^2), tetrahedra (locking, small elements), bearings / joints / MVLEM (on
+request only).
+
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
    yielding is done) and benchmarks of the damped kernels.
