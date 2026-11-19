@@ -225,3 +225,19 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     de-amplifies (ratio to the free field 0.2-1), below it amplifies x up to about 1.6; 213 s
     on 112 cores (1.55 ms/step). Plots: `plots/Point0_plastic_basin.png`,
     `plots/Point1_plastic_basin.png`.
+21. **Bug: nodal masses get no mass-proportional damping (fix before the beams).** Found
+    2026-11-19. OpenSees' `region <tag> -ele ...` (Femora's default; not `-eleOnly`) puts the
+    elements *and their nodes* in the region (`MeshRegion::setElements`), and
+    `setRayleighDampingFactors` gives the nodes the region's alphaM, which each node applies to
+    its own mass (`Node.cpp:1081`, alphaM M v). FemoraX's Rayleigh regions are element lists
+    only: masses from `/mass` are never damped, so any model with nodal masses in a damped
+    region (Femora's beams and buildings put all their mass on the nodes, with element density
+    0) is less damped than in OpenSees. Fix: the nodes of a region's elements take its alphaM
+    (the last region wins, as for elements); an optional `element_only` attribute for
+    `-eleOnly` (a schema addition: ask the user). Test: a mass on a spring node in a damped
+    region against OpenSees.
+22. **The stable step with nodal masses (fix before the beams).** Elements bound their omega^2
+    with their own mass; an element whose mass is on its nodes (Femora's beams: element
+    density 0, `/mass` on the nodes) gives no bound, and in general mass on nodes is ignored.
+    Give each element a share of its nodes' masses (a partition of the assembled mass keeps the
+    element eigenvalue bound valid); local time stepping needs the same per-element step.
