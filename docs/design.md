@@ -909,6 +909,63 @@ GPU gains most, because almost all the work is element state determination.
   small elements. PML3D carries its own integration parameters; check its OpenSees
   implementation before supporting it in explicit runs.
 
+## Structures: mass and damping standard (decided with the user, 2026-11-19)
+
+The rules every element, the explicit and implicit stages and Femora's export follow, from
+the first beam on. Context: OpenSees' beams give no rotational mass and OpenSees' explicit
+integrators refuse a massless DOF (`DiagonalDirectSolver`: "aii = 0"), so Femora today sets
+the elements' density to 0 and writes every element's mass, translational and (scaled)
+rotational, as nodal masses (`line_meshpart_base.py`: rho A L / 2 (L / 2)^2 per node;
+`steel_frame.py`: rho I L).
+
+**Mass.**
+1. An element with a density computes its own mass, translational **and rotational** (beams:
+   rho A per length and the rotary inertia rho I, lumped to the nodes; OpenSees has no
+   rotational part). Physical rotary inertia by default; an optional rotary inertia scaling
+   with Femora's formula, reported when used (to be finalised with the beams).
+2. An element with density 0 has no mass, translational or rotational.
+3. An element group may give its mass explicitly (for example a mass per length): it
+   replaces the computed mass, per element group, never per node.
+4. Nodal masses (`/mass`) always add to the element masses: they are additional masses
+   (floors, equipment, caps), or the whole mass when the elements have density 0.
+5. In an explicit stage every free DOF must have mass: otherwise the run stops before it
+   starts, naming the node and the DOF. Negative masses are refused.
+6. The run summary reports the element mass and the additional mass separately, so a double
+   count is visible at once.
+
+**Femora's export.** For FemoraX: the element densities and sections, and only the real
+additional masses as nodal masses (FemoraX computes the element masses). For OpenSees: the
+masses computed explicitly on the nodes, as today. The two give the same total mass, which
+FemoraX's run summary lets one check.
+
+**Mass-proportional damping.** A damped region's alphaM acts on all the mass in it: the
+masses its elements compute, through each element's own region, and the nodal masses on the
+nodes of its elements, as OpenSees does for `region -ele` (the nodes join the region;
+`-eleOnly` keeps them out). So the same region damps the same mass whether it comes from
+densities or from nodes. Today FemoraX damps element masses only (bug: docs/todo.md item 21).
+A node in several regions with different alphaM (a column meeting the soil): its nodal mass
+takes the last region's alphaM, as in OpenSees, and FemoraX warns, naming the nodes and the
+mass involved; with densities the question does not arise (each element mass is damped by
+its own element's region), one reason to prefer densities. Stiffness-proportional and
+Uniform damping do not depend on where the mass is.
+
+**The stable step** uses each element's share of its nodes' masses (a partition of the
+assembled mass keeps the element eigenvalue bound valid), so elements whose mass is on their
+nodes get a correct step (docs/todo.md item 22); local time stepping uses the same
+per-element step to choose levels.
+
+**Decided with the user, to design next (2026-11-19):**
+- Short structural elements: force-based beams (one element per member) avoid most small
+  steps; local time stepping is the general answer for whatever remains (short
+  displacement-based members, short force-based members, small bricks), and comes before the
+  beams (tested with bricks). No ElasticBeamColumn: an elastic section in a displacement- or
+  force-based beam (a closed-form path only if benchmarks ask for it).
+- Damping of beams: no Rayleigh betaK on beams in explicit stages (it cuts the step and
+  gives spurious damping forces in yielding frames); mass-proportional and Uniform damping on
+  the basic forces instead.
+- Still to discuss: the constraints the models need (rigidDiaphragm, rigidLink: exact
+  transformation with block masses for rigid bodies) and the user's embedded interface.
+
 ## Local time stepping (plan, 2026-11-17; waiting for the user's approval)
 
 **The problem.** An explicit stage steps every element at the smallest stable step of the
