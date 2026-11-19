@@ -102,9 +102,10 @@ std::vector<std::string> ordered_children(const Group& g) {
   return names;  // already sorted; equal width makes this numeric order
 }
 
-// An item a later minor version added: reading it from an older file is an error.
+// An item a later 0.x minor version added: reading it from an older file is an error.
+// Version 1.0 includes every 0.x item.
 void require_minor(const Model& m, int minor, const std::string& what) {
-  if (m.version.minor < minor) {
+  if (m.version.major == 0 && m.version.minor < minor) {
     invalid(what + " was added in schema 0." + std::to_string(minor) + ", but the file declares " +
             std::to_string(m.version.major) + "." + std::to_string(m.version.minor));
   }
@@ -133,12 +134,13 @@ void read_root_attrs(Group& root, Model& m) {
   const auto v = root.attr_int_array("schema_version", 2);
   m.version = {v[0], v[1]};
   const auto r = reader_schema_version;
-  if (m.version.major != r.major) {
+  const bool v0 = m.version.major == 0 && m.version.minor >= 0 && m.version.minor <= last_v0_minor;
+  if (m.version.major != r.major && !v0) {
     invalid("schema version " + std::to_string(m.version.major) + "." +
             std::to_string(m.version.minor) + " is not supported: this reader reads " +
-            std::to_string(r.major) + ".x files");
+            std::to_string(r.major) + ".x files (and 0.x files up to 0." + std::to_string(last_v0_minor) + ")");
   }
-  if (m.version.minor > r.minor || m.version.minor < 0) {
+  if (!v0 && (m.version.minor > r.minor || m.version.minor < 0)) {
     invalid("schema version " + std::to_string(m.version.major) + "." +
             std::to_string(m.version.minor) + " is newer than this reader (" +
             std::to_string(r.major) + "." + std::to_string(r.minor) +
@@ -558,6 +560,14 @@ void read_time_series(Group& root, Model& m) {
 
 H5DrmPattern read_h5drm(Group& g, std::int32_t tag, const Model& m, const std::string& model_file) {
   require_minor(m, 6, g.path() + " (type \"H5DRM\")");
+  if (m.version.major == 0) {
+    invalid(g.path() + " (type \"H5DRM\"): schema 1.0 changed what an H5DRM pattern means, and the file declares " +
+            std::to_string(m.version.major) + "." + std::to_string(m.version.minor) +
+            ". Since 1.0 FemoraX reads the DRM file as it is: its stations and motions in one frame, with no "
+            "flip of the z motion (OpenSees flips it), and a coordinate transformation turns the motions with "
+            "the stations. Check the DRM file's frame (a file made for OpenSees has its z motion negated), then "
+            "export the model again with schema 1.0");
+  }
   H5DrmPattern d;
   d.tag = tag;
   d.file = g.attr_string("file");

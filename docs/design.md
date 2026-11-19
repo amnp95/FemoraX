@@ -1170,7 +1170,10 @@ changelog (checked 2026-11-06):
 - ForceBeamColumn with fiber or RC sections: iterates inside the element. Use one team
   (thread block) per element, threads over fibers.
 - PML3D: extra DOFs and its own integration parameters; needs its own kernel.
-- H5DRM: large HDF5 input every step; prefetch to the device asynchronously.
+- H5DRM: large HDF5 input every step; prefetch to the device asynchronously (done: the
+  streamed window). The DRM file is read in its own frame and a coordinate transformation
+  turns stations and motions alike (schema 1.0, 2026-11-19; OpenSees flips the z motion and
+  never turns it: docs/deviations.md).
 - Contact (ZeroLengthContactASDimplex, embedded node contact): branchy state updates.
 - Modal damping: needs an eigenvalue solve; do it last.
 

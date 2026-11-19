@@ -42,6 +42,10 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
   versions.
 - Each major version has its own directory, `schema/v<major>/`; this README is updated in
   place for minor versions, and the history below records what each minor version added.
+  Exception: 1.0 changed only what an H5DRM pattern means, so it stays documented here
+  (the tools keep their `schema/v0/` paths). A 1.0 reader also reads the 0.x files (up to
+  0.7) except their H5DRM patterns, which it refuses with a message that explains the
+  change.
 
 | Version | Change |
 |---|---|
@@ -52,6 +56,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.5 | Femora's retry and substep recovery defined: `max_retries`, `num_sublevels`, `num_substeps` (attributes since 0.0) with their rules |
 | 0.6 | pattern type `H5DRM` (the DRM data in its own file) |
 | 0.7 | optional `/damping/uniform` (Uniform damping per element region, section 3.7.1) |
+| 1.0 | H5DRM: the DRM file is read as it is, its stations and motions in one frame (no flip of the z motion, which OpenSees and FemoraX 0.x applied), and a coordinate transformation turns the motions with the stations; the box description `drmbox_*` is optional. Breaking: an H5DRM pattern in a 0.x file is refused (section 3.9) |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
@@ -108,7 +113,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `schema_version` | `[2]` int32 | `[0, 5]` (a reader of 0.5 also reads 0.0 to 0.4) |
+| `schema_version` | `[2]` int32 | `[1, 0]` (a reader of 1.0 also reads 0.0 to 0.7, except H5DRM patterns there) |
 | `ndm` | int32 | spatial dimension; must be `3` in v0 |
 | `generator` | string | e.g. `"femora 0.9.1"`; informational |
 | `model_name` | string | Femora `model_name`; informational |
@@ -322,14 +327,14 @@ Effective load `-M * r * factor * a_g(t)` through each element's mass, as OpenSe
 `addInertiaLoadToUnbalance`, plus nodal masses from `/mass`. Responses are relative to the
 ground, as in OpenSees.
 
-**H5DRM** *(since 0.6)*: `pattern H5DRM <tag> "<file>" <factor> <crdScale> <distanceTolerance>
+**H5DRM** *(since 0.6; its meaning changed in 1.0)*: `pattern H5DRM <tag> "<file>" <factor> <crdScale> <distanceTolerance>
 <doCoordinateTransformation> <T00> ... <T22> <x00> <x01> <x02>`, Femora's
 `model.pattern.h5drm`.
 
 | Item | Shape, type | Meaning |
 |---|---|---|
 | attr `type` | string | `"H5DRM"` |
-| attr `file` | string | the DRM file (OpenSees' H5DRM layout: `DRM_Data/xyz`, `internal`, `data_location`, `displacement`, `acceleration`, `DRM_Metadata/dt`, `tstart`, `tend`, `drmbox_*`); a relative path is relative to the model file's folder. It must exist when the model is read |
+| attr `file` | string | the DRM file (OpenSees' H5DRM layout: `DRM_Data/xyz`, `internal`, `data_location`, `displacement`, `acceleration`, `DRM_Metadata/dt`, `tstart`, `tend`, optional `drmbox_x0` (the origin when absent) and `drmbox_*min`/`max` (the stations' bounding box when absent)); a relative path is relative to the model file's folder. It must exist when the model is read |
 | attr `factor` | float64 | `<factor>` |
 | attr `crd_scale` | float64 | `<crdScale>`, finite and non-zero |
 | attr `distance_tolerance` | float64 | `<distanceTolerance>`, positive: a mesh node matches the nearest DRM station closer than this |
@@ -337,8 +342,13 @@ ground, as in OpenSees.
 | `transform` | `[3, 3]` float64 *(required when the transformation is on)* | `T` (row-major `T00 T01 T02 / T10 ...`) |
 | `origin` | `[3]` float64 *(required when the transformation is on)* | `x0` |
 
-With the transformation on, each station `x` is placed at `T (crd_scale (x - drmbox_x0)) + x0`,
-as OpenSees does. The DRM elements are the elements all of whose nodes match a station; each
+**The DRM file's frame (1.0).** The file's stations and its motions are in one frame, and
+FemoraX reads both as they are: the z component is the z of the stations' frame (no flip;
+OpenSees negates every z motion it reads, so a file made for OpenSees has its z motion
+negated and must be converted). With the transformation on, each station `x` is placed at
+`T (crd_scale (x - drmbox_x0)) + x0`, as OpenSees does, and each motion vector `u`
+(displacement, acceleration, and the velocity derived from them) becomes `T u` (OpenSees
+never turns the motions); `crd_scale` scales coordinates only. The DRM elements are the elements all of whose nodes match a station; each
 one with both boundary (`internal`) and exterior nodes receives the effective forces
 `-M_be a_e - K_be u_e` (boundary nodes) and `M_eb a_b + K_eb u_b` (exterior nodes), with the
 motion interpolated linearly in time between the file's samples (OpenSees

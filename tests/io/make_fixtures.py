@@ -529,9 +529,9 @@ def m_h5drm(attrs=None, drop=(), transform=True, version=None, file="drm_fixture
     return m
 
 
-def write_drm_file(path: Path) -> None:
+def write_drm_file(path: Path, box: bool = True) -> None:
     """A minimal file in OpenSees' H5DRM layout: 8 stations at the corners of a unit cube,
-    two time samples of zero motion."""
+    two time samples of zero motion; box=False leaves out the optional drmbox_* (schema 1.0)."""
     xyz = np.array([[x, y, z] for z in (0.0, 1.0) for y in (0.0, 1.0) for x in (0.0, 1.0)])
     with h5py.File(path, "w", libver=("earliest", "v110")) as f:
         d = f.create_group("DRM_Data")
@@ -541,10 +541,14 @@ def write_drm_file(path: Path) -> None:
         d.create_dataset("displacement", data=np.zeros((24, 2)))
         d.create_dataset("acceleration", data=np.zeros((24, 2)))
         md = f.create_group("DRM_Metadata")
-        for k, v in {"dt": 0.01, "tstart": 0.0, "tend": 0.01, "drmbox_xmin": 0.0, "drmbox_xmax": 1.0,
-                     "drmbox_ymin": 0.0, "drmbox_ymax": 1.0, "drmbox_zmin": 0.0, "drmbox_zmax": 1.0}.items():
+        meta = {"dt": 0.01, "tstart": 0.0, "tend": 0.01}
+        if box:
+            meta.update({"drmbox_xmin": 0.0, "drmbox_xmax": 1.0, "drmbox_ymin": 0.0, "drmbox_ymax": 1.0,
+                         "drmbox_zmin": 0.0, "drmbox_zmax": 1.0})
+        for k, v in meta.items():
             md.create_dataset(k, data=np.float64(v))
-        md.create_dataset("drmbox_x0", data=np.zeros(3))
+        if box:
+            md.create_dataset("drmbox_x0", data=np.zeros(3))
 
 
 DRM_CASES = [
@@ -554,6 +558,11 @@ DRM_CASES = [
     # valid in the schema; refused: OpenSees stores the factor but never applies it
     ("h5drm_factor", "explicit", "unsupported", "never applies it", m_h5drm({"factor": np.float64(2.0)})),
     ("h5drm_in_0_5_file", "explicit", "invalid", "was added in schema 0.6", m_h5drm(version=[0, 5])),
+    # schema 1.0 changed what an H5DRM pattern means: a 0.x file's pattern is refused
+    ("h5drm_in_0_7_file", "explicit", "invalid", "schema 1.0 changed what an H5DRM pattern means",
+     m_h5drm(version=[0, 7])),
+    # schema 1.0: the DRM file's box description is optional
+    ("h5drm_file_without_box", "explicit", "valid", "", m_h5drm(file="drm_fixture_no_box.h5drm")),
     ("h5drm_missing_file", "explicit", "invalid", "does not exist", m_h5drm(file="no_such_file.h5drm")),
     ("h5drm_tolerance", "explicit", "invalid", "distance_tolerance' must be positive",
      m_h5drm({"distance_tolerance": np.float64(0.0)})),
@@ -621,13 +630,15 @@ CASES = [
     ("minimal", "explicit", "valid", "", m_minimal),
     ("overlapping_regions", "explicit", "warning", "share 3 element(s)", m_overlap),
     ("schema_0_0", "explicit", "valid", "", m_version(0, 0)),
+    ("schema_0_7", "explicit", "valid", "", m_version(0, 7)),
     ("vtkhdf_elements", "explicit", "valid", "", m_vtkhdf_elements([1, 2, 25])),
     ("equal_dof_commands", "explicit", "valid", "", m_commands("valid")),
     # --- invalid ---------------------------------------------------------------------
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
-    ("major_version", "explicit", "invalid", "this reader reads 0.x files", m_version(1, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(0, 8)),
+    ("major_version", "explicit", "invalid", "this reader reads 1.x files", m_version(2, 0)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(1, 1)),
+    ("unknown_0_minor", "explicit", "invalid", "and 0.x files up to 0.7", m_version(0, 8)),
     # --- schema 0.3: Static / LoadControl, ModifiedNewton, solver attributes ---------
     ("static_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
      m_static(version=[0, 2])),
@@ -759,6 +770,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     rows = []
     write_drm_file(out / "drm_fixture.h5drm")
+    write_drm_file(out / "drm_fixture_no_box.h5drm", box=False)
     for name, base, expect, text, mutate in CASES + SOIL_CASES + RECOVERY_CASES + DRM_CASES + UNIFORM_CASES:
         path = out / f"{name}.femorax.h5"
         if base is None:

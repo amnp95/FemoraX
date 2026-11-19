@@ -118,6 +118,34 @@ Default tolerances (until a component states otherwise):
 
 ## Entries
 
+### H5DRM — the DRM file is read in its own frame; a transformation turns its motions too (decided with the user, 2026-11-19; schema 1.0)
+- OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp`, commit 955ceb0: every z
+  displacement and acceleration read from the file is negated (lines 1122-1125,
+  1302-1305) while the station coordinates are not, and the coordinate transformation
+  (`lam_transform`) moves the stations only, never the motion vectors.
+- Difference: FemoraX reads the file's stations and motions in one frame, as they are (no
+  flip of z), and with the transformation on turns the motions with the stations
+  (`u_model = T u_file`, for displacement, acceleration and the velocity derived from them;
+  `crd_scale` scales coordinates only). The box description `drmbox_*` is optional
+  (`drmbox_x0` the origin when absent). Schema 1.0: an H5DRM pattern in a 0.x file is
+  refused with a message that explains the change (`io/model_reader.cpp`).
+- Why: displacement and acceleration are vectors; a change of frame applies to points and
+  vectors alike, or the file no longer describes a wave field that satisfies the equations
+  of motion. OpenSees' z flip forces DRM files to be prepared with negated z motion, and a
+  file prepared that way for Site 2 (`HaywardFault_SW4_DRM_Site2.h5drm`) ended with x and y
+  inconsistent with each other.
+- Effect on results: against SW4's two stations of Site 2 (the free field: the box in SW4's
+  layered medium, Uniform damping at SW4's ratios, Stampede3 2026-11-19), the user's file in
+  one frame read as is correlates 0.996-0.999 in every component, its Fourier amplitudes
+  within 0.90-1.02 over 0.5-6 Hz, with 0.04-0.11 m/s2 leaking out of the DRM box; the file
+  prepared for OpenSees' flip gives 0.65-0.70 in z (a spurious vertical burst of 2.6x SW4's
+  vertical motion) and 0.24-0.51 m/s2 leaking out. A file made for OpenSees must have its z
+  motion negated before FemoraX reads it (the converter warns).
+- Test: `DrmFreeField.AFileInATurnedFrameMovesAsTheFreeField` (a file turned by 40 degrees
+  about an oblique axis, turned back by the transformation: 2.3e-14, as the unturned file),
+  its Uniform- and Rayleigh-damped variants; the fixtures `h5drm_in_0_7_file` and
+  `h5drm_file_without_box` (`tests/io/make_fixtures.py`).
+
 ### H5DRM — the DRM forces include the layer's Rayleigh damping (decided with the user, 2026-11-12)
 - OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp` (`CalculateBoundaryForces`),
   commit 955ceb0

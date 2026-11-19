@@ -6,8 +6,10 @@
 // layers, whose outer faces are fixed and which has no base excitation. With the same
 // element equations, the same integrator and the same step, the DRM forces make every node
 // inside the layer move exactly as the free field (linear superposition of the discrete
-// recurrence), to rounding: checked for every node inside and on the DRM boundary, and
-// against the OpenSees convention of a downward z axis in the file.
+// recurrence), to rounding: checked for every node inside and on the DRM boundary. The file
+// is in the model's frame (schema 1.0: read as it is, no flip of z), or in a frame turned
+// about an oblique axis, stations and motions alike, which the pattern's coordinate
+// transformation turns back.
 
 #include <gtest/gtest.h>
 
@@ -128,7 +130,7 @@ void damp_uniform(io::Model& m) {
   m.uniform.push_back(r);
 }
 
-double free_field_box(Damping damping, bool implicit = false) {
+double free_field_box(Damping damping, bool implicit = false, bool rotated = false) {
 
   // 1. The free field: a 1 x 1 x 8 laminar column, base pulse in x.
   femorax::testing::ColumnSpec cs;
@@ -232,12 +234,45 @@ double free_field_box(Damping damping, bool implicit = false) {
     const int k = static_cast<int>(std::lround((d.xyz[3 * st + 2] + kNz * kDz) / kDz));
     for (int n = 0; n < kSteps; ++n)
       for (int c = 0; c < 3; ++c) {
-        const double sign = c == 2 ? -1.0 : 1.0;  // the file's z axis points down
         const std::size_t r = (3 * st + static_cast<std::size_t>(c)) * static_cast<std::size_t>(d.samples) +
                               static_cast<std::size_t>(n + 1);
-        d.disp[r] = sign * total(rd, ug, n, k, c);
-        d.acc[r] = sign * total(ra, agv, n, k, c);
+        d.disp[r] = total(rd, ug, n, k, c);
+        d.acc[r] = total(ra, agv, n, k, c);
       }
+  }
+  // The turned file frame: a rotation R by 40 degrees about the axis (1, 2, 2) / 3 and the
+  // origin c; the file holds R^T (x - c) and R^T u, and the pattern's transformation (T = R,
+  // x0 = c) turns both back.
+  double R[3][3];
+  const double ccen[3] = {3.0, 3.0, -4.0};
+  if (rotated) {
+    const double ax[3] = {1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0}, th = 40.0 * M_PI / 180.0;
+    const double co = std::cos(th), si = std::sin(th);
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) R[i][j] = (i == j ? co : 0.0) + (1.0 - co) * ax[i] * ax[j];
+    R[0][1] -= si * ax[2];
+    R[0][2] += si * ax[1];
+    R[1][0] += si * ax[2];
+    R[1][2] -= si * ax[0];
+    R[2][0] -= si * ax[1];
+    R[2][1] += si * ax[0];
+    auto turn_back = [&](double* v, const double* shift) {  // v <- R^T (v - shift)
+      const double w[3] = {v[0] - shift[0], v[1] - shift[1], v[2] - shift[2]};
+      for (int i = 0; i < 3; ++i) v[i] = R[0][i] * w[0] + R[1][i] * w[1] + R[2][i] * w[2];
+    };
+    const double zero[3] = {0.0, 0.0, 0.0};
+    for (std::size_t st = 0; st < S; ++st) {
+      turn_back(&d.xyz[3 * st], ccen);
+      for (auto* h : {&d.disp, &d.acc})
+        for (std::int64_t n = 0; n < d.samples; ++n) {
+          const auto at = [&](int c) {
+            return (3 * st + static_cast<std::size_t>(c)) * static_cast<std::size_t>(d.samples) + static_cast<std::size_t>(n);
+          };
+          double v[3] = {(*h)[at(0)], (*h)[at(1)], (*h)[at(2)]};
+          turn_back(v, zero);
+          for (int c = 0; c < 3; ++c) (*h)[at(c)] = v[c];
+        }
+    }
   }
   const std::string drm = temp_file("free_field.h5drm");
   femorax::testing::write_drm_file(drm, d);
@@ -245,6 +280,13 @@ double free_field_box(Damping damping, bool implicit = false) {
   hp.tag = 3;
   hp.file = hp.path = drm;
   hp.distance_tolerance = 1e-6;
+  if (rotated) {
+    hp.do_coordinate_transformation = true;
+    for (int i = 0; i < 3; ++i) {
+      hp.x0[i] = ccen[i];
+      for (int j = 0; j < 3; ++j) hp.T[i][j] = R[i][j];
+    }
+  }
   box.drm_patterns.push_back(hp);
   const std::string bd = temp_file("box_disp.txt");
   add_node_recorder(box, "d", bd, io::NodeResponse::Disp, inside);
@@ -268,7 +310,7 @@ double free_field_box(Damping damping, bool implicit = false) {
     }
   std::printf("[ DRM box%s%s: %zu stations, %zu nodes inside the layer, %d steps: largest difference from the free "
               "field %.2e of its largest displacement %.3e ]\n",
-              implicit ? ", implicit (Newmark, Newton)" : "",
+              implicit ? ", implicit (Newmark, Newton)" : rotated ? ", file frame turned" : "",
               damping == Damping::Rayleigh ? " (Rayleigh-damped)" : damping == Damping::Uniform ? " (Uniform-damped)" : "",
               S, inside.size(), kSteps, worst / scale, scale);
   EXPECT_GT(scale, 1e-6);
@@ -314,6 +356,22 @@ TEST(DrmFreeField, ImplicitUniformDampedBoxMovesAsTheFreeField) {
 }
 TEST(DrmFreeField, ImplicitRayleighDampedBoxMovesAsTheFreeField) {
   EXPECT_LE(free_field_box(Damping::Rayleigh, true), 2e-3);
+}
+
+// The file in a frame turned about an oblique axis (stations and motions), turned back by the
+// pattern's coordinate transformation (schema 1.0): the box follows the free field as with the
+// file in the model's frame. Not turning the motions puts the free field's x motion into all
+// three components and fails. With Rayleigh damping the free field's velocity (from the
+// displacement samples) is turned too: the same error as the unturned file, to rounding.
+TEST(DrmFreeField, AFileInATurnedFrameMovesAsTheFreeField) {
+  EXPECT_LE(free_field_box(Damping::None, false, true), 1e-10);
+}
+TEST(DrmFreeField, AUniformDampedFileInATurnedFrameMovesAsTheFreeField) {
+  EXPECT_LE(free_field_box(Damping::Uniform, false, true), 1e-10);
+}
+TEST(DrmFreeField, ARayleighDampedFileInATurnedFrameMatchesTheUnturnedOne) {
+  const double plain = free_field_box(Damping::Rayleigh), turned = free_field_box(Damping::Rayleigh, false, true);
+  EXPECT_NEAR(turned, plain, 1e-9);
 }
 
 }  // namespace

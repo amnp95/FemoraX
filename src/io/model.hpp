@@ -19,8 +19,11 @@ struct SchemaVersion {
 };
 
 // The schema version this reader implements. It reads files of the same major version
-// with a minor version up to this one.
-inline constexpr SchemaVersion reader_schema_version{0, 7};
+// with a minor version up to this one, and the 0.x files (up to 0.7) except their H5DRM
+// patterns: 1.0 changed what an H5DRM pattern means (the DRM file is read in its own frame,
+// with no flip of z; schema/v0/README.md).
+inline constexpr SchemaVersion reader_schema_version{1, 0};
+inline constexpr int last_v0_minor = 7;
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
 struct Metadata {

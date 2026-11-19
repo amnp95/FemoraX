@@ -53,7 +53,7 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 |---|---|---|
 | UniformExcitation | in progress (1a) | runs on the device; `-accel`, `-fact`, `-vel0`; matches OpenSees in the system test |
 | Path time series | in progress (1a) | uniform `-dt` and `-time` forms, evaluated on the device exactly as PathSeries / PathTimeSeries (`test_ground_motion`); `-time` with `use_last` or `prepend_zero` refused (OpenSees ignores them) |
-| H5DRM | in progress (milestone 4) | schema 0.6; runs in explicit stages, and implicit stages apply it too (not yet verified there) (OpenSees H5DRMLoadPattern: nearest-station matching with the coordinate transformation, linear interpolation, the file's downward z axis, forces from the DRM elements' own K and M). The DRM layer must be linear elastic; factor other than 1 refused (OpenSees never applies it). Histories held whole on the device for now (streaming: next step). Verified: a box inside a DRM layer reproduces a given free field to 2e-14 |
+| H5DRM | in progress (milestone 4) | schema 0.6, meaning changed in 1.0: the DRM file is read in its own frame (no z flip, unlike OpenSees) and the coordinate transformation turns the motions with the stations (docs/deviations.md); explicit and implicit stages, verified against SW4's stations for Site 2 (OpenSees H5DRMLoadPattern otherwise: nearest-station matching, linear interpolation, forces from the DRM elements' own K and M). The DRM layer must be linear elastic; factor other than 1 refused (OpenSees never applies it). Histories held whole on the device for now (streaming: next step). Verified: a box inside a DRM layer reproduces a given free field to 2e-14 |
 | Plain, MultipleSupport | planned | |
 
 ## Integrators

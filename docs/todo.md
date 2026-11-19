@@ -177,8 +177,8 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     change in results); it also speeds up the laptop's CUDA and the SYCL builds. Done
     2026-11-19: 16 generated units (`internal_force_batch.hpp`), the H200 build 14 min 35 s
     -> 2 min 15 s; the GPU tests after the split: next gh session.
-20. **The DRM file's frame: transform coordinates and motions together (high priority; schema
-    proposal first).** Found 2026-11-19 against SW4's stations for Site 2 (Stampede3 spr; runs,
+20. **The DRM file's frame: transform coordinates and motions together.** Done 2026-11-19
+    (schema 1.0; docs/deviations.md, the first H5DRM entry). Found 2026-11-19 against SW4's stations for Site 2 (Stampede3 spr; runs,
     scripts and plots in `/scratch/08189/amnp95/femorax_runs/sw4_match/` on Stampede3).
     OpenSees' H5DRMLoadPattern (commit 955ceb0) multiplies the file's z displacement and
     acceleration by -1 (lines 1122-1125, 1302-1305) and never the coordinates, and its

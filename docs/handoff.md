@@ -86,16 +86,13 @@ the user for SW4's input (`attenuation`, `block`/`rfile` Qs, Qp). Without it: ru
 without the basin (SW4's layered medium only) at a few Uniform ratios and take the one with
 the smallest motion outside the DRM layer (needs the site's layer velocities, check model.tcl).
 
-**DRM frame (2026-11-19, docs/todo.md item 20):** FemoraX (copying OpenSees) flips the DRM
-file's z motion and transforms only the stations; with the user's file in one frame read as
-is, the free field matches SW4's stations to correlation 0.996-0.999. Approved by the
-user (2026-11-19), to do first next session: FemoraX reads the DRM file as it is (no z flip),
-applies the transformation T to the stations and the motions (`crd_scale` to coordinates
-only), computes the box from the stations when `drmbox_*` is missing; no OpenSees-
-compatibility option (OpenSees' convention is wrong); a major schema version bump, with older
-H5DRM model files refused by a message that explains the new convention; a deviation entry;
-tests (a rotated box with T against the free field). Femora's OpenSees export should warn. The Site 2 runs and plots: Stampede3
-`/scratch/08189/amnp95/femorax_runs/sw4_match/`.
+**DRM frame (2026-11-19): done, schema 1.0** (docs/deviations.md, first H5DRM entry). FemoraX
+reads a DRM file as it is (no z flip), turns the motions with the stations under a
+transformation, and needs no `drmbox_*`; H5DRM patterns in 0.x files are refused with an
+explanation. Models made before (the Site 2 runs in Stampede3's
+`/scratch/08189/amnp95/femorax_runs/`) must be exported again as 1.0 with a DRM file in one
+frame (the user's: `drm_inputs/site2_natural/Site2_DRMinput_1km/OpenSeesDRMinput.h5drm`).
+Femora's exporter should write 1.0 and its OpenSees export warn about OpenSees' z flip.
 
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;

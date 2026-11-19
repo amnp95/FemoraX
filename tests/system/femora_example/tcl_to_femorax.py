@@ -245,6 +245,10 @@ def convert(tcl: Path) -> dict:
             drm = dict(tag=int(m.group(1)), file=m.group(2), factor=v[0], crd_scale=v[1], distance_tolerance=v[2],
                        do_coordinate_transformation=int(v[3]), transform=v[4:13], origin=v[13:16])
             process.append(("pattern", {"tag": w.i32(drm["tag"])}, {}))
+            print(f"warning: pattern H5DRM {drm['tag']}: FemoraX (schema 1.0) reads the DRM file "
+                  f"{drm['file']} as it is, its stations and motions in one frame; OpenSees negates the "
+                  "z motion it reads, so a file made for OpenSees needs its z motion negated first",
+                  file=sys.stderr)
         elif head == "pattern":
             if tok[1] != "UniformExcitation" or tok[4] != "-accel":
                 raise Unsupported(s)

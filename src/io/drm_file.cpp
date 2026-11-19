@@ -2,6 +2,8 @@
 
 #include <hdf5.h>
 
+#include <algorithm>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -87,13 +89,27 @@ DrmFile read_drm_header(const std::string& path) {
   f.tend = scalar(file.id, path, "DRM_Metadata/tend");
   if (!(f.dt > 0.0)) fail(path, "DRM_Metadata/dt must be positive");
   if (!(f.tend >= f.tstart)) fail(path, "DRM_Metadata/tend must not be before tstart");
-  const auto x0 = read_all<double>(file.id, path, "DRM_Metadata/drmbox_x0", H5T_NATIVE_DOUBLE, dims);
-  if (x0.size() != 3) fail(path, "DRM_Metadata/drmbox_x0 must have 3 values");
-  for (int i = 0; i < 3; ++i) f.x0[i] = x0[static_cast<std::size_t>(i)];
+  // The box description is optional (a file written in one frame needs none): the
+  // transformation's reference point drmbox_x0 defaults to the origin, and the box to the
+  // stations' bounding box.
+  auto exists = [&](const char* name) { return H5Lexists(file.id, name, H5P_DEFAULT) > 0; };
+  if (exists("DRM_Metadata/drmbox_x0")) {
+    const auto x0 = read_all<double>(file.id, path, "DRM_Metadata/drmbox_x0", H5T_NATIVE_DOUBLE, dims);
+    if (x0.size() != 3) fail(path, "DRM_Metadata/drmbox_x0 must have 3 values");
+    for (int i = 0; i < 3; ++i) f.x0[i] = x0[static_cast<std::size_t>(i)];
+  }
   const char* axis[3] = {"x", "y", "z"};
   for (int i = 0; i < 3; ++i) {
-    f.box_min[i] = scalar(file.id, path, std::string("DRM_Metadata/drmbox_") + axis[i] + "min");
-    f.box_max[i] = scalar(file.id, path, std::string("DRM_Metadata/drmbox_") + axis[i] + "max");
+    f.box_min[i] = std::numeric_limits<double>::infinity();
+    f.box_max[i] = -std::numeric_limits<double>::infinity();
+    for (std::size_t s = 0; s < S; ++s) {
+      f.box_min[i] = std::min(f.box_min[i], f.xyz[3 * s + static_cast<std::size_t>(i)]);
+      f.box_max[i] = std::max(f.box_max[i], f.xyz[3 * s + static_cast<std::size_t>(i)]);
+    }
+    const std::string lo = std::string("DRM_Metadata/drmbox_") + axis[i] + "min",
+                      hi = std::string("DRM_Metadata/drmbox_") + axis[i] + "max";
+    if (exists(lo.c_str())) f.box_min[i] = scalar(file.id, path, lo);
+    if (exists(hi.c_str())) f.box_max[i] = scalar(file.id, path, hi);
   }
   std::vector<hsize_t> dd, da;
   for (const char* name : {"DRM_Data/displacement", "DRM_Data/acceleration"}) {

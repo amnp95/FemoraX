@@ -190,29 +190,44 @@ void DrmLoad::apply(double t, const Vec& f) {
   const double inv_dt = 1.0 / dt;
   const auto hu = hist_u_, ha = hist_a_, du = du_, da = da_, dv = dv_;
   const auto nodes = static_cast<Index>(du_.extent(0) / 3);
+  // The file's motions are in the file's frame, like its stations: with a coordinate
+  // transformation, they turn with the stations (u_model = T u_file; docs/deviations.md,
+  // "H5DRM: the file's frame"). OpenSees instead flips the z motion and never turns it.
+  const bool rotate = pattern_.do_coordinate_transformation;
+  struct Mat3 {
+    double m[3][3];
+  } R{};
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j) R.m[i][j] = pattern_.T[i][j];
   Kokkos::parallel_for(
       "drm_motion", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, nodes), KOKKOS_LAMBDA(const Index sl) {
+        double u[3], acc[3], vel3[3] = {0.0, 0.0, 0.0};
         for (int c = 0; c < 3; ++c) {
           const std::int64_t r = (3 * static_cast<std::int64_t>(sl) + c) * W - s0;
-          double d1 = hu(r + k1), d2 = hu(r + i2), a1 = ha(r + k1), a2 = ha(r + i2);
-          if (c == 2) {  // the file's z axis points down
-            d1 = -d1;
-            d2 = -d2;
-            a1 = -a1;
-            a2 = -a2;
-          }
-          du(3 * static_cast<std::int64_t>(sl) + c) = d1 * (1 - dtau) + d2 * (dtau);
-          da(3 * static_cast<std::int64_t>(sl) + c) = a1 * (1 - dtau) + a2 * (dtau);
+          const double d1 = hu(r + k1), d2 = hu(r + i2), a1 = ha(r + k1), a2 = ha(r + i2);
+          u[c] = d1 * (1 - dtau) + d2 * (dtau);
+          acc[c] = a1 * (1 - dtau) + a2 * (dtau);
           if (damped) {
             // The free field's velocity: central differences of the displacement samples
             // (one-sided at the record's ends), interpolated like the displacement.
             auto vel = [&](std::int64_t k) {
               const std::int64_t lo = k > 0 ? k - 1 : k, hi = k < T - 1 ? k + 1 : k;
               if (hi == lo) return 0.0;  // a single sample
-              const double v = (hu(r + hi) - hu(r + lo)) * inv_dt / static_cast<double>(hi - lo);
-              return c == 2 ? -v : v;
+              return (hu(r + hi) - hu(r + lo)) * inv_dt / static_cast<double>(hi - lo);
             };
-            dv(3 * static_cast<std::int64_t>(sl) + c) = vel(k1) * (1 - dtau) + vel(i2) * dtau;
+            vel3[c] = vel(k1) * (1 - dtau) + vel(i2) * dtau;
+          }
+        }
+        const std::int64_t o = 3 * static_cast<std::int64_t>(sl);
+        for (int c = 0; c < 3; ++c) {
+          if (rotate) {
+            du(o + c) = R.m[c][0] * u[0] + R.m[c][1] * u[1] + R.m[c][2] * u[2];
+            da(o + c) = R.m[c][0] * acc[0] + R.m[c][1] * acc[1] + R.m[c][2] * acc[2];
+            if (damped) dv(o + c) = R.m[c][0] * vel3[0] + R.m[c][1] * vel3[1] + R.m[c][2] * vel3[2];
+          } else {
+            du(o + c) = u[c];
+            da(o + c) = acc[c];
+            if (damped) dv(o + c) = vel3[c];
           }
         }
       });
