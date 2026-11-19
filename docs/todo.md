@@ -177,3 +177,35 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     change in results); it also speeds up the laptop's CUDA and the SYCL builds. Done
     2026-11-19: 16 generated units (`internal_force_batch.hpp`), the H200 build 14 min 35 s
     -> 2 min 15 s; the GPU tests after the split: next gh session.
+20. **The DRM file's frame: transform coordinates and motions together (high priority; schema
+    proposal first).** Found 2026-11-19 against SW4's stations for Site 2 (Stampede3 spr; runs,
+    scripts and plots in `/scratch/08189/amnp95/femorax_runs/sw4_match/` on Stampede3).
+    OpenSees' H5DRMLoadPattern (commit 955ceb0) multiplies the file's z displacement and
+    acceleration by -1 (lines 1122-1125, 1302-1305) and never the coordinates, and its
+    coordinate transformation T moves the stations only, never the motion vectors; FemoraX
+    copies both (`src/exec/drm_load.cpp:198`, `src/compile/drm.cpp:36-44`). Both are wrong: a
+    frame change applies to points and vectors alike (x' = T x + x0, u' = T u). The user's file
+    made for OpenSees (`HaywardFault_SW4_DRM_Site2.h5drm`, motions modified to fit the z flip)
+    has x and y inconsistent with each other; the user's file in one frame
+    (`drm_inputs/site2_natural/Site2_DRMinput_1km/OpenSeesDRMinput.h5drm`, z up, nothing to
+    flip; no `drmbox_*` metadata) read as is matches SW4. Free field (the basin replaced by
+    its layers, Uniform damping at SW4's shear ratios per layer, 0.1-10 Hz):
+
+    | | old file, z flip | new file, read as is |
+    |---|---|---|
+    | correlation with SW4, x / y / z, surface | 0.95 / 0.96 / 0.65 | 0.998 / 0.999 / 0.996 |
+    | the same, 20 m deep | 0.94 / 0.98 / 0.70 | 0.998 / 0.999 / 0.996 |
+    | motion leaking out of the box (peak, m/s2) | 0.24-0.51 | 0.04-0.11 |
+    | spectral ratio, 0.5-6 Hz | z 0.70-2.57 | 0.90-1.02, all components |
+
+    SW4's station output is in the new file's frame (no sign change). Left: 10-20 % low at
+    8-10 Hz (the 4 m linear mesh: about 9 elements per wavelength at 10 Hz in the top layer),
+    and a shift of one sample (the file's `tstart` = dt puts its first sample at dt).
+    Proposal for the user (schema): a DRM file has one frame and FemoraX reads it as is;
+    a transformation T applies to points and motions; an explicit OpenSees-compatibility
+    option keeps the z flip for files made for OpenSees; the box computed from the stations
+    when `drmbox_*` is missing; a deviation entry. Also check `tstart` against SW4's first
+    sample. Other observations from the same runs: P waves get the shear damping ratio (SW4:
+    `xip` = `xis` / 2; per-group ratios in Uniform damping would fix it); and two runs pinned
+    one per socket (56 threads, numactl) took 10.3-10.5 min each against 15.7 min for one
+    run on all 112 threads of the spr node (NUMA placement: a performance item).

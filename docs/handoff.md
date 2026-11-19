@@ -86,6 +86,13 @@ the user for SW4's input (`attenuation`, `block`/`rfile` Qs, Qp). Without it: ru
 without the basin (SW4's layered medium only) at a few Uniform ratios and take the one with
 the smallest motion outside the DRM layer (needs the site's layer velocities, check model.tcl).
 
+**DRM frame (2026-11-19, docs/todo.md item 20):** FemoraX (copying OpenSees) flips the DRM
+file's z motion and transforms only the stations; with the user's file in one frame read as
+is, the free field matches SW4's stations to correlation 0.996-0.999. Write the schema
+proposal (read as is, T on points and motions, an OpenSees-compatibility option) and ask the
+user before changing anything. The Site 2 runs and plots: Stampede3
+`/scratch/08189/amnp95/femorax_runs/sw4_match/`.
+
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
    yielding is done) and benchmarks of the damped kernels.
