@@ -209,3 +209,13 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     `xip` = `xis` / 2; per-group ratios in Uniform damping would fix it); and two runs pinned
     one per socket (56 threads, numactl) took 10.3-10.5 min each against 15.7 min for one
     run on all 112 threads of the spr node (NUMA placement: a performance item).
+    Damping and absorber with the corrected motion (same runs, 2026-11-19): free field with
+    Rayleigh in the soil (the model's 3-15 Hz fit at SW4's ratios) correlates 0.989-0.992 with
+    SW4 (Uniform: 0.993-0.999), leaking 0.07-0.18 m/s2 out of the box (Uniform: 0.05-0.07);
+    run times on one socket: Rayleigh soil 252 s, Uniform 604 s, Uniform with the mass-only
+    absorber at dt 1e-3 145 s (the free field alone cannot judge the absorber). The elastic
+    basin with the corrected motion: surface peaks 10.1 / 27.2 / 4.2 m/s2 (free field 4.2 /
+    7.0 / 1.6), horizontal amplification up to 5.6 at 3.7 Hz; with the mass-only absorber
+    (dt 1e-3, 4.5x faster) the surface y peak is 30.5 (+12 %), interior histories within
+    10-16 % of the peak, and the DRM exterior node's x motion 1.73 against 0.66 m/s2: the
+    reflections come back. Plots: `plots/` in the run directory.
