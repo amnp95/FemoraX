@@ -88,9 +88,13 @@ the smallest motion outside the DRM layer (needs the site's layer velocities, ch
 
 **DRM frame (2026-11-19, docs/todo.md item 20):** FemoraX (copying OpenSees) flips the DRM
 file's z motion and transforms only the stations; with the user's file in one frame read as
-is, the free field matches SW4's stations to correlation 0.996-0.999. Write the schema
-proposal (read as is, T on points and motions, an OpenSees-compatibility option) and ask the
-user before changing anything. The Site 2 runs and plots: Stampede3
+is, the free field matches SW4's stations to correlation 0.996-0.999. Approved by the
+user (2026-11-19), to do first next session: FemoraX reads the DRM file as it is (no z flip),
+applies the transformation T to the stations and the motions (`crd_scale` to coordinates
+only), computes the box from the stations when `drmbox_*` is missing; no OpenSees-
+compatibility option (OpenSees' convention is wrong); a major schema version bump, with older
+H5DRM model files refused by a message that explains the new convention; a deviation entry;
+tests (a rotated box with T against the free field). Femora's OpenSees export should warn. The Site 2 runs and plots: Stampede3
 `/scratch/08189/amnp95/femorax_runs/sw4_match/`.
 
 Next, in order:
