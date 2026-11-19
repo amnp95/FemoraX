@@ -966,6 +966,27 @@ per-element step to choose levels.
 - Still to discuss: the constraints the models need (rigidDiaphragm, rigidLink: exact
   transformation with block masses for rigid bodies) and the user's embedded interface.
 
+**What Femora can emit, and the order agreed with the user (2026-11-19).** The user is a
+geotechnical engineer; structural users come later, so the structural toolbox is generic
+(the constraints as one u = T q form with block masses). Femora's components
+(`../Femora/src/femora/components/`): elements stdBrick, SSPbrick, SSPquad, PML3D,
+DispBeamColumn, ForceBeamColumn, ElasticBeamColumn, Truss, ASDEmbeddedNodeElement, embedded-node
+contact, ZeroLengthContactASDimplex; nD materials ElasticIsotropic, PDMY, PIMY, DruckerPrager,
+J2CyclicBoundingSurface, LinearElasticGGmax; uniaxial Elastic, Steel01 and Concrete02 (inside
+the RC section); sections Elastic, Uniaxial, WFSection2d, Fiber (patches, layers), RC,
+Aggregator, Parallel, ElasticMembranePlate, PlateFiber, Bidirectional, Isolator2Spring;
+transformations Linear, PDelta, Corotational. The user's buildings connect columns to the soil
+with embedded nodes (ASDEmbeddedNodeElement, a penalty): FemoraX gives it an exact tie (no
+time-step cost; a single node is a pinned base unless its rotation is tied). Order: (1) LTS
+step 3b; (2) the displacement-based beam with the elastic section, Linear and PDelta, the mass
+standard; (3) constraints u = T q (rigidLink, rigidDiaphragm) and the exact embedded-node tie;
+(4) the force-based beam; (5) fiber sections with Elastic, Steel01, Concrete02, then RC, WF,
+Aggregator, Parallel, Truss; (6) more soil materials (DruckerPrager, J2Cyclic, GGmax) as models
+need them; (7) the embedded beam (the user's EmbeddedBeamContact3D, after the rest). All
+sections are wanted: no hard limit, but each combination is a kernel instantiation (build time:
+register what models use), mixed-material fiber sections need fibers grouped by material on
+GPUs, and each port needs its OpenSees verification.
+
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
 **The problem.** An explicit stage steps every element at the smallest stable step of the
