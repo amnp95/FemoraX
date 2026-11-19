@@ -45,7 +45,10 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
 10. **H5DRM in implicit stages.** `form_unbalance` applies the DRM forces at the load time, but
     only the explicit path is verified (`tests/unit/test_drm_free_field.cpp`). Verify with a
     free field computed by the same Newmark recurrence, and against the stored OpenSees DRM
-    box (milestone 4, step 5).
+    box (milestone 4, step 5). Done 2026-11-19 against the Newmark free field: the free-field
+    box with Newmark and Newton follows the free field within 2.7e-14 (undamped) and 2.0e-14
+    (Uniform-damped), 9.9e-4 with Rayleigh (the velocity estimate); it found the record-end
+    rounding (docs/deviations.md). The OpenSees DRM box: still to store.
 11. **Intel GPU: an intermittent GPU memory fault in `bench.smoke`** (2026-11-11, preset
     `s3-sycl-pvc`, Data Center GPU Max 1550). Once, with 8 test processes sharing one GPU
     tile, the benchmark smoke run stopped with "Segmentation fault from GPU ... type

@@ -138,7 +138,8 @@ Next steps (in order; each one commit; step 4 done):
    acceleration peak 0.859 -> 0.856); largest nodal change 3.4e-4 m at 10 s. The whole run
    now takes 44.7 s on the H200 (96.6 s before the DRM reader fix and streaming).
 5. A tiny stored OpenSees DRM box reference (run once, stored), compared in the check.
-6. H5DRM in implicit stages: `form_unbalance` applies the forces, not verified yet
+6. H5DRM in implicit stages: verified 2026-11-19 (Newmark free-field box, 2.7e-14; the
+   record-end rounding fixed). Was: `form_unbalance` applies the forces, not verified yet
    (docs/todo.md item 10): a free field from the same Newmark recurrence, and the step-5
    reference.
 7. DRM output: one summary block per pattern at setup (file, stations matched, nodes,

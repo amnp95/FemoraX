@@ -69,6 +69,25 @@ double ag_at(const io::PathSeries& s, double t) {
   return s.factor * (s.values[i1] + (s.values[i1 + 1] - s.values[i1]) * (incr - static_cast<double>(i1)));
 }
 
+// Newmark (average acceleration) with Newton: the implicit counterpart of explicit_stage.
+io::AnalysisStep newmark_stage() {
+  io::AnalysisStep a;
+  a.name = "shake";
+  a.type = io::AnalysisType::Transient;
+  a.dt = kDt;
+  a.num_steps = kSteps;
+  a.integrator = io::Integrator::Newmark;
+  a.gamma = 0.5;
+  a.beta = 0.25;
+  a.algorithm = io::Algorithm::Newton;
+  a.numberer = "Plain";
+  a.system = "BandGeneral";
+  a.test_type = io::TestType::NormDispIncr;
+  a.test_tol = 1e-13;
+  a.test_max_iter = 10;
+  return a;
+}
+
 io::AnalysisStep explicit_stage() {
   io::AnalysisStep a;
   a.name = "shake";
@@ -109,7 +128,7 @@ void damp_uniform(io::Model& m) {
   m.uniform.push_back(r);
 }
 
-double free_field_box(Damping damping) {
+double free_field_box(Damping damping, bool implicit = false) {
 
   // 1. The free field: a 1 x 1 x 8 laminar column, base pulse in x.
   femorax::testing::ColumnSpec cs;
@@ -133,7 +152,7 @@ double free_field_box(Damping damping) {
   add_node_recorder(col, "d", cd, io::NodeResponse::Disp, line);
   add_node_recorder(col, "a", ca, io::NodeResponse::Accel, line);
   col.process.push_back({"1", "", io::PatternStep{2}});
-  col.process.push_back({"2", "", explicit_stage()});
+  col.process.push_back({"2", "", implicit ? newmark_stage() : explicit_stage()});
   exec::RunOptions o;
   o.verbose = false;
   o.renumbering = compile::Renumbering::Off;
@@ -148,8 +167,14 @@ double free_field_box(Damping damping) {
   {
     double v = 0.0, u = 0.0, t = 0.0, a = 0.0;
     for (int n = 0; n < kSteps; ++n) {
-      v += kDt * a;
-      u += kDt * v;
+      if (implicit) {  // Newmark's own recurrence (average acceleration)
+        const double a_new = ag_at(ps, t + kDt);
+        u += kDt * v + 0.25 * kDt * kDt * (a + a_new);
+        v += 0.5 * kDt * (a + a_new);
+      } else {
+        v += kDt * a;
+        u += kDt * v;
+      }
       t += kDt;
       a = ag_at(ps, t);
       ug[n + 1] = u;
@@ -224,7 +249,7 @@ double free_field_box(Damping damping) {
   const std::string bd = temp_file("box_disp.txt");
   add_node_recorder(box, "d", bd, io::NodeResponse::Disp, inside);
   box.process.push_back({"1", "", io::PatternStep{3}});
-  box.process.push_back({"2", "", explicit_stage()});
+  box.process.push_back({"2", "", implicit ? newmark_stage() : explicit_stage()});
   io::check_supported(box, io::Capabilities{});
   exec::run_model(box, o);
   const auto rb = read_rows(bd);
@@ -241,8 +266,9 @@ double free_field_box(Damping damping) {
         worst = std::max(worst, std::abs(rb[static_cast<std::size_t>(n)][1 + 3 * q + static_cast<std::size_t>(c)] - want));
       }
     }
-  std::printf("[ DRM box%s: %zu stations, %zu nodes inside the layer, %d steps: largest difference from the free "
+  std::printf("[ DRM box%s%s: %zu stations, %zu nodes inside the layer, %d steps: largest difference from the free "
               "field %.2e of its largest displacement %.3e ]\n",
+              implicit ? ", implicit (Newmark, Newton)" : "",
               damping == Damping::Rayleigh ? " (Rayleigh-damped)" : damping == Damping::Uniform ? " (Uniform-damped)" : "",
               S, inside.size(), kSteps, worst / scale, scale);
   EXPECT_GT(scale, 1e-6);
@@ -276,6 +302,18 @@ TEST(DrmFreeField, ADampedBoxInsideADampedLayerMovesAsTheFreeField) {
 // stress of the free field is the same as in the column (no velocity estimate is needed).
 TEST(DrmFreeField, AUniformDampedBoxInsideAUniformDampedLayerMovesAsTheFreeField) {
   EXPECT_LE(free_field_box(Damping::Uniform), 1e-10);
+}
+
+// The same three cases with Newmark (average acceleration) and Newton for the free field and the
+// box (milestone 4, step 6: the DRM forces in implicit stages; docs/todo.md item 10).
+TEST(DrmFreeField, ImplicitBoxInsideTheLayerMovesAsTheFreeField) {
+  EXPECT_LE(free_field_box(Damping::None, true), 1e-8);
+}
+TEST(DrmFreeField, ImplicitUniformDampedBoxMovesAsTheFreeField) {
+  EXPECT_LE(free_field_box(Damping::Uniform, true), 1e-8);
+}
+TEST(DrmFreeField, ImplicitRayleighDampedBoxMovesAsTheFreeField) {
+  EXPECT_LE(free_field_box(Damping::Rayleigh, true), 2e-3);
 }
 
 }  // namespace

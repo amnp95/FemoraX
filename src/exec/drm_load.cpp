@@ -161,7 +161,12 @@ void DrmLoad::ensure(std::int64_t k1, std::int64_t k2) {
 }
 
 void DrmLoad::apply(double t, const Vec& f) {
-  if (t < file_.tstart || t > file_.tend) return;  // OpenSees: no DRM forces outside the data
+  // OpenSees: no DRM forces outside the data. With a tolerance of 1e-9 sample: a time that
+  // reaches the last sample by accumulating steps (400 x 2e-4 = 0.08000000000000002) is the
+  // last sample, not past it (OpenSees drops that step's forces; docs/deviations.md).
+  const double eps = 1e-9 * file_.dt;
+  if (t < file_.tstart - eps || t > file_.tend + eps) return;
+  t = std::min(std::max(t, file_.tstart), file_.tend);
   const double dt = file_.dt, tstart = file_.tstart;
   const auto i1 = static_cast<std::int64_t>(std::floor((t - tstart) / dt));
   const std::int64_t T = file_.samples;

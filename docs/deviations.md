@@ -141,6 +141,19 @@ Default tolerances (until a component states otherwise):
 - Test: `DrmFreeField.ADampedBoxInsideADampedLayerMovesAsTheFreeField`,
   `DrmFreeField.AUniformDampedBoxInsideAUniformDampedLayerMovesAsTheFreeField`.
 
+### H5DRM — a time that reaches the record's end by rounding still gets its forces (2026-11-19)
+- OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp` (`CalculateBoundaryForces`:
+  `currentTime > tend` gives no forces), commit 955ceb0
+- Difference: FemoraX compares with a tolerance of 1e-9 of the sample interval and clamps the
+  time to `[tstart, tend]`: a step whose accumulated time lands on the last sample (400 steps
+  of 2e-4 give 0.08000000000000002 against tend = 0.08) gets the last sample's forces.
+- Why: OpenSees drops the DRM forces of that step, a rounding artefact; found by the implicit
+  free-field test, whose last step lost its forces (2.6e-4 of the peak displacement at the
+  last step, rounding before it).
+- Effect on results: only a step at the record's last sample; the Site 2 basin's stages end
+  before it.
+- Test: `DrmFreeField.ImplicitBoxInsideTheLayerMovesAsTheFreeField` (2.7e-14).
+
 ### H5DRM — a pattern factor other than 1 is refused (2026-11-10, milestone 4)
 - OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp`, commit 955ceb0
 - Difference: OpenSees reads the pattern's `factor` and stores it, but never applies it to
