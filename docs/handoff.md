@@ -94,6 +94,17 @@ explanation. Models made before (the Site 2 runs in Stampede3's
 frame (the user's: `drm_inputs/site2_natural/Site2_DRMinput_1km/OpenSeesDRMinput.h5drm`).
 Femora's exporter should write 1.0 and its OpenSees export warn about OpenSees' z flip.
 
+**Local time stepping (2026-11-19): approved; step 1 started.** The literature review
+(`docs/research/time_step_remedies/`) chose the stabilized leapfrog LTS of Grote, Michel &
+Sauter; a numpy reproduction of their 1D test matches their critical steps
+(`prototype/`). Next: the C++ host prototype and its tests (docs/design.md, "Local time
+stepping", Verification): one level bit for bit, the eigenvalue sweep (the paper's 0.7104 h_c
+for p = 2 without stabilization, none with nu = 0.01), the conserved modified energy over long
+runs, second-order convergence (the paper's Gaussian on (0, 1)), then levels in the compile
+step. Still to discuss with the user: the constraints their models need, their interface idea.
+Done today besides: the DRM frame (schema 1.0), nodal masses damped by their region (item 21),
+the mass and damping standard for structures (docs/design.md, "Structures").
+
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
    yielding is done) and benchmarks of the damped kernels.
