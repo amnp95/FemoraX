@@ -219,3 +219,9 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     (dt 1e-3, 4.5x faster) the surface y peak is 30.5 (+12 %), interior histories within
     10-16 % of the peak, and the DRM exterior node's x motion 1.73 against 0.66 m/s2: the
     reflections come back. Plots: `plots/` in the run directory.
+    The plastic basin (PressureIndependMultiYield in the basin, the model's Rayleigh damping)
+    with the corrected motion: surface peaks 2.7 / 6.6 / 2.9 m/s2 against 10.1 / 27.2 / 4.2
+    elastic and 4.2 / 7.0 / 1.6 for SW4's free field; above about 1.5 Hz the basin
+    de-amplifies (ratio to the free field 0.2-1), below it amplifies x up to about 1.6; 213 s
+    on 112 cores (1.55 ms/step). Plots: `plots/Point0_plastic_basin.png`,
+    `plots/Point1_plastic_basin.png`.
