@@ -978,7 +978,7 @@ answer is local time stepping (LTS), where each part of the mesh advances at its
 step, explicit throughout (no Newton, so no convergence problems), with the cost in
 proportion to the stiff part.
 
-**Why LTS (literature review, 2026-11-19).** Compared with subcycling and implicit-explicit
+**Why LTS (literature review, 2026-11-19: `docs/research/time_step_remedies/`).** Compared with subcycling and implicit-explicit
 coupling (pays off only at step ratios of 100 or more; FemoraX's are 2-20; a solve per step),
 mass scaling (conventional scaling distorts the inertia: 0.8 % added mass gave a 19 % peak-
 force error in an LS-DYNA benchmark; selective scaling needs a solve per step and is
