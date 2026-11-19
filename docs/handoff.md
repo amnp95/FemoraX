@@ -105,6 +105,25 @@ step. Still to discuss with the user: the constraints their models need, their i
 Done today besides: the DRM frame (schema 1.0), nodal masses damped by their region (item 21),
 the mass and damping standard for structures (docs/design.md, "Structures").
 
+**LTS (2026-11-19):** steps 1, 2 and 3a committed (b555557): the host reference scheme, the
+levels, and the 3D brick column with a stiff inclusion. Next: 3b, the device version in the
+explicit time loop (a force kernel over an element subset; the substeps evaluate the fine
+elements and their ring at the mixed field coarse u_n / fine z_k), tested against 3a.
+
+**Embedded piles (2026-11-19):** literature review in docs/research/embedded_and_constraints/.
+The user's own element, `EmbeddedBeamContact3D` (OpenSees C++, with a theory document, tests
+and studies), is in /work2/08189/amnp95/uploads/embedded_beam/ (not in the repository): surface
+patch coupling of a Hermite beam to Hex8 hosts, unilateral normal penalty, Coulomb friction
+with cohesion, no mass. The user's evidence: bonded, it reproduces a conforming 3D solid pile
+(merged nodes) where OpenSees' EmbeddedBeamInterface (point-wise penalty, used by Femora)
+overpredicts the displacement. Seen in its runs: no true bonded mode (imitated with cohesion
+and an interference gap, which pre-compresses the soil by kn |g0|: B2's 1.8 mm, stiffer than
+the tie); with contact, the beam is about 17 % stiffer than the solid pile with contact (one
+mesh only: a mesh series is still needed). Design consequence: perimeter bonding cannot be
+plain elimination (more surface points than beam DOFs): a soft bonded surface law, or a
+kinematic coupling slaving the beam node to its perimeter. Order agreed: beams first (after
+LTS 3b), then rigid links / diaphragms, then embedded piles.
+
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
    yielding is done) and benchmarks of the damped kernels.
