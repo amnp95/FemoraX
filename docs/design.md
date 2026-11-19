@@ -1069,7 +1069,19 @@ bit for bit. (4) Timing: the basin-with-buildings shape (soil coarse, structure 
 a single step.
 
 **Steps (one commit each, after approval).** (1) A host prototype of the undamped multilevel
-scheme on a 1D bar, the tests of (1). (2) Levels in the compile step (no behaviour change).
+scheme on a 1D bar, the tests of (1). Done (2026-11-19) for two levels:
+`compile/local_time_stepping.hpp` (the coefficients and one coarse step, generic over the
+operator; the reference the device implementation will be tested against) and
+`test_local_time_stepping.cpp` on the paper's 1D test: the coefficients reduce to Diaz & Grote's
+for nu = 0, p = 1 is leapfrog (1e-14), the first unstable step without stabilization 0.7098 h_c
+(the paper: 0.7104 h_c) and none with nu = 0.01, the modified energy constant to 4.8e-14 over
+32,321 coarse steps, second order for p = 2, 3, 5 with errors within 5 % of leapfrog's at the
+same coarse step. Lessons: the nodal error after a full period superconverges (order 4, even
+for leapfrog) and the paper's continuous L2 error is dominated by the interpolation error, so
+convergence is measured against d'Alembert's solution at a generic time; at 0.99 of the
+stable step the fine region's highest modes make the error irregular (stable, but orders
+0.3-8 for p = 3, 5), at 0.9 it is clean (FemoraX's margin); without stabilization p = 5 at
+0.99 h_c blows up (1e35) on the finest mesh. Multilevel (more than two levels): step 3. (2) Levels in the compile step (no behaviour change).
 (3) The undamped LTS in the explicit time loop, tests (2)-(3). (4) Mass then stiffness
 damping, then Uniform, each with the same checks (the eigenvalue sweep, the energy decaying
 steadily, a global small-step reference). (5) The GPU launch strategy (each coarse step's

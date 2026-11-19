@@ -37,7 +37,8 @@ add_executable(femorax_unit_tests
   unit/test_implicit.cpp
   unit/test_runtime.cpp
   unit/test_drm_setup.cpp
-  unit/test_drm_free_field.cpp)
+  unit/test_drm_free_field.cpp
+  unit/test_local_time_stepping.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest
                       Eigen3::Eigen HDF5::HDF5)
 # test_contracts.cpp declares mock elements and materials whose traits only the concepts
