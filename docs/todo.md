@@ -83,7 +83,17 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     high frequencies (twice the acceleration peak at a DRM exterior node; docs/handoff.md,
     "The basin example"). Next: a graded mass-proportional layer (alphaM rising inward, a
     per-element-layer Rayleigh region, which Femora can already export) measured the same
-    way, then PML (milestone 4) as the frequency-independent absorber.
+    way, then PML (milestone 4) as the frequency-independent absorber. Graded layers tried
+    (2026-11-19, Vista gg, the elastic basin, dt 1e-3, the absorber's 8 element layers): a
+    quadratic ramp of alphaM with the same mean (0.3 -> 63) and a stronger one (0.6 -> 127)
+    against the uniform 23.9 and the Rayleigh absorber: DRM exterior acceleration peak 1.89
+    and 1.78 against 1.71 (uniform) and 0.86 (Rayleigh); surface acceleration peak 12.9 and
+    11.8 against 10.3 and 9.7. Grading is worse: mass damping falls as 1/f, so the reflections
+    are high frequencies crossing the layer unattenuated, not the step in damping that grading
+    removes; the ramp takes absorption away where the waves enter. No mass-only layer can
+    match Rayleigh's betaK at high frequency in 32 m: PML is the way to the 10x larger step
+    with good absorption. Model files: /scratch/08189/amnp95/femorax_runs/basin_site2_elastic/
+    graded/ on Vista.
 14. **The periodic stable-step check costs about 110 ms on the 46,080-element basin** (spr,
     112 threads, 2026-11-12): every 100 steps, about 1.1 ms per step on average, so it doubles
     the step time of a model whose every batch has material state (the plastic basin: 2.61
