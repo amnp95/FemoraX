@@ -79,6 +79,13 @@ implements it; do not plan or port OpenSees' PML3D until the user brings the new
 formulation. The absorber experiments (docs/todo.md item 13) show why an absorber better than
 mass damping is needed; meanwhile the basin keeps its Rayleigh absorber.
 
+**SW4's attenuation for Site 2 (2026-11-19):** the H5DRM file carries no Q values (its
+metadata: the box, dt 0.0108 s, t to 27.5 s). Matching the box's soil damping to SW4's
+(Uniform ratio 1/(2Q) per layer) removes the scattered field the medium mismatch makes; asked
+the user for SW4's input (`attenuation`, `block`/`rfile` Qs, Qp). Without it: run the box
+without the basin (SW4's layered medium only) at a few Uniform ratios and take the one with
+the smallest motion outside the DRM layer (needs the site's layer velocities, check model.tcl).
+
 Next, in order:
 1. Step 5: the remaining verification (plane-wave attenuation, the basin with Uniform;
    yielding is done) and benchmarks of the damped kernels.
