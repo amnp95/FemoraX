@@ -1033,6 +1033,44 @@ void validate(Model& m) {
     }
   }
 
+  // Nodal masses whose node lies in Rayleigh regions with different alphaM (a column meeting the
+  // soil): the last region wins for the node, as in OpenSees, but the answer depends on the
+  // regions' order, so say so (docs/design.md, "Structures: mass and damping standard").
+  if (!m.mass.node.empty() && m.rayleigh.size() > 1) {
+    std::unordered_set<std::int32_t> mass_nodes(m.mass.node.begin(), m.mass.node.end());
+    std::unordered_map<std::int32_t, std::pair<std::size_t, std::size_t>> element_at;
+    for (std::size_t g = 0; g < m.elements.size(); ++g)
+      for (std::size_t e = 0; e < m.elements[g].size(); ++e) element_at[m.elements[g].tags[e]] = {g, e};
+    std::map<std::int32_t, std::set<double>> alphas;
+    for (const auto& r : m.rayleigh)
+      for (const auto tag : r.elements) {
+        const auto [g, e] = element_at.at(tag);
+        const auto& grp = m.elements[g];
+        const std::size_t nn = grp.connectivity.size() / grp.size();
+        for (std::size_t a = 0; a < nn; ++a) {
+          const std::int32_t node = grp.connectivity[e * nn + a];
+          if (mass_nodes.count(node)) alphas[node].insert(r.alphaM);
+        }
+      }
+    std::size_t count = 0;
+    std::int32_t first = 0;
+    double mass = 0.0;
+    for (const auto& [node, set] : alphas)
+      if (set.size() > 1) {
+        if (count++ == 0) first = node;
+        for (std::size_t i = 0; i < m.mass.node.size(); ++i)
+          if (m.mass.node[i] == node && m.mass.dof[i] <= 3) mass += m.mass.value[i] / 3.0;
+      }
+    if (count > 0) {
+      m.warnings.push_back(std::to_string(count) + " node(s) with nodal masses (" + std::to_string(mass) +
+                           " in total, translational mean; first: node " + std::to_string(first) +
+                           ") lie in Rayleigh regions with different alphaM: their nodal masses take the "
+                           "alphaM of the last of those regions in file order, as in OpenSees. Element "
+                           "densities instead of nodal masses avoid this (each element mass is damped by "
+                           "its own element's region)");
+    }
+  }
+
   // Uniform regions: elements exist, the factor's series exists; overlaps as for Rayleigh.
   {
     std::unordered_map<std::int32_t, std::size_t> owner;

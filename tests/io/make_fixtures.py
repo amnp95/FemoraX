@@ -65,6 +65,29 @@ def m_overlap(f):
     g.create_dataset("elements", data=np.array([1, 2, 3], dtype=np.int32))
 
 
+def m_nodal_mass_two_alphas(f):
+    """A nodal mass on a node shared by element 1 and another element, in two disjoint Rayleigh
+    regions with different alphaM (element 1 alone in the second one)."""
+    r0 = f["damping"]["rayleigh"]["000000"]
+    els = r0["elements"][...]
+    del r0["elements"]
+    r0.create_dataset("elements", data=els[els != 1])
+    g = f["damping"]["rayleigh"].create_group("000001")
+    for k, v in (("alphaM", 0.5), ("betaK", 0.0), ("betaKinit", 0.0), ("betaKcomm", 0.0)):
+        g.attrs[k] = np.float64(v)
+    g.create_dataset("elements", data=np.array([1], dtype=np.int32))
+    eg = first_element_group(f)
+    tags = eg["tags"][...]
+    conn = eg["connectivity"][...].reshape(len(tags), -1)
+    one = set(conn[list(tags).index(1)].tolist())
+    shared = sorted(one & set(conn[tags != 1].ravel().tolist()))
+    node = int(shared[0])
+    f.create_group("mass")
+    f["mass"].create_dataset("node", data=np.array([node] * 3, dtype=np.int32))
+    f["mass"].create_dataset("dof", data=np.array([1, 2, 3], dtype=np.int32))
+    f["mass"].create_dataset("value", data=np.array([2.0, 2.0, 2.0]))
+
+
 def m_central_mass_only(f):
     step = explicit_step(f)
     step.attrs["integrator"] = "CentralDifference"
@@ -629,6 +652,8 @@ CASES = [
     ("sspbrick_group", "explicit", "valid", "", m_sspbrick),
     ("minimal", "explicit", "valid", "", m_minimal),
     ("overlapping_regions", "explicit", "warning", "share 3 element(s)", m_overlap),
+    ("nodal_mass_in_two_damping_regions", "explicit", "warning", "lie in Rayleigh regions with different alphaM",
+     m_nodal_mass_two_alphas),
     ("schema_0_0", "explicit", "valid", "", m_version(0, 0)),
     ("schema_0_7", "explicit", "valid", "", m_version(0, 7)),
     ("vtkhdf_elements", "explicit", "valid", "", m_vtkhdf_elements([1, 2, 25])),

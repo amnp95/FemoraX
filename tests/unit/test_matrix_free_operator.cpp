@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "../common/reference_assembly.hpp"
@@ -168,6 +169,59 @@ TEST(MatrixFreeOperator, GroundLoadIncludesTheMovingBase) {
       for (std::size_t q = 0; q < n; ++q) r[q] = c.eq_dof[q] == 0 ? 1.0 : 0.0;
       EXPECT_GT(max_diff(ref.multiply(ref.M, r), ref.Mr[0]), 1e-3 * max_abs(ref.Mr[0]));
     }
+  }
+}
+
+// Nodal masses are damped by their node's region (OpenSees' `region -ele` puts the elements'
+// nodes in the region, Node::getUnbalancedLoadIncInertia applies alphaM M v; docs/design.md,
+// "Structures: mass and damping standard"): the force with the nodal masses differs from the
+// force without them by alphaM m v at their equations, alphaM of the last region in file order
+// that holds one of the node's elements, and by nothing elsewhere.
+TEST(MatrixFreeOperator, NodalMassesAreDampedByTheirNodesRegion) {
+  for (const bool lumped : {true, false}) {
+    SCOPED_TRACE(lumped ? "lumped" : "consistent");
+    const auto m = column(lumped);
+    auto m0 = m;
+    m0.mass = {};
+    const Compiled c = compile_model(m, CompileOptions{}), c0 = compile_model(m0, CompileOptions{});
+    const auto n = static_cast<std::size_t>(c.dofs.num_equations);
+    std::vector<double> vh(n);
+    for (std::size_t q = 0; q < n; ++q) vh[q] = 1e-2 * std::sin(0.3 + 1.7 * static_cast<double>(q));
+    auto force_of = [&](const Compiled& cc) {
+      InternalForce force(cc, GeometryCache::On);
+      Kokkos::deep_copy(force.u, 0.0);
+      Kokkos::deep_copy(force.v, upload(vh));
+      force.compute({});
+      return download(force.f);
+    };
+    const auto f = force_of(c), f0 = force_of(c0);
+    // The expected alphaM per node: the last region (file order) holding one of its elements.
+    std::unordered_map<std::int32_t, double> alpha;
+    for (const auto& r : m.rayleigh)
+      for (const auto tag : r.elements)
+        for (const auto& g : m.elements)
+          for (std::size_t e = 0; e < g.size(); ++e)
+            if (g.tags[e] == tag)
+              for (std::size_t a = 0; a < 8; ++a) alpha[g.connectivity[e * 8 + a]] = r.alphaM;
+    std::unordered_map<std::int32_t, std::int32_t> internal;
+    for (std::int32_t i = 0; i < c.dofs.num_nodes(); ++i) internal[c.dofs.node_tag[i]] = i;
+    std::vector<double> expect(n, 0.0);
+    int damped = 0;
+    for (std::size_t k = 0; k < m.mass.node.size(); ++k) {
+      const std::int32_t q = c.dofs.equation(internal.at(m.mass.node[k]), m.mass.dof[k] - 1);
+      if (q < 0) continue;
+      const double am = alpha.count(m.mass.node[k]) ? alpha[m.mass.node[k]] : 0.0;
+      expect[static_cast<std::size_t>(q)] += am * m.mass.value[k] * vh[static_cast<std::size_t>(q)];
+      damped += am != 0.0;
+    }
+    EXPECT_GT(damped, 0);
+    double worst = 0.0, scale = 0.0;
+    for (std::size_t q = 0; q < n; ++q) {
+      worst = std::max(worst, std::abs((f[q] - f0[q]) - expect[q]));
+      scale = std::max(scale, std::abs(expect[q]));
+    }
+    EXPECT_GT(scale, 0.0);
+    EXPECT_LE(worst, 1e-12 * scale);
   }
 }
 

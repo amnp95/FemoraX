@@ -111,6 +111,8 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
   eq_dof_ = upload("eq_dof", c.eq_dof.empty() ? std::vector<std::int8_t>(static_cast<std::size_t>(neq_), 0) : c.eq_dof);
   nodal_mass_ = upload("nodal_mass", c.nodal_mass.empty() ? std::vector<double>(static_cast<std::size_t>(neq_), 0.0)
                                                           : c.nodal_mass);
+  for (const double am : c.nodal_alpha_mass) nodal_damping_ |= am != 0.0;
+  if (nodal_damping_) nodal_alpha_mass_ = upload("nodal_alpha_mass", c.nodal_alpha_mass);
 
   // Gather pairs: each equation's slots in (batch, element, DOF) order.
   std::vector<std::pair<Index, std::int64_t>> pairs;
@@ -243,6 +245,14 @@ void InternalForce::compute(const ForceSettings& settings) {
   last_plastic_points_ = 0;
   for (auto& b : batches_) last_plastic_points_ += b->run(s, out, coords_, nnodes_, u, v, f, gather_.slots());
   if (out == Out::Slots) gather_.gather(f);
+  if (nodal_damping_) {
+    // The nodal masses' Rayleigh damping force alphaM M v, with the velocity the elements see
+    // (OpenSees: Node::getUnbalancedLoadIncInertia).
+    const Vec am = nodal_alpha_mass_, ff = f, vv = v;
+    Kokkos::parallel_for(
+        "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_),
+        KOKKOS_LAMBDA(const Index q) { ff(q) += am(q) * vv(q); });
+  }
 }
 
 void InternalForce::drm_forces(int batch, const Kokkos::View<std::int32_t*, Space>& elems,
@@ -375,6 +385,7 @@ void InternalForce::apply_operator(const OperatorCoefficients& k, const Operator
   for (auto& b : batches_) b->run_operator(s, false, k, out, coords_, nnodes_, u_at, xv, y, gather_.slots(), -1);
   if (out == Out::Slots) gather_.gather(y);
   add_nodal_mass(k.mass, nodal_mass_, x, y, false);
+  if (nodal_damping_) add_nodal_mass(k.damping, nodal_alpha_mass_, x, y, false);
 }
 
 void InternalForce::operator_diagonal(const OperatorCoefficients& k, const OperatorSettings& settings,
@@ -390,6 +401,7 @@ void InternalForce::operator_diagonal(const OperatorCoefficients& k, const Opera
   for (auto& b : batches_) b->run_operator(s, true, k, out, coords_, nnodes_, u_at, d, d, gather_.slots(), -1);
   if (out == Out::Slots) gather_.gather(d);
   add_nodal_mass(k.mass, nodal_mass_, d, d, true);
+  if (nodal_damping_) add_nodal_mass(k.damping, nodal_alpha_mass_, d, d, true);
 }
 
 void InternalForce::mass_times_ground(int direction, const OperatorSettings& settings, const Vec& u_at,

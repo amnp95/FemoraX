@@ -263,6 +263,10 @@ the other two. Femora's region tag and the damping's `user_name` may be kept as
 Element damping force, as OpenSees `Element::getRayleighDampingForces`:
 `alphaM*M*v + (betaK*K_current + betaKinit*K_initial + betaKcomm*K_committed)*v`, with the
 element's own mass matrix (lumped or consistent). An element in no region has no damping.
+Nodal masses (`/mass`) are damped by `alphaM` too: as OpenSees' `region -ele` puts the
+elements' nodes in the region, each node takes the `alphaM` of the last region (file order)
+that holds one of its elements, and its nodal mass gets the damping force `alphaM m v`. The
+reader warns when a node with a nodal mass lies in regions with different `alphaM`.
 An element in several regions takes the coefficients of the last region in file order,
 matching OpenSees, where the last `region` command wins. The reader prints a warning that
 names the regions and the number of elements affected.

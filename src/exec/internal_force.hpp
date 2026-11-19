@@ -188,6 +188,8 @@ class InternalForce {
   std::int64_t cache_bytes_ = 0, stored_bytes_ = 0, last_plastic_points_ = 0;
   Vec coords_;
   Vec nodal_mass_;
+  Vec nodal_alpha_mass_;           // alphaM M of the nodal masses (docs/design.md, "Structures")
+  bool nodal_damping_ = false;     // some nodal mass lies in a region with alphaM != 0
   Kokkos::View<std::int8_t*, Space> eq_dof_;
   SlotGather gather_;
   std::vector<std::unique_ptr<Batch>> batches_;

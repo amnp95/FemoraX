@@ -225,8 +225,13 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     de-amplifies (ratio to the free field 0.2-1), below it amplifies x up to about 1.6; 213 s
     on 112 cores (1.55 ms/step). Plots: `plots/Point0_plastic_basin.png`,
     `plots/Point1_plastic_basin.png`.
-21. **Bug: nodal masses get no mass-proportional damping (fix before the beams).** Found
-    2026-11-19. OpenSees' `region <tag> -ele ...` (Femora's default; not `-eleOnly`) puts the
+21. **Bug: nodal masses get no mass-proportional damping.** Fixed 2026-11-19: each node takes
+    the alphaM of the last Rayleigh region holding one of its elements; the force adds alphaM M v
+    of the nodal masses, the operator and its diagonal the damping coefficient times alphaM M,
+    CentralDifference's damping diagonal the same; the reader warns when a node with a nodal mass
+    lies in regions with different alphaM (`MatrixFreeOperator.NodalMassesAreDampedByTheirNodesRegion`,
+    the reference assembly's C, the fixture `nodal_mass_in_two_damping_regions`). Still open:
+    `-eleOnly` (a schema addition). Found 2026-11-19. OpenSees' `region <tag> -ele ...` (Femora's default; not `-eleOnly`) puts the
     elements *and their nodes* in the region (`MeshRegion::setElements`), and
     `setRayleighDampingFactors` gives the nodes the region's alphaM, which each node applies to
     its own mass (`Node.cpp:1081`, alphaM M v). FemoraX's Rayleigh regions are element lists
@@ -236,8 +241,10 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     (the last region wins, as for elements); an optional `element_only` attribute for
     `-eleOnly` (a schema addition: ask the user). Test: a mass on a spring node in a damped
     region against OpenSees.
-22. **The stable step with nodal masses (fix before the beams).** Elements bound their omega^2
-    with their own mass; an element whose mass is on its nodes (Femora's beams: element
-    density 0, `/mass` on the nodes) gives no bound, and in general mass on nodes is ignored.
+22. **The stable step with nodal masses (with the beams' element contract).** Elements bound
+    their omega^2 with their own mass; ignoring the nodal masses lowers the estimated step (safe:
+    less mass, higher frequencies), but an element with no mass of its own (Femora's beams:
+    element density 0, `/mass` on the nodes) gets no bound at all. Needs the nodes' masses as an
+    input of every element's bound (a contract change), so it comes with the first beam.
     Give each element a share of its nodes' masses (a partition of the assembled mass keeps the
     element eigenvalue bound valid); local time stepping needs the same per-element step.

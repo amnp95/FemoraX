@@ -942,7 +942,7 @@ FemoraX's run summary lets one check.
 masses its elements compute, through each element's own region, and the nodal masses on the
 nodes of its elements, as OpenSees does for `region -ele` (the nodes join the region;
 `-eleOnly` keeps them out). So the same region damps the same mass whether it comes from
-densities or from nodes. Today FemoraX damps element masses only (bug: docs/todo.md item 21).
+densities or from nodes (done 2026-11-19; before, FemoraX damped element masses only).
 A node in several regions with different alphaM (a column meeting the soil): its nodal mass
 takes the last region's alphaM, as in OpenSees, and FemoraX warns, naming the nodes and the
 mass involved; with densities the question does not arise (each element mass is damped by

@@ -13,7 +13,8 @@
 //        initial stiffness is their tangent (SSPbrick)
 //   M    Element::mass (consistent or lumped per element) plus nodal masses
 //   C    per element alphaM M + betaK K_t + betaKinit K_0 + betaKcomm K_c, with the
-//        element's damping region
+//        element's damping region; plus alphaM times each nodal mass, alphaM of the last
+//        region in file order holding one of the node's elements (OpenSees' `region -ele`)
 
 #include <Eigen/Sparse>
 
@@ -172,11 +173,23 @@ inline ReferenceSystem assemble_reference(const io::Model& m, const compile::Com
   // Nodal masses, as the compile step adds them to the lumped mass.
   std::unordered_map<std::int32_t, std::int32_t> internal;
   for (std::int32_t i = 0; i < c.dofs.num_nodes(); ++i) internal[c.dofs.node_tag[i]] = i;
+  std::unordered_map<std::int32_t, double> node_alpha;  // node tag -> alphaM of its last region
+  for (const auto& reg : m.rayleigh)
+    for (const auto tag : reg.elements)
+      for (const auto& g : m.elements)
+        for (std::size_t e = 0; e < g.size(); ++e)
+          if (g.tags[e] == tag) {
+            const std::size_t nn = g.connectivity.size() / g.size();
+            for (std::size_t a = 0; a < nn; ++a) node_alpha[g.connectivity[e * nn + a]] = reg.alphaM;
+          }
   for (std::size_t k = 0; k < m.mass.node.size(); ++k) {
     const std::int32_t q = c.dofs.equation(internal.at(m.mass.node[k]), m.mass.dof[k] - 1);
     if (q >= 0) {
-      r.M[static_cast<std::size_t>(r.pattern.find(q, q))] += m.mass.value[k];
+      const auto pos = static_cast<std::size_t>(r.pattern.find(q, q));
+      r.M[pos] += m.mass.value[k];
       r.Mr[m.mass.dof[k] - 1][static_cast<std::size_t>(q)] += m.mass.value[k];
+      const auto it = node_alpha.find(m.mass.node[k]);
+      if (it != node_alpha.end()) r.C[pos] += it->second * m.mass.value[k];
     }
   }
   return r;

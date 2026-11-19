@@ -120,6 +120,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   c.lumped_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
   c.lumped_alpha_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
   c.nodal_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
+  c.nodal_alpha_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
   for (const auto& [pair, list] : members) {
     registry::for_each_pair([&]<class E, class M>(int index) {
       if (index != pair) return;
@@ -211,12 +212,35 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
     });
   }
 
-  // Nodal masses (no Rayleigh damping: node regions are not supported).
+  // Nodal masses, damped by the alphaM of their node's Rayleigh region: OpenSees' `region
+  // -ele` puts the elements' nodes in the region too (MeshRegion::setElements), and a node
+  // applies the region's alphaM to its own mass (Node::getUnbalancedLoadIncInertia, alphaM M v;
+  // Node::getDamp in the tangent). A node takes the last region in file order that holds one
+  // of its elements, as elements do (docs/design.md, "Structures: mass and damping standard").
+  std::unordered_map<std::int32_t, std::int32_t> node_region;
+  if (!m.mass.node.empty() && !m.rayleigh.empty()) {
+    std::unordered_map<std::int32_t, std::pair<std::size_t, std::size_t>> element_at;  // tag -> (group, index)
+    for (std::size_t g = 0; g < m.elements.size(); ++g)
+      for (std::size_t e = 0; e < m.elements[g].size(); ++e) element_at[m.elements[g].tags[e]] = {g, e};
+    for (std::size_t r = 0; r < m.rayleigh.size(); ++r)
+      for (const auto tag : m.rayleigh[r].elements) {
+        const auto [g, e] = element_at.at(tag);
+        const auto& grp = m.elements[g];
+        const std::size_t nn = grp.connectivity.size() / grp.size();
+        for (std::size_t a = 0; a < nn; ++a) node_region[grp.connectivity[e * nn + a]] = static_cast<std::int32_t>(r);
+      }
+  }
   for (std::size_t r = 0; r < m.mass.node.size(); ++r) {
     const std::int32_t q = n.equation(internal_of_tag.at(m.mass.node[r]), m.mass.dof[r] - 1);
     if (q >= 0) {
       c.lumped_mass[q] += m.mass.value[r];
       c.nodal_mass[q] += m.mass.value[r];
+      const auto it = node_region.find(m.mass.node[r]);
+      if (it != node_region.end()) {
+        const double am = m.rayleigh[static_cast<std::size_t>(it->second)].alphaM * m.mass.value[r];
+        c.nodal_alpha_mass[q] += am;
+        c.lumped_alpha_mass[q] += am;  // CentralDifference's damping diagonal
+      }
     }
   }
   return c;
