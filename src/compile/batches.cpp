@@ -53,6 +53,10 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   Compiled c;
   c.ordering = compute_ordering(m, opt.renumbering);
   c.dofs = number_dofs(m, c.ordering.node_order);
+  if (c.dofs.num_constrained() > 0)
+    throw io::UnsupportedComponent("unsupported component: rigid links, rigid diaphragms and embedded nodes are "
+                                   "numbered (compile step) but not yet in the kernels (docs/design.md, \"Exact "
+                                   "constraints u = T q\", step 2)");
   const auto& n = c.dofs;
   const std::int32_t N = n.num_nodes();
 

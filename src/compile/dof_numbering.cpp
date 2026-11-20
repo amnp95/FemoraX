@@ -1,5 +1,10 @@
 #include "compile/dof_numbering.hpp"
 
+#include <array>
+#include <map>
+
+#include "compile/linear_constraints.hpp"
+
 #include <algorithm>
 #include <numeric>
 #include <string>
@@ -241,6 +246,7 @@ void check_against_transformation_handler(const io::Model& model, const DofNumbe
     for (std::int32_t d = 0; d < n.ndf[i]; ++d) {
       const std::int64_t v = value[n.dof_offset[i] + d];
       const std::int32_t e = n.equation(i, d);
+      if (e >= n.num_equations) continue;  // an exactly constrained DOF (its own rules below)
       bool same = (v == kFixed) == (e < 0);
       if (same && e >= 0) {
         const auto [a, fa] = eq_of_value.emplace(v, e);
@@ -342,6 +348,91 @@ DofNumbering number_dofs(const io::Model& model, const std::vector<std::int32_t>
   for (std::size_t r = 0; r < model.fix.node.size(); ++r)
     fixed_root[uf.find(dof_id(model.fix.node[r], model.fix.dof[r]))] = 1;
 
+  // --- Exact linear constraints (u = T q) ---------------------------------------------
+  std::vector<LinearConstraint> lin;
+  {
+    auto coords = [&](std::int32_t tag) {
+      const auto m = static_cast<std::size_t>(out.node_model_index[static_cast<std::size_t>(internal_of_tag.at(tag))]);
+      return std::array<double, 3>{model.nodes.coords[3 * m], model.nodes.coords[3 * m + 1], model.nodes.coords[3 * m + 2]};
+    };
+    auto node_of = [&](std::int32_t tag, const std::string& what) {
+      const auto it = internal_of_tag.find(tag);
+      if (it == internal_of_tag.end()) invalid(what + ": node " + std::to_string(tag) + " does not exist");
+      return it->second;
+    };
+    auto need_ndf = [&](std::int32_t tag, int ndf, const std::string& what) {
+      if (out.ndf[static_cast<std::size_t>(node_of(tag, what))] != ndf)
+        invalid(what + ": node " + std::to_string(tag) + " needs " + std::to_string(ndf) + " DOFs");
+    };
+    for (const auto& l : model.rigid_links) {
+      const std::string what = "rigidLink " + l.type + " " + std::to_string(l.master) + " " + std::to_string(l.slave);
+      const auto m = out.dof_offset[node_of(l.master, what)], sl = out.dof_offset[node_of(l.slave, what)];
+      if (l.type == "beam") {
+        need_ndf(l.master, 6, what);
+        need_ndf(l.slave, 6, what);
+        rigid_link_beam(m, sl, coords(l.master), coords(l.slave), lin, what);
+      } else if (l.type == "bar") {
+        rigid_link_bar(m, sl, lin, what);
+      } else {
+        invalid(what + ": the type must be beam or bar");
+      }
+    }
+    for (const auto& dg : model.rigid_diaphragms)
+      for (const auto sl : dg.slaves) {
+        const std::string what = "rigidDiaphragm " + std::to_string(dg.perp) + " " + std::to_string(dg.master) +
+                                 " (slave " + std::to_string(sl) + ")";
+        need_ndf(dg.master, 6, what);
+        need_ndf(sl, 6, what);
+        rigid_diaphragm(dg.perp, out.dof_offset[node_of(dg.master, what)], out.dof_offset[node_of(sl, what)],
+                        coords(dg.master), coords(sl), lin, what);
+      }
+    if (!model.embedded_nodes.empty()) {
+      std::unordered_map<std::int32_t, std::pair<std::size_t, std::size_t>> element_at;  // tag -> (group, index)
+      for (std::size_t g = 0; g < model.elements.size(); ++g)
+        for (std::size_t e = 0; e < model.elements[g].size(); ++e) element_at[model.elements[g].tags[e]] = {g, e};
+      for (const auto& en : model.embedded_nodes) {
+        const std::string what = "embedded node " + std::to_string(en.node) + " in element " + std::to_string(en.host);
+        const auto it = element_at.find(en.host);
+        if (it == element_at.end()) invalid(what + ": the host element does not exist");
+        const auto& grp = model.elements[it->second.first];
+        if (grp.type != io::ElementType::StdBrick && grp.type != io::ElementType::SSPbrick)
+          throw io::UnsupportedComponent("unsupported component: " + what + ": the host must be an 8-node brick "
+                                         "(stdBrick, SSPbrick) so far");
+        const int nn = io::node_count(grp.type);
+        std::int32_t host[8];
+        double xe[8][3];
+        for (int a = 0; a < nn; ++a) {
+          const std::int32_t t = grp.connectivity[it->second.second * static_cast<std::size_t>(nn) + static_cast<std::size_t>(a)];
+          host[a] = out.dof_offset[node_of(t, what)];
+          const auto xa = coords(t);
+          for (int k = 0; k < 3; ++k) xe[a][k] = xa[static_cast<std::size_t>(k)];
+        }
+        const auto c = node_of(en.node, what);
+        if (en.rot) need_ndf(en.node, 6, what);
+        embedded_in_hex8(host, xe, out.dof_offset[c], coords(en.node), en.rot, lin, what);
+      }
+    }
+  }
+  const ResolvedConstraints rc = resolve_constraints(ndof, lin);
+  std::vector<char> constrained(static_cast<std::size_t>(ndof), 0);
+  {
+    // A constrained DOF has its own rule: not tied by equalDOF as well, not fixed.
+    std::vector<std::int32_t> group_size(static_cast<std::size_t>(ndof), 0);
+    for (std::int32_t a = 0; a < ndof; ++a) ++group_size[static_cast<std::size_t>(uf.find(a))];
+    for (std::size_t r = 0; r < rc.rows(); ++r) {
+      const auto d = rc.dof[r];
+      const auto root = uf.find(d);
+      const std::string what = lin.empty() ? "" : std::string("the DOF ") + std::to_string(d);
+      if (group_size[static_cast<std::size_t>(root)] > 1)
+        invalid("a DOF constrained by a rigid link, diaphragm or embedded node is also tied by equalDOF (" + what +
+                "): constrain it once");
+      if (fixed_root[static_cast<std::size_t>(root)])
+        invalid("a DOF constrained by a rigid link, diaphragm or embedded node is also fixed (" + what +
+                "): constrain it once");
+      constrained[static_cast<std::size_t>(d)] = 1;
+    }
+  }
+
   // DOF ids increase with the internal node order, and each root is its group's smallest
   // id, so numbering roots in id order numbers groups by their smallest DOF.
   out.eq.assign(static_cast<std::size_t>(ndof), -1);
@@ -349,11 +440,26 @@ DofNumbering number_dofs(const io::Model& model, const std::vector<std::int32_t>
   std::int32_t next = 0;
   for (std::int32_t a = 0; a < ndof; ++a) {
     const std::int32_t root = uf.find(a);
-    if (fixed_root[root]) continue;
+    if (fixed_root[root] || constrained[static_cast<std::size_t>(a)]) continue;
     if (eq_of_root[root] < 0) eq_of_root[root] = next++;
     out.eq[a] = eq_of_root[root];
   }
   out.num_equations = next;
+  // The constrained DOFs' slots and their rows in equations (rows in ascending DOF order).
+  out.num_slots = next;
+  for (std::size_t r = 0; r < rc.rows(); ++r) {
+    out.eq[static_cast<std::size_t>(rc.dof[r])] = out.num_slots++;
+    std::map<std::int32_t, double> row;
+    for (auto k = rc.start[r]; k < rc.start[r + 1]; ++k) {
+      const auto e = out.eq[static_cast<std::size_t>(rc.term_dof[static_cast<std::size_t>(k)])];
+      if (e >= 0) row[e] += rc.term_weight[static_cast<std::size_t>(k)];  // a fixed DOF drops out
+    }
+    for (const auto& [e, w] : row) {
+      out.con_eq.push_back(e);
+      out.con_weight.push_back(w);
+    }
+    out.con_start.push_back(static_cast<std::int64_t>(out.con_eq.size()));
+  }
 
   if (check_opensees) check_against_transformation_handler(model, out);
   return out;

@@ -131,6 +131,23 @@ struct Fix {
   std::vector<std::int32_t> node, dof;
 };
 
+// Exact linear constraints (docs/design.md, "Exact constraints u = T q"; in memory until schema
+// 1.2): `rigidLink beam|bar master slave`, `rigidDiaphragm perp master slave...`, and the
+// embedded node (the node, its host element's tag, whether its rotations are tied too).
+struct RigidLink {
+  std::string type = "beam";  // "beam" or "bar"
+  std::int32_t master = 0, slave = 0;
+};
+struct RigidDiaphragm {
+  int perp = 3;  // the axis normal to the plane, 1-based
+  std::int32_t master = 0;
+  std::vector<std::int32_t> slaves;
+};
+struct EmbeddedNode {
+  std::int32_t node = 0, host = 0;  // host: an element tag (an 8-node brick so far)
+  bool rot = false;
+};
+
 struct EqualDof {
   std::vector<std::int32_t> retained, constrained, dof;
   // equalDOF command of each row (schema 0.2), or empty: each (retained, constrained) pair
@@ -301,6 +318,9 @@ struct Model {
   NodalMass mass;
   Fix fix;
   EqualDof equal_dof;
+  std::vector<RigidLink> rigid_links;
+  std::vector<RigidDiaphragm> rigid_diaphragms;
+  std::vector<EmbeddedNode> embedded_nodes;
   std::vector<RayleighRegion> rayleigh;
   std::vector<UniformDampingRegion> uniform;  // the last region of an element wins
   std::vector<PathSeries> time_series;

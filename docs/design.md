@@ -1212,9 +1212,18 @@ rotation tie as half the curl of the brick's gradient at the node). Tests
 (`test_linear_constraints`): the slaves move rigidly with any small rigid motion of the master;
 the embedded node reproduces any linear field exactly (the patch test of the tie), its weights
 sum to one, and with rot it takes a rigid rotation of the brick and no rotation under pure
-strain; the resolver's chain, cycle and double rules. Next: the wiring into the DOF numbering
-(constrained DOFs get no equations of their own; their rows mapped to equations, fixed DOFs
-dropping out) with the kernels' expand / contract (step 2).
+strain; the resolver's chain, cycle and double rules.
+Step 1 done (2026-11-20): the wiring into the DOF numbering. In memory (schema 1.2 later):
+`io::RigidLink`, `io::RigidDiaphragm`, `io::EmbeddedNode` (node, host element tag, rot) in
+`io::Model`. `number_dofs` builds the constraints (the embedded node's host looked up by tag: an
+8-node brick so far, another host refused as unsupported), resolves them, and gives each
+constrained DOF no equation but a slot after the equations (`eq[dof] = num_equations + k`,
+`DofNumbering::num_slots`), with its row in equations (`con_start / con_eq / con_weight`: through
+equalDOF groups, fixed DOFs dropped); a constrained DOF that is also fixed or tied by equalDOF is
+refused; the Transformation-handler check skips the slots. Until the kernels have them (step 2),
+`compile_model` refuses these constraints as unsupported. Tests: the slots and rows of a rigid
+link, through an equalDOF group with a fixed DOF, the refusals, an embedded node in a brick
+element of a model (8 weights summing to one), the compile step's refusal.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

@@ -34,6 +34,16 @@ struct DofNumbering {
   std::vector<std::int32_t> dof_offset;        // [N + 1]
   std::vector<std::int32_t> eq;                // [ndof]; -1 = fixed
   std::int32_t num_equations = 0;
+  // Exact linear constraints (rigid links, diaphragms, embedded nodes): each constrained DOF has
+  // no equation of its own but a slot after the equations, eq[dof] = num_equations + k, whose
+  // value is a fixed weighted sum of equations (row k: con_eq / con_weight[con_start[k] ..
+  // con_start[k + 1]); fixed DOFs dropped, equalDOF groups merged). num_slots = num_equations +
+  // the constrained DOFs.
+  std::int32_t num_slots = 0;
+  std::vector<std::int64_t> con_start{0};
+  std::vector<std::int32_t> con_eq;
+  std::vector<double> con_weight;
+  std::int32_t num_constrained() const { return num_slots - num_equations; }
 
   std::int32_t num_nodes() const { return static_cast<std::int32_t>(node_tag.size()); }
   std::int32_t num_dofs() const { return dof_offset.empty() ? 0 : dof_offset.back(); }

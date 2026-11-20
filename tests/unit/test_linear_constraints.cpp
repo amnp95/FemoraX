@@ -7,7 +7,11 @@
 //   - the embedded node in a distorted brick: its natural coordinates map back to the node, the
 //     weights sum to one and reproduce any linear field exactly (the patch test of the tie); with
 //     rot, a rigid rotation of the brick gives the node that rotation and a pure strain none;
-//   - the resolver: a chain is substituted, a cycle and a DOF constrained twice are refused.
+//   - the resolver: a chain is substituted, a cycle and a DOF constrained twice are refused;
+//   - the DOF numbering: constrained DOFs get slots after the equations, their rows in equations
+//     (through equalDOF groups, fixed DOFs dropped); a constrained DOF that is also fixed or tied
+//     by equalDOF is refused; an embedded node in a brick element of the model; the compile step
+//     refuses these constraints until the kernels have them.
 
 #include <gtest/gtest.h>
 
@@ -15,7 +19,10 @@
 #include <cmath>
 #include <vector>
 
+#include "compile/batches.hpp"
+#include "compile/dof_numbering.hpp"
 #include "compile/linear_constraints.hpp"
+#include "io/model.hpp"
 #include "io/h5.hpp"
 
 namespace {
@@ -182,6 +189,105 @@ TEST(LinearConstraints, ResolverSubstitutesChainsAndRefusesCyclesAndDoubles) {
   } catch (const femorax::io::ModelError& e) {
     EXPECT_NE(std::string(e.what()).find("constrained twice"), std::string::npos);
   }
+}
+
+// Two or three 6-DOF nodes along x.
+femorax::io::Model frame(int n) {
+  femorax::io::Model m;
+  for (int i = 0; i < n; ++i) {
+    m.nodes.tags.push_back(1 + i);
+    m.nodes.ndf.push_back(6);
+    m.nodes.coords.insert(m.nodes.coords.end(), {1.0 * i, 0.5 * i, 0.0});
+  }
+  return m;
+}
+
+TEST(LinearConstraints, NumberingGivesConstrainedDofsSlotsAndRowsInEquations) {
+  using femorax::compile::number_dofs;
+  using femorax::compile::file_order;
+  {  // node 2 rigidly linked to node 1: 6 equations, 6 slots
+    auto m = frame(2);
+    m.rigid_links.push_back({"beam", 1, 2});
+    const auto n = number_dofs(m, file_order(m));
+    EXPECT_EQ(n.num_equations, 6);
+    EXPECT_EQ(n.num_slots, 12);
+    for (int d = 0; d < 6; ++d) EXPECT_EQ(n.equation(1, d), 6 + d);
+    // u_x of node 2 = u_x1 + theta_y1 r_z - theta_z1 r_y, r = (1, 0.5, 0)
+    ASSERT_EQ(n.con_start[1] - n.con_start[0], 2);  // the r_z term is zero
+    EXPECT_EQ(n.con_eq[0], 0);
+    EXPECT_EQ(n.con_weight[0], 1.0);
+    EXPECT_EQ(n.con_eq[1], 5);
+    EXPECT_EQ(n.con_weight[1], -0.5);
+  }
+  {  // the master tied to node 3 by equalDOF, node 3 fixed in rz: the terms follow the merged
+     // equations, the fixed rotation drops out
+    auto m = frame(3);
+    m.rigid_links.push_back({"beam", 1, 2});
+    for (int d = 1; d <= 6; ++d) {
+      m.equal_dof.retained.push_back(3);
+      m.equal_dof.constrained.push_back(1);
+      m.equal_dof.dof.push_back(d);
+    }
+    m.fix.node.push_back(3);
+    m.fix.dof.push_back(6);
+    const auto n = number_dofs(m, file_order(m));
+    EXPECT_EQ(n.num_equations, 5);  // node 1 and node 3 share 6 DOFs, one fixed
+    EXPECT_EQ(n.num_constrained(), 6);
+    EXPECT_EQ(n.con_start[1] - n.con_start[0], 1);  // u_x2 = u_x1 (theta_z fixed)
+    EXPECT_EQ(n.con_eq[0], n.equation(0, 0));
+  }
+  {  // a constrained DOF that is also fixed, or also tied by equalDOF
+    auto m = frame(2);
+    m.rigid_links.push_back({"beam", 1, 2});
+    m.fix.node.push_back(2);
+    m.fix.dof.push_back(1);
+    EXPECT_THROW(number_dofs(m, file_order(m)), femorax::io::ModelError);
+    auto m2 = frame(3);
+    m2.rigid_links.push_back({"bar", 1, 2});
+    m2.equal_dof.retained.push_back(3);
+    m2.equal_dof.constrained.push_back(2);
+    m2.equal_dof.dof.push_back(1);
+    EXPECT_THROW(number_dofs(m2, file_order(m2)), femorax::io::ModelError);
+  }
+}
+
+TEST(LinearConstraints, EmbeddedNodeInABrickElementOfTheModel) {
+  femorax::io::Model m;
+  double xe[8][3];
+  distorted(xe);
+  for (int i = 0; i < 8; ++i) {
+    m.nodes.tags.push_back(1 + i);
+    m.nodes.ndf.push_back(3);
+    m.nodes.coords.insert(m.nodes.coords.end(), {xe[i][0], xe[i][1], xe[i][2]});
+  }
+  m.nodes.tags.push_back(100);  // the embedded node, 3 DOFs, at the brick's centre-ish
+  m.nodes.ndf.push_back(3);
+  m.nodes.coords.insert(m.nodes.coords.end(), {0.6, 0.5, 0.55});
+  m.materials.push_back({1, femorax::io::ElasticIsotropicData{1e5, 0.3, 2.0}, {}});
+  femorax::io::ElementGroup g;
+  g.id = "soil";
+  g.type = femorax::io::ElementType::StdBrick;
+  g.material = 1;
+  g.lumped = true;
+  g.tags = {7};
+  g.connectivity = {1, 2, 3, 4, 5, 6, 7, 8};
+  m.elements.push_back(g);
+  m.embedded_nodes.push_back({100, 7, false});
+  const auto n = femorax::compile::number_dofs(m, femorax::compile::file_order(m));
+  EXPECT_EQ(n.num_equations, 24);
+  EXPECT_EQ(n.num_constrained(), 3);
+  for (int d = 0; d < 3; ++d) {
+    EXPECT_EQ(n.con_start[d + 1] - n.con_start[d], 8);
+    double sum = 0.0;
+    for (auto k = n.con_start[d]; k < n.con_start[d + 1]; ++k) sum += n.con_weight[static_cast<std::size_t>(k)];
+    EXPECT_NEAR(sum, 1.0, 1e-15);
+  }
+  // An unknown host, and a host that is not a brick, are refused.
+  auto bad = m;
+  bad.embedded_nodes[0].host = 8;
+  EXPECT_THROW(femorax::compile::number_dofs(bad, femorax::compile::file_order(bad)), femorax::io::ModelError);
+  // The compile step refuses these constraints until the kernels have them.
+  EXPECT_THROW(femorax::compile::compile_model(m, femorax::compile::CompileOptions{}), femorax::io::UnsupportedComponent);
 }
 
 }  // namespace
