@@ -1143,6 +1143,45 @@ displacements within 1.9e-15 of the peak over 200 steps (stored OpenSees output)
 way: without rotational mass the pile's twist about its axis is a massless rigid mode (the ties
 hold only translations), and OpenSees' implicit solve is singular there, as it should be.
 
+## Beams: the force-based beam (plan approved by the user, 2026-11-20)
+
+**What Femora writes:** `element nonlinearBeamColumn tag i j nIP secTag transfTag [-mass m] -iter
+maxIters tol` (`force_beam_column.py`; defaults nIP 5, maxIters 10, tol 1e-12), which OpenSees runs
+as `ForceBeamColumn3d` with `LobattoBeamIntegration` (`TclForceBeamColumnCommand.cpp`). Ports from
+OpenSees 955ceb0: `ForceBeamColumn3d.cpp`, `LobattoBeamIntegration.cpp`, names kept close to the
+originals.
+
+**Decisions with the user (2026-11-20):**
+- `ForceBeam3d<Section, NIP>`, reusing the elastic section, the Linear and PDelta transformations
+  (joint offsets), the mass standard (its own lumped mass with rotary inertia; `-mass` as
+  `mass_per_length`, option a), Rayleigh damping in the basic system and the displacement beam's
+  matrix-free operator path.
+- Integration points: Lobatto 3 to 7 (compile-time buckets; more is refused with a message).
+- A non-converged element iteration fails the step: implicit stages retry and substep as Femora's
+  recovery does; explicit stages stop, naming the element (a deliberate difference: OpenSees warns
+  and continues by default; docs/deviations.md when it lands).
+
+**Design.** Element state: the committed basic forces `Se` (6), the element stiffness `kv` (6 x 6,
+the inverse of the integrated flexibility) and each point's section deformations and section
+state; the element iteration (Neuenhofer-Filippou: from the basic deformation increment, the
+section force increments `b(x) dSe`, the section's residual deformations integrated back to the
+element, until the basic deformation residual meets `tol`) in fixed-size loops with `maxIters`.
+One thread per element first; a team per element with threads over fibers when fiber sections
+come (docs/design.md, "Hard parts"). Stable step: the exact 12 x 12 element eigenvalue with the
+lumped mass, as the displacement beam. Kernels: the beam's flat force kernel, the operator through
+`kv` and the transformation, tangent blocks per node pair.
+
+**Verification:** closed forms (one element of an elastic member is exact for end forces and
+moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);
+an OpenSees driver (ForceBeamColumn3d with ElasticSection3d in a Domain: force, tangent, initial
+stiffness and mass, bit for bit, both transformations, 3-7 points); bit-identity across kernel
+variants; system tests against OpenSees (a cantilever and a frame, then the pile in soil); the LTS
+gain from one element per member.
+
+**Steps (one commit each):** (1) the physics with the elastic section, closed forms and the
+OpenSees driver; (2) mass, damping, stable step; (3) registry, kernels, operator; (4) schema 1.3
+(asked with the exact text), reader, converter; (5) system tests against OpenSees; (6) benchmarks.
+
 ## Exact constraints u = T q: rigid links, rigid diaphragms, embedded nodes (plan approved by the user, 2026-11-20)
 
 Backed by the literature review `docs/research/embedded_and_constraints/` ("eliminate the tie,
