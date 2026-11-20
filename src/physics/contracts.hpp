@@ -20,7 +20,13 @@ enum class MaterialKind : int {
   NDMaterial3D = 0,           // 6 strains: 11 22 33 12 23 31 (engineering shear)
   NDMaterialPlaneStrain = 1,  // 3 strains: 11 22 12
   Uniaxial = 2,               // 1 strain
+  Section3d = 3,              // beam section of a 3D frame: resultants named by CODE
 };
+
+// What each value of a section's deformation and resultant vector is (OpenSees'
+// SectionForceDeformation codes, SRC/material/section/SectionForceDeformation.h): axial force,
+// bending moments about z and y, torque, shears.
+enum class SectionResponse : int { P = 2, MZ = 1, MY = 4, T = 6, VY = 3, VZ = 5 };
 
 enum class ExplicitScheme : int { CentralDifference = 0, ExplicitDifference = 1 };
 
@@ -115,6 +121,36 @@ concept Material = requires {
   // recompute it from its committed state or keep a copy in its state.
   { M::committed_tangent(p, committed, D) } -> std::same_as<void>;
   { M::density(p) } -> std::same_as<double>;
+};
+
+// ---------------------------------------------------------------------------
+// Section contract (beam sections; docs/design.md, "Beams")
+// ---------------------------------------------------------------------------
+// The section's geometry for the beam's own mass (docs/design.md, "Structures"): the element
+// multiplies by its density (translation rho A, rotary inertia rho J, rho Iz, rho Iy).
+struct SectionProperties {
+  double A = 0.0, Iz = 0.0, Iy = 0.0, J = 0.0;
+};
+
+// A section works like a material with deformations e (NSTRAIN of them, named by CODE in
+// OpenSees' getType order) and resultants s: update gives s(e) and its tangent ks.
+template <class S>
+concept Section = requires {
+  typename S::Params;
+  requires std::is_trivially_copyable_v<typename S::Params>;
+  requires S::KIND == MaterialKind::Section3d;
+  requires detail::is_constexpr_int<decltype(S::NSTRAIN)>;
+  requires detail::is_constexpr_int<decltype(S::NSTATE)>;
+  requires S::NSTRAIN > 0 && S::NSTATE >= 0;
+  requires std::is_same_v<std::remove_cv_t<decltype(S::CODE)>, std::array<SectionResponse, S::NSTRAIN>>;
+  requires std::is_same_v<decltype(S::TANGENT), const TangentSymmetry>;
+  requires std::is_same_v<decltype(S::CONSTANT_TANGENT), const bool>;
+} && requires(const typename S::Params& p, Strided<const double> committed, Strided<double> trial,
+              const double* e, double* s, double (*ks)[S::NSTRAIN]) {
+  { S::update(p, committed, trial, e, s, ks) } -> std::same_as<void>;
+  { S::initial_tangent(p, ks) } -> std::same_as<void>;
+  { S::committed_tangent(p, committed, ks) } -> std::same_as<void>;
+  { S::properties(p) } -> std::same_as<SectionProperties>;
 };
 
 // The material update with the step context: a material whose update takes a StepContext

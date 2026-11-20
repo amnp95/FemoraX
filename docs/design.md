@@ -987,6 +987,55 @@ sections are wanted: no hard limit, but each combination is a kernel instantiati
 register what models use), mixed-material fiber sections need fibers grouped by material on
 GPUs, and each port needs its OpenSees verification.
 
+## Beams: the displacement-based beam (plan approved by the user, 2026-11-19)
+
+**What Femora writes:** `element dispBeamColumn tag i j nIP secTag transfTag [-mass rhoA]`
+(OpenSees' legacy form: Gauss-Legendre points, `TclForceBeamColumnCommand.cpp`; Femora's
+default nIP = 5), `section Elastic tag E A Iz Iy G J`, `geomTransf Linear|PDelta tag vecxz
+[-jntOffset ...]`. Ports from OpenSees 955ceb0: `DispBeamColumn3d.cpp`, `LinearCrdTransf3d.cpp`,
+`PDeltaCrdTransf3d.cpp`, `ElasticSection3d.cpp`, names kept close to the originals.
+
+**Decisions with the user (2026-11-19):**
+- *Mass:* the beam computes its own lumped mass from its density and the section (rho A L / 2
+  per translation, physical rotary inertia rho J L / 2 in torsion and rho Iz L / 2, rho Iy L / 2
+  in bending; "Structures"); no scaling option: a model that wants Femora's scaled rotary
+  inertia gives the beam density 0 and writes all its masses as nodal masses. With physical
+  rotary inertia a rotation's stable step is about L / (sqrt(2) c), close to the axial L / c,
+  so scaling would gain at most 1.4x. The consistent mass (`-cMass`) for implicit stages only.
+- *Integration points:* compile-time buckets 2 to 5 (each count is a kernel instantiation; a
+  displacement-based beam's curvature is linear, so more points add no accuracy: more elements
+  do); another count is refused with that message. The force-based beam gets its own range.
+- *Joint offsets:* implemented with the transformations (OpenSees handles them in the same
+  classes); refused with a message only if they turn out harder.
+- *Schema 1.1* (minor): `/sections/<tag>`, `/transformations/<tag>` (referenced by tag, shared
+  like materials), an element-group type `DispBeamColumn` (section, transformation, points,
+  optional mass per length, consistent-mass flag). Asked again with the exact text at step 5.
+
+**Design.** Sections are a contract of their own (`Section` in `contracts.hpp`,
+`MaterialKind::Section3d`): deformations in, resultants and tangent out, named by compile-time
+OpenSees codes (`CODE`, getType order), plus the section geometry for the mass. The element
+`DispBeam3d<Section, NIP>`: 2 nodes x 6 DOFs; basic deformations v(6) from the transformation,
+section deformations at each point, basic forces q(6), global forces through the
+transformation (Linear or PDelta per parameter set). Stable step: the exact 12 x 12 element
+eigenvalue with the lumped mass, element mass plus its share of nodal mass (todo 22). Damping:
+alphaM; betaK in implicit stages, refused on beams in explicit stages; Uniform on the basic
+forces later. Kernels: one thread per element for the force; the operator through kb (6 x 6)
+and the transformation, tangent blocks per node pair (6 x 6). 6-DOF beam nodes tie to 3-DOF
+soil nodes through equalDOF until the exact embedded tie.
+
+**Verification:** analytical (cantilever tip deflection and rotation under force and moment,
+PDelta amplification, rigid-body motion with zero force, cantilever frequencies converging
+with the mesh); OpenSees element drivers (force, tangent, mass); bit-identity across kernel
+variants; a dynamic cantilever and a pile in a soil column against OpenSees; the LTS
+checkpoint (an undamped pile in soil, LTS against a global small step).
+
+**Steps (one commit each):** (1) the section contract and the elastic section; (2) the Linear
+and PDelta transformations with joint offsets; (3) the element physics (mass, stable step);
+(4) registry, batches and kernels; (5) schema 1.1, reader, fixtures, the Tcl converter, the
+support table; (6) system tests and the LTS checkpoint; (7) TACC benchmarks. Then rigid links
+and diaphragms, the force-based beam, fiber sections, damping on beams, and LTS steps 3c-6.
+Step 1 done (2026-11-19): `physics/sections/elastic_section_3d.hpp`, `test_elastic_section_3d`.
+
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
 **The problem.** An explicit stage steps every element at the smallest stable step of the
