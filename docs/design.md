@@ -1203,6 +1203,18 @@ and natural coordinates, conflicts; host tests. (2) Kernels: expand / contract i
 operator, its diagonal, the ground-motion term; tests against the assembled T^T K T. (3) Explicit:
 lumped and block masses, the stable step. (4) Schema 1.2 (asked with the exact text), reader,
 converter, the OpenSees comparisons. (5) LTS, benchmarks.
+Step 1, first part done (2026-11-20): `compile/linear_constraints.hpp` (host code): the resolver
+(every constrained DOF in unconstrained DOFs; chains substituted, a cycle or a DOF constrained
+twice refused with a message naming both constraints) and the generators: `rigidLink beam`
+(OpenSees RigidBeam), `rigidLink bar` (RigidRod), `rigidDiaphragm` (each normal direction), the
+embedded node in an 8-node brick (natural coordinates by Newton, the trilinear weights, the
+rotation tie as half the curl of the brick's gradient at the node). Tests
+(`test_linear_constraints`): the slaves move rigidly with any small rigid motion of the master;
+the embedded node reproduces any linear field exactly (the patch test of the tie), its weights
+sum to one, and with rot it takes a rigid rotation of the brick and no rotation under pure
+strain; the resolver's chain, cycle and double rules. Next: the wiring into the DOF numbering
+(constrained DOFs get no equations of their own; their rows mapped to equations, fixed DOFs
+dropping out) with the kernels' expand / contract (step 2).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
