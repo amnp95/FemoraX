@@ -157,14 +157,12 @@ and in design.md (3175786); step 1's first part, the resolver and the generators
 (a43ad59; check.sh: debug 271/271, release 274/274, UBSan 271/271; the commit message's counts
 are wrong); step 1 finished, the constraints in the DOF numbering (fe47386; compile_model refuses
 them until step 2); step 2's first part, embedded nodes in explicit stages (fa8d975: the embedded
-pile runs as the equalDOF pile within 5.2e-13). Next: the implicit operator for embedded nodes.
-Where to start: implicit_stage.cpp uses the force object's u (now num_slots long) in 16 places
-(deep_copy to and from num_equations vectors at lines ~268, 332, 334; VectorOps::axpy and
-newmark_update on u, which take sizes from the views): use the equation subview of u there; in
-InternalForce::apply_operator / operator_diagonal / mass_times_ground / store_tangents, copy the
-solver's x and u into num_slots work vectors, expand, run, contract (the diagonal with w^2), copy
-back; then remove require_no_constraints and test Newmark on the embedded pile against the
-equalDOF pile. After that: the block masses (rigid links, diaphragms), the rot rows' mass.
+pile runs as the equalDOF pile within 5.2e-13), and in implicit stages (7416837: Newmark within
+1.8e-15). Next: the block masses for rigid links and diaphragms (6 x 6 / 3 x 3 per master, exact,
+inverted once per stage; against OpenSees on a small frame with a diaphragm floor), the rot rows'
+mass, then schema 1.2 (ask the user with the exact text), the reader, the converter and Femora's
+export; embedded nodes with H5DRM and with velocity / acceleration recorders (VTKHDF) are still
+refused.
 
 **Embedded piles (2026-11-19):** literature review in docs/research/embedded_and_constraints/.
 The user's own element, `EmbeddedBeamContact3D` (OpenSees C++, with a theory document, tests
