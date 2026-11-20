@@ -141,6 +141,10 @@ class InternalForce {
   // committed (a swap: the update writes every trial value). Nothing to revert: the next
   // force evaluation starts from the committed state again.
   bool has_state() const;
+  // The tag of an element whose element iteration failed (the force-based beam) in the trial state
+  // (after a force evaluation) or in the committed state (after a commit), or -1. Only batches
+  // whose elements record it are read: models without force beams pay nothing.
+  std::int32_t failed_element(bool committed = false) const;
   void commit_state();
   // updateMaterialStage: sets the stage of model material `material` (index into
   // model.materials) in every parameter set that uses it. Returns false if none does.

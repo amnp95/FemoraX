@@ -206,8 +206,12 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
   if (is_static) Kokkos::deep_copy(v, 0.0);
   else Kokkos::deep_copy(v, s.v_committed);
 
+  // A force-based beam whose element iteration did not converge fails the attempt (OpenSees: update()
+  // returns -1 and the step fails), so recovery can retry or substep it.
+  std::int32_t failed_element = -1;
   auto form_unbalance = [&] {
     force.compute(s.fs);  // f_int(u) + Rayleigh damping forces at v (v = 0 in static stages)
+    failed_element = force.failed_element();
     motions.apply_drm(time, force.f);  // H5DRM forces (external loads) at the load time
     if (!is_static) force.apply_operator({0.0, 0.0, 1.0}, s.os, u, a, s.tmp);
     form_residual(s.b, force.f, s.tmp, !is_static, motions.accel(), motions.dof(), motions.num_active(), s.mr[0],
@@ -297,18 +301,31 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     if (linear) {
       update_tangent(h);
       form_unbalance();
-      ok = solve();
-      if (ok) update();
+      if (failed_element >= 0) {
+        ok = false;
+        failure = "the element iteration of element " + std::to_string(failed_element) +
+                  " (force-based beam) did not converge";
+      } else {
+        ok = solve();
+        if (ok) update();
+        if (!ok) failure = solve_failure;
+      }
       iterations = 1;
-      if (!ok) failure = solve_failure;
     } else {
       form_unbalance();
+      auto element_failed = [&] {
+        if (failed_element < 0) return false;
+        failure = "the element iteration of element " + std::to_string(failed_element) +
+                  " (force-based beam) did not converge";
+        ok = false;
+        return true;
+      };
       // ModifiedNewton: the tangent once per attempt, after the first unbalance; -factoronce:
       // once while it stays valid.
       if (modified && !(factor_once && kept_tangent && h == tangent_h)) update_tangent(h);
       kept_tangent = factor_once;
       int iter = 1;
-      while (true) {
+      while (!element_failed()) {
         if (!modified) update_tangent(h);
         if (!solve()) {
           ok = false;
@@ -317,6 +334,7 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
         }
         update();
         form_unbalance();
+        if (element_failed()) break;
         const double value = test_value();
         iterations = iter;
         if (trace_iterations) std::printf("femorax-trace: %s step %lld iteration %d %.17g\n", an.name.c_str(),

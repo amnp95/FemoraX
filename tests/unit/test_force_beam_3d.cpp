@@ -40,7 +40,8 @@ struct Fixture {
   femorax::PointArray<double> trial() { return {st.data(), 1, Beam::POINT_STATE}; }
   // K (12 x 12) and f at the nodal displacements u.
   bool eval(const double* u, double* f, double (*K)[12]) {
-    return Beam::template compute<true>(p, xe, u, committed(), trial(), f, K);
+    Beam::template compute<true>(p, xe, u, committed(), trial(), f, K);
+    return Beam::converged(femorax::PointArray<const double>{st.data(), 1, Beam::POINT_STATE});
   }
 };
 
@@ -143,9 +144,9 @@ void compare_row(const femorax::test::ReferenceFile& ref, const std::vector<doub
   std::vector<double> sc(Beam::NSTATE, 0.0), st(Beam::NSTATE, 0.0), st0(Beam::NSTATE, 0.0);
   const femorax::PointArray<const double> c{sc.data(), 1, Beam::POINT_STATE};
   double f[12], K[12][12], f0[12], K0[12][12];
-  ASSERT_TRUE((Beam::template compute<true>(p, xe, ug, c, {st.data(), 1, Beam::POINT_STATE}, f, K)));
+  Beam::template compute<true>(p, xe, ug, c, {st.data(), 1, Beam::POINT_STATE}, f, K);
   const double zero[12] = {};
-  ASSERT_TRUE((Beam::template compute<true>(p, xe, zero, c, {st0.data(), 1, Beam::POINT_STATE}, f0, K0)));
+  Beam::template compute<true>(p, xe, zero, c, {st0.data(), 1, Beam::POINT_STATE}, f0, K0);
   worst[0] = std::max(worst[0], rel_diff(f, os_f, 12));
   worst[1] = std::max(worst[1], rel_diff(&K[0][0], os_K, 144));
   worst[2] = std::max(worst[2], rel_diff(&K0[0][0], os_K0, 144));
@@ -216,8 +217,8 @@ TEST(ForceBeam3d, MassStiffnessAndStableStepEqualTheElasticDisplacementBeam) {
     skew_params<DB>(pd, type);
     std::vector<double> sc(FB::NSTATE, 0.0), st(FB::NSTATE, 0.0);
     double u0[12] = {}, ff[12], Kf[12][12], fd[12], Kd[12][12];
-    ASSERT_TRUE((FB::compute<true>(pf, xe, u0, {sc.data(), 1, FB::POINT_STATE}, {st.data(), 1, FB::POINT_STATE}, ff,
-                                   Kf)));
+    FB::compute<true>(pf, xe, u0, {sc.data(), 1, FB::POINT_STATE}, {st.data(), 1, FB::POINT_STATE}, ff,
+                                   Kf);
     DB::compute<true>(pd, xe, u0, {nullptr, 1, 0}, {nullptr, 1, 0}, fd, Kd);
     double kmax = 0.0, kd = 0.0;
     for (int a = 0; a < 12; ++a)
@@ -254,9 +255,9 @@ TEST(ForceBeam3d, DampingAndOperatorEqualTheirMatrices) {
       return femorax::PointArray<const double>{v.data(), 1, FB::POINT_STATE};
     };
     double f[12], Kc[12][12], Kt[12][12], K0[12][12], zero[12] = {};
-    ASSERT_TRUE((FB::compute<true>(p, xe, u1, pc(s0), pa(sc), f, Kc)));      // commit at u1
-    ASSERT_TRUE((FB::compute<true>(p, xe, u2, pc(sc), pa(st), f, Kt)));      // trial at u2
-    ASSERT_TRUE((FB::compute<true>(p, xe, zero, pc(s0), pa(sx), f, K0)));    // initial
+    FB::compute<true>(p, xe, u1, pc(s0), pa(sc), f, Kc);      // commit at u1
+    FB::compute<true>(p, xe, u2, pc(sc), pa(st), f, Kt);      // trial at u2
+    FB::compute<true>(p, xe, zero, pc(s0), pa(sx), f, K0);    // initial
     // Kc without PDelta's geometric term (the damping's committed stiffness, as the
     // displacement beam: docs/deviations.md): the committed state's kv through T alone.
     double Kc_lin[12][12];
@@ -279,8 +280,8 @@ TEST(ForceBeam3d, DampingAndOperatorEqualTheirMatrices) {
       d.betaKcomm = fc[3];
       double fdmp[12], fund[12];
       std::vector<double> t1(FB::NSTATE, 0.0), t2(FB::NSTATE, 0.0);
-      ASSERT_TRUE((FB::compute<false>(p, d, xe, u2, ve, pc(sc), pa(t1), fdmp, nullptr)));
-      ASSERT_TRUE((FB::compute<false>(p, femorax::Rayleigh{}, xe, u2, ve, pc(sc), pa(t2), fund, nullptr)));
+      FB::compute<false>(p, d, xe, u2, ve, pc(sc), pa(t1), fdmp, nullptr);
+      FB::compute<false>(p, femorax::Rayleigh{}, xe, u2, ve, pc(sc), pa(t2), fund, nullptr);
       for (int a = 0; a < 12; ++a) {
         double want = 0.0;
         for (int b = 0; b < 12; ++b)

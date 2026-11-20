@@ -21,6 +21,7 @@ const char* to_string(ElementType t) {
     case ElementType::StdBrick: return "stdBrick";
     case ElementType::SSPbrick: return "SSPbrick";
     case ElementType::DispBeamColumn: return "dispBeamColumn";
+    case ElementType::ForceBeamColumn: return "forceBeamColumn";
   }
   return "?";
 }
@@ -43,7 +44,8 @@ int node_count(ElementType t) {
   switch (t) {
     case ElementType::StdBrick:
     case ElementType::SSPbrick: return 8;
-    case ElementType::DispBeamColumn: return 2;
+    case ElementType::DispBeamColumn:
+    case ElementType::ForceBeamColumn: return 2;
   }
   return 0;
 }
@@ -1112,7 +1114,7 @@ void validate(Model& m) {
   std::unordered_set<std::int32_t> element_tags;
   for (const auto& g : m.elements) {
     const std::string where = "/elements/" + g.id;
-    const bool beam = g.type == ElementType::DispBeamColumn;
+    const bool beam = is_beam(g.type);
     if (!(beam ? sections : materials).count(g.material)) {
       invalid(where + (beam ? ": section " : ": material ") + std::to_string(g.material) + " does not exist");
     }

@@ -1219,8 +1219,27 @@ comparisons and kernel tests unchanged), with the force beam's own basic stiffne
 committed stiffness without PDelta's geometric term, as the displacement beam). Tests: an elastic
 prismatic member has the displacement beam's mass bit for bit, its stiffness within 8.2e-16 and the
 same largest omega^2 (both elements are exact there); the damping force (each factor alone) within
-4.9e-16 and the operator and its diagonal within 1.0e-15 of their matrices, Linear and PDelta. Next:
-step 3 (registry, kernels, the failed iteration failing the step).
+4.9e-16 and the operator and its diagonal within 1.0e-15 of their matrices, Linear and PDelta.
+Step 3, first part done (2026-11-20): the force beam through the kernels. In memory (the schema is
+step 4): `io::ElementType::ForceBeamColumn` (`io::is_beam` for every beam check), the group's
+`max_iterations` and `tolerance`; `ForceBeam3dEntry<3..7>` (the shared beam data from the
+displacement beam's adapter); `check_supported` refuses other point counts and Corotational; Rayleigh
+stiffness damping refused on force beams in explicit stages as on every beam. The contract keeps
+`compute` returning nothing: a failed element iteration is recorded in the trial state (the state flag
+-1, `ForceBeam3d::converged`), for the failure check (next part). Test
+(`BeamKernels.ForceBeamCantileverRunsAsTheDisplacementBeam`): the elastic cantilever of six force
+beams runs as the cantilever of displacement beams under base shaking with alphaM damping:
+CentralDifference within 5.0e-13 of the peak, Newmark with Newton within 2.1e-14, Linear and PDelta.
+Step 3 done (2026-11-20): the failure check. Batches whose elements record convergence
+(`Elem::converged`) answer `first_failed` (a min-reduction over their trial or committed flags);
+`InternalForce::failed_element` names the element; only those batches are read, so models without
+force beams pay nothing. Implicit stages: after every force evaluation of an attempt (Newton,
+ModifiedNewton, Linear), a failed element fails the attempt with a message naming it, so Femora's
+retry and substeps take over. Explicit stages: checked on the committed state with the NaN check
+(`nan_check_interval`) and at the end of the stage; the run stops naming the element and the step.
+Test (`BeamKernels.ForceBeamFailedIterationFailsTheStep`, an impossible tolerance): the element
+reports it, CentralDifference stops at the first check, Newmark fails its first step, both naming the
+element. Next: step 4 (schema 1.3, asked with the exact text), reader, converter.
 
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);

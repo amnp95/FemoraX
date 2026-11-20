@@ -81,7 +81,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   for (std::size_t i = 0; i < m.materials.size(); ++i)
     material_by_key[key(io::is_section(m.materials[i]), m.materials[i].tag)] = i;
   auto material_of = [&](const io::ElementGroup& g) {
-    return material_by_key.at(key(g.type == io::ElementType::DispBeamColumn, g.material));
+    return material_by_key.at(key(io::is_beam(g.type), g.material));
   };
 
   // Damping region of every element tag: the last region in file order wins (OpenSees).

@@ -90,7 +90,9 @@ const char* material_type_name(const NDMaterial& m);
 bool has_material_stage(const NDMaterial& m);
 
 // ---------------------------------------------------------------------------
-enum class ElementType { StdBrick, SSPbrick, DispBeamColumn };
+enum class ElementType { StdBrick, SSPbrick, DispBeamColumn, ForceBeamColumn };
+// The beam-column elements (two 6-DOF nodes, a section and a transformation).
+inline bool is_beam(ElementType t) { return t == ElementType::DispBeamColumn || t == ElementType::ForceBeamColumn; }
 
 const char* to_string(ElementType t);
 int node_count(ElementType t);
@@ -114,6 +116,8 @@ struct ElementGroup {
     double density = 0.0;
     double mass_per_length = -1.0;
     bool consistent_mass = false;
+    int max_iterations = 10;  // forceBeamColumn: -iter maxIters tol (Femora's defaults)
+    double tolerance = 1.0e-12;
   } beam;
   std::vector<std::int32_t> tags;       // [M]
   std::vector<std::int32_t> connectivity;  // [M * node_count(type)], node tags

@@ -470,6 +470,15 @@ void InternalForce::element_output(int selection, int which, const Vec& out, std
     batches_[bi]->element_output(which, s.elems[bi], s.rows[bi], out, offset, coords_, nnodes_, u);
 }
 
+std::int32_t InternalForce::failed_element(bool committed) const {
+  for (std::size_t i = 0; i < batches_.size(); ++i) {
+    if (!batches_[i]->checks_convergence()) continue;
+    const Index e = batches_[i]->first_failed(committed);
+    if (e >= 0) return batch_tags_[i][static_cast<std::size_t>(e)];
+  }
+  return -1;
+}
+
 bool InternalForce::has_state() const {
   for (const auto& b : batches_)
     if (b->has_state()) return true;

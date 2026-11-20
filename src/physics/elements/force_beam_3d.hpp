@@ -14,7 +14,8 @@
 // Point state (POINT_STATE doubles per point, physics/contracts.hpp point_state_size):
 //   [0, ORDER) vs, [ORDER, ORDER + ORDER^2) fs (row major), then ORDER Ssr, the section's own
 //   Sec::NSTATE values, and EPP slots of the element values spread over the points:
-//   Se (6), kv (36), v (6), and a flag (1 once the state was formed; zeros are a fresh state).
+//   Se (6), kv (36), v (6), and a flag (0: a fresh state; 1: formed; -1: the element iteration
+//   did not converge, read by converged() so the step fails).
 //
 // Step 2: the mass, the Rayleigh damping, the matrix-free operator and the stable step, shared
 // with the displacement beam (beam_common_3d.hpp) with this element's basic stiffnesses: the
@@ -118,6 +119,7 @@ FEMORAX_HD inline bool invert(const double (&A)[N][N], double (&Ainv)[N][N]) {
 }  // namespace force_beam_detail
 
 template <class Sec, int NIP_>
+  requires Section<Sec>
 struct ForceBeam3d {
   using Material = Sec;
   static constexpr int NDM = 3, NNODE = 2, NEXTRA = 0, NGP = NIP_, NDOF = 12, NEBD = 6;
@@ -130,7 +132,11 @@ struct ForceBeam3d {
   static constexpr int POINT_STATE = OFF_EV + EPP;
   static constexpr int NSTATE = NGP * POINT_STATE;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::Section3d;
-  static constexpr bool GEOMETRY_CACHEABLE = false;
+  static constexpr bool GEOMETRY_CACHEABLE = false;  // two nodes and a transformation, recomputed
+  static constexpr MassType MASS = MassType::Selectable;  // lumped, or consistent with cMass
+  static constexpr bool EXPLICIT = true;
+  static constexpr TangentSymmetry TANGENT = Sec::TANGENT;  // kv = f^-1 is symmetric for symmetric fs
+  static constexpr bool NODAL_MASS_IN_STEP = true;  // as the displacement beam (Femora's density-0 beams)
   static constexpr double DefaultLoverGJ = 1.0e-10;  // OpenSees, for sections without torsion
 
   struct Params {
@@ -355,13 +361,16 @@ struct ForceBeam3d {
     }
   }
 
-  FEMORAX_HD static void store_state(const State& s, PointArray<double> t) {
+  // Whether the trial state's element iteration converged (the step fails otherwise).
+  FEMORAX_HD static bool converged(PointArray<const double> t) { return ev(t, NEV - 1) >= 0.0; }
+
+  FEMORAX_HD static void store_state(const State& s, PointArray<double> t, bool ok = true) {
     for (int a = 0; a < NEBD; ++a) {
       ev(t, a) = s.Se[a];
       ev(t, 42 + a) = s.v[a];
       for (int b = 0; b < NEBD; ++b) ev(t, 6 + 6 * a + b) = s.kv[a][b];
     }
-    ev(t, NEV - 1) = 1.0;
+    ev(t, NEV - 1) = ok ? 1.0 : -1.0;
     for (int i = 0; i < NGP; ++i) {
       const auto pt = t.point(i);
       for (int a = 0; a < ORDER; ++a) {
@@ -462,23 +471,23 @@ struct ForceBeam3d {
     for (int a = 0; a < NEBD; ++a)
       for (int b = 0; b < NEBD; ++b) kvc[a][b] = s.kv[a][b];
     const bool ok = update(p, g.L, v, committed, trial, s);
-    store_state(s, trial);
+    store_state(s, trial, ok);
     return ok;
   }
 
   // getResistingForce (q = Se) plus the Rayleigh damping forces (alphaM M + betaK Kt + betaK0 K0
   // + betaKc Kc) ve in the basic system, and with WantK getTangentStiff (kb = kv), the state
-  // updated from committed into trial. Returns false when the element iteration did not converge
-  // (the step fails).
+  // updated from committed into trial. An element iteration that did not converge is recorded
+  // in the trial state (converged()), so the step fails.
   template <bool WantK>
-  FEMORAX_HD static bool compute(const Params& p, const Rayleigh& damp, const double (*xe)[NDM], const double* ue,
+  FEMORAX_HD static void compute(const Params& p, const Rayleigh& damp, const double (*xe)[NDM], const double* ue,
                                  const double* ve, PointArray<const double> committed, PointArray<double> trial,
                                  double* fe, double (*Ke)[NDOF]) {
     CrdTransf3dGeometry g;
     geometry(p, xe, g);
     State s;
     double kvc[NEBD][NEBD];
-    const bool ok = trial_state(p, g, ue, committed, trial, s, kvc);
+    trial_state(p, g, ue, committed, trial, s, kvc);
     const double p0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
     crd_transf_3d_global_force(p.transf, g, ue, s.Se, p0, fe);
     if (damp.alphaM != 0.0 || damp.betaK != 0.0 || damp.betaKinit != 0.0 || damp.betaKcomm != 0.0) {
@@ -487,16 +496,15 @@ struct ForceBeam3d {
       beam3d::add_damping_force(p, damp, g, ve, s.Se, s.kv, kv0, kvc, fe);
     }
     if constexpr (WantK) crd_transf_3d_global_stiff(p.transf, g, s.kv, s.Se, true, Ke);
-    return ok;
   }
 
   // The undamped force and tangent (no velocities).
   template <bool WantK>
-  FEMORAX_HD static bool compute(const Params& p, const double (*xe)[NDM], const double* ue,
+  FEMORAX_HD static void compute(const Params& p, const double (*xe)[NDM], const double* ue,
                                  PointArray<const double> committed, PointArray<double> trial, double* fe,
                                  double (*Ke)[NDOF]) {
     const double ve[12] = {};
-    return compute<WantK>(p, Rayleigh{}, xe, ue, ve, committed, trial, fe, Ke);
+    compute<WantK>(p, Rayleigh{}, xe, ue, ve, committed, trial, fe, Ke);
   }
 
   // The matrix-free operator (beam_common_3d.hpp): K_t = the trial kv at ue (the state updated

@@ -339,12 +339,12 @@ void ed_lts_finish(const Vec& z, const Vec& un, const Vec& u, const Vec& vh, con
 void check_beams(const io::Model& model, const compile::Compiled& c, const io::AnalysisStep& an) {
   if (!io::is_explicit(an.integrator)) return;
   for (const auto& b : c.batches) {
-    if (b.element != io::ElementType::DispBeamColumn) continue;
+    if (!io::is_beam(b.element)) continue;
     for (const auto& ps : b.params) {
       const auto& g = model.elements[static_cast<std::size_t>(ps.group)];
       if (ps.damping.betaK != 0.0 || ps.damping.betaKinit != 0.0 || ps.damping.betaKcomm != 0.0)
         throw io::ModelError("stage \"" + an.name + "\": element group \"" + g.id +
-                             "\" (dispBeamColumn) has Rayleigh stiffness damping, which FemoraX refuses on beams in "
+                             "\" (" + io::to_string(g.type) + ") has Rayleigh stiffness damping, which FemoraX refuses on beams in "
                              "explicit stages (it cuts the stable step and gives spurious damping forces in yielding "
                              "frames); use mass-proportional damping (docs/design.md, \"Structures\")");
     }
@@ -748,6 +748,15 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
             warned = true;
           }
         }
+        // A force-based beam whose element iteration failed stops the run (an explicit stage
+        // cannot retry), checked with the NaN check on the just-committed state.
+        if (opt.nan_check_interval > 0 && k % opt.nan_check_interval == 0) {
+          const std::int32_t bad = force.failed_element(true);
+          if (bad >= 0)
+            throw io::ModelError("stage \"" + an->name + "\": the element iteration of element " +
+                                 std::to_string(bad) + " (force-based beam) did not converge at or before step " +
+                                 std::to_string(k) + " (time " + std::to_string(time) + ")");
+        }
         if (opt.nan_check_interval > 0 && k % opt.nan_check_interval == 0 && !all_finite(u)) {
           throw io::ModelError("stage \"" + an->name + "\": displacements are not finite at step " +
                                std::to_string(k) + " (t = " + std::to_string(time) +
@@ -755,6 +764,9 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         }
       }
       Kokkos::fence();
+      if (const std::int32_t bad = force.failed_element(true); bad >= 0)
+        throw io::ModelError("stage \"" + an->name + "\": the element iteration of element " + std::to_string(bad) +
+                             " (force-based beam) did not converge during the stage");
       if (!all_finite(u))
         throw io::ModelError("stage \"" + an->name + "\": displacements are not finite at the end of the stage");
       st.steps = k;

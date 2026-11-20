@@ -10,7 +10,8 @@ namespace femorax::io {
 // checks a valid model against the build, so the schema can describe more than one
 // milestone (schema v0 covers 1a and 1b).
 struct Capabilities {
-  std::vector<ElementType> elements = {ElementType::StdBrick, ElementType::SSPbrick, ElementType::DispBeamColumn};
+  std::vector<ElementType> elements = {ElementType::StdBrick, ElementType::SSPbrick, ElementType::DispBeamColumn,
+                                       ElementType::ForceBeamColumn};
   bool implicit = true;  // Newmark, LoadControl, Newton, ModifiedNewton, load_const (1b)
   // Milestone 2 (schema 0.4), switched on as each part is ported and verified:
   bool pressure_depend_multi_yield = true;

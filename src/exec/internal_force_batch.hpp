@@ -21,6 +21,7 @@
 #include "exec/operator_kernels.hpp"
 #include "exec/runtime.hpp"
 
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -75,6 +76,11 @@ struct InternalForce::Batch {
   virtual bool constant_tangent() const = 0;
   // Material history state (none for materials without it).
   virtual bool has_state() const = 0;
+  // Elements whose state records a failed element iteration (the force-based beam:
+  // Elem::converged): whether this batch has them, and the index of its first failed element in
+  // the trial (committed = false) or the committed state buffer, or -1.
+  virtual bool checks_convergence() const = 0;
+  virtual Index first_failed(bool committed) const = 0;
   virtual void commit_state() = 0;
   virtual void set_step(const StepContext& s) = 0;
   virtual void set_nodal_share(const Vec& share) = 0;  // the equations' nodal-mass shares
@@ -365,6 +371,25 @@ struct TypedBatch final : InternalForce::Batch {
   }
   TangentSymmetry tangent_symmetry() const override { return Elem::TANGENT; }
   bool has_state() const override { return point_state_size<Elem>() > 0; }
+  static constexpr bool kChecks = requires(PointArray<const double> t) { Elem::converged(t); };
+  bool checks_convergence() const override { return kChecks; }
+  Index first_failed(bool committed) const override {
+    if constexpr (kChecks) {
+      const auto s = committed ? b.state[b.current] : b.state[1 - b.current];
+      const Index P = b.padded, none = std::numeric_limits<Index>::max();
+      Index first = none;
+      Kokkos::parallel_reduce(
+          "element_convergence", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count),
+          KOKKOS_LAMBDA(const Index e, Index& m) {
+            if (!Elem::converged(kernels::state_of<Elem>(s, e, P)) && e < m) m = e;
+          },
+          Kokkos::Min<Index>(first));
+      return first == none ? -1 : first;
+    } else {
+      (void)committed;
+      return -1;
+    }
+  }
   void element_output(int which, const Kokkos::View<Index*, Space>& elems, const Kokkos::View<Index*, Space>& rows,
                       const Vec& out, std::int64_t offset, const Vec& coords, Index N, const Vec& u) override {
     if constexpr (PointwiseElement<Elem>) {

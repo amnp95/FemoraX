@@ -21,6 +21,7 @@
 #include "physics/contracts.hpp"
 #include "physics/damping/uniform_damped.hpp"
 #include "physics/elements/disp_beam_3d.hpp"
+#include "physics/elements/force_beam_3d.hpp"
 #include "physics/elements/ssp_brick.hpp"
 #include "physics/elements/std_brick.hpp"
 #include "physics/materials/elastic_isotropic.hpp"
@@ -233,6 +234,35 @@ struct DispBeam3dEntry {
   }
 };
 
+// The force-based beam (docs/design.md, "Beams: the force-based beam"): Lobatto 3 to 7 points,
+// the element iteration's maxIters and tol from the group; the mass as the displacement beam's.
+template <int NIP>
+struct ForceBeam3dEntry {
+  template <class Sec>
+  using Element = ForceBeam3d<Sec, NIP>;
+  static constexpr io::ElementType type = io::ElementType::ForceBeamColumn;
+  static constexpr MaterialKind kind = MaterialKind::Section3d;
+  static constexpr const char* name = NIP == 3   ? "forceBeamColumn3"
+                                      : NIP == 4 ? "forceBeamColumn4"
+                                      : NIP == 5 ? "forceBeamColumn5"
+                                      : NIP == 6 ? "forceBeamColumn6"
+                                                 : "forceBeamColumn7";
+  static bool accepts(const io::ElementGroup& g) { return g.beam.points == NIP; }
+  template <class Sec>
+  static typename Element<Sec>::Params params(const io::ElementGroup& g, const typename Sec::Params& sp) {
+    typename Element<Sec>::Params p{};
+    const auto d = DispBeam3dEntry<2>::template params<Sec>(g, sp);  // the shared beam data
+    p.mat = d.mat;
+    p.transf = d.transf;
+    p.rhoA = d.rhoA;
+    for (int i = 0; i < 3; ++i) p.rot[i] = d.rot[i];
+    p.cMass = d.cMass;
+    p.maxIters = g.beam.max_iterations;
+    p.tol = g.beam.tolerance;
+    return p;
+  }
+};
+
 // The registered entries: one line each.
 // Uniform damping (docs/design.md): the material of an element in a Uniform damping region is
 // wrapped, UniformDamped<Base, NF>, in the smallest filter bucket NF that holds the region's
@@ -283,7 +313,8 @@ bool PressureIndependMultiYieldEntry<NS>::matches(const io::NDMaterial& m) {
   else return n > 20 && n <= NS;
 }
 using Elements = TypeList<StdBrickEntry, SSPbrickEntry, DispBeam3dEntry<2>, DispBeam3dEntry<3>, DispBeam3dEntry<4>,
-                          DispBeam3dEntry<5>>;
+                          DispBeam3dEntry<5>, ForceBeam3dEntry<3>, ForceBeam3dEntry<4>, ForceBeam3dEntry<5>,
+                          ForceBeam3dEntry<6>, ForceBeam3dEntry<7>>;
 
 // --- Dispatch ------------------------------------------------------------------------------
 // Pair index: element entry index * number of materials + material entry index.

@@ -1145,4 +1145,156 @@ TEST(BeamKernels, LocalTimeSteppingWithAnEmbeddedPile) {
   }
 }
 
+// The force-based beam through the kernels (docs/design.md, "Beams: the force-based beam", step 3):
+// the elastic cantilever of six forceBeamColumn elements (5 Lobatto points) runs as the same
+// cantilever of dispBeamColumn elements (the two have the same stiffness and mass for an elastic
+// prismatic member): CentralDifference and Newmark under base shaking with Rayleigh damping.
+TEST(BeamKernels, ForceBeamCantileverRunsAsTheDisplacementBeam) {
+  for (const int transf : {0, 1}) {
+    for (const bool implicit : {false, true}) {
+      SCOPED_TRACE(std::string(transf ? "PDelta" : "Linear") + (implicit ? " Newmark" : " CentralDifference"));
+      auto run_it = [&](femorax::io::ElementType type, const std::string& file) {
+        Model m = cantilever(transf);
+        for (auto& g : m.elements) {
+          g.type = type;
+          g.beam.points = type == femorax::io::ElementType::ForceBeamColumn ? 5 : 3;
+        }
+        femorax::io::RayleighRegion rr;
+        rr.alphaM = 0.4;
+        for (const auto& g : m.elements) rr.elements.insert(rr.elements.end(), g.tags.begin(), g.tags.end());
+        m.rayleigh.push_back(rr);
+        double dt;
+        {
+          const auto c = femorax::compile::compile_model(m, femorax::compile::CompileOptions{});
+          femorax::exec::InternalForce f(c, femorax::exec::GeometryCache::Auto);
+          dt = 0.5 * f.min_critical_dt(femorax::ExplicitScheme::CentralDifference);
+        }
+        if (implicit) dt *= 4.0;
+        const int n = 300;
+        femorax::io::PathSeries ps;
+        ps.tag = 1;
+        ps.dt = dt;
+        for (int k = 0; k <= n + 2; ++k) {
+          const double t = k * dt;
+          ps.values.push_back(t < 60 * dt ? std::pow(std::sin(M_PI * t / (60 * dt)), 2) : 0.0);
+        }
+        m.time_series.push_back(ps);
+        m.patterns.push_back({2, 1, 1, 0.0, 1.0, {}});
+        femorax::io::NodeRecorder nr;
+        nr.file = temp_file(file);
+        nr.response = femorax::io::NodeResponse::Disp;
+        nr.time = true;
+        nr.precision = 17;
+        for (int k = 2; k <= kElems + 1; ++k) nr.nodes.push_back(k);
+        nr.dofs = {1, 2, 5};
+        m.recorders.push_back({"d", nr, {}});
+        m.process.push_back({"0", "", femorax::io::RecorderStep{"d"}});
+        m.process.push_back({"1", "", femorax::io::PatternStep{2}});
+        femorax::io::AnalysisStep a;
+        a.name = "shake";
+        a.dt = dt;
+        a.num_steps = n;
+        a.integrator = femorax::io::Integrator::CentralDifference;
+        if (implicit) {
+          a.type = femorax::io::AnalysisType::Transient;
+          a.integrator = femorax::io::Integrator::Newmark;
+          a.gamma = 0.5;
+          a.beta = 0.25;
+          a.algorithm = femorax::io::Algorithm::Newton;
+          a.numberer = "Plain";
+          a.system = "BandGeneral";
+          a.test_type = femorax::io::TestType::NormDispIncr;
+          a.test_tol = 1e-14;
+          a.test_max_iter = 10;
+        }
+        m.process.push_back({"2", "", a});
+        femorax::exec::RunOptions o;
+        o.verbose = false;
+        femorax::exec::run_model(m, o);
+        return read_rows(nr.file);
+      };
+      const auto d = run_it(femorax::io::ElementType::DispBeamColumn, "cant_disp.txt");
+      const auto f = run_it(femorax::io::ElementType::ForceBeamColumn, "cant_force.txt");
+      ASSERT_EQ(d.size(), f.size());
+      double peak = 0.0, err = 0.0;
+      for (std::size_t k = 0; k < d.size(); ++k)
+        for (std::size_t col = 1; col < d[k].size(); ++col) {
+          peak = std::max(peak, std::abs(d[k][col]));
+          err = std::max(err, std::abs(d[k][col] - f[k][col]));
+        }
+      std::printf("[ force-beam cantilever (%s, %s) against the displacement beam: %.2e of the peak %.3e ]\n",
+                  transf ? "PDelta" : "Linear", implicit ? "Newmark" : "CentralDifference", err / peak, peak);
+      EXPECT_GT(peak, 0.0);
+      EXPECT_LE(err, 1e-10 * peak);
+    }
+  }
+}
+
+// A force-based beam whose element iteration does not converge fails the step (decided with the
+// user; OpenSees' update() returns -1): an impossible tolerance makes every iteration fail. The
+// explicit stage stops naming the element; the implicit attempt fails with the same message (the
+// step then fails: no retries here).
+TEST(BeamKernels, ForceBeamFailedIterationFailsTheStep) {
+  using FB = femorax::ForceBeam3d<femorax::ElasticSection3d, 5>;
+  {
+    FB::Params p{};
+    p.mat = {E, A, Iz, Iy, G, J};
+    p.transf.vecxz[0] = 1.0;
+    p.tol = -1.0;
+    const double xe[2][3] = {{0, 0, 0}, {0, 0, 3}};
+    double u[12] = {}, f[12];
+    u[6] = 1e-3;
+    std::vector<double> sc(FB::NSTATE, 0.0), st(FB::NSTATE, 0.0);
+    FB::compute<false>(p, xe, u, {sc.data(), 1, FB::POINT_STATE}, {st.data(), 1, FB::POINT_STATE}, f, nullptr);
+    EXPECT_FALSE(FB::converged({st.data(), 1, FB::POINT_STATE}));
+    p.tol = 1e-12;
+    FB::compute<false>(p, xe, u, {sc.data(), 1, FB::POINT_STATE}, {st.data(), 1, FB::POINT_STATE}, f, nullptr);
+    EXPECT_TRUE(FB::converged({st.data(), 1, FB::POINT_STATE}));
+  }
+  for (const bool implicit : {false, true}) {
+    Model m = cantilever(0);
+    for (auto& g : m.elements) {
+      g.type = femorax::io::ElementType::ForceBeamColumn;
+      g.beam.points = 5;
+      g.beam.tolerance = -1.0;
+    }
+    femorax::io::PathSeries ps;
+    ps.tag = 1;
+    ps.dt = 1e-4;
+    for (int k = 0; k <= 30; ++k) ps.values.push_back(1.0);
+    m.time_series.push_back(ps);
+    m.patterns.push_back({2, 1, 1, 0.0, 1.0, {}});
+    m.process.push_back({"1", "", femorax::io::PatternStep{2}});
+    femorax::io::AnalysisStep a;
+    a.name = "shake";
+    a.dt = 1e-5;
+    a.num_steps = 20;
+    a.integrator = femorax::io::Integrator::CentralDifference;
+    if (implicit) {
+      a.type = femorax::io::AnalysisType::Transient;
+      a.integrator = femorax::io::Integrator::Newmark;
+      a.gamma = 0.5;
+      a.beta = 0.25;
+      a.algorithm = femorax::io::Algorithm::Newton;
+      a.numberer = "Plain";
+      a.system = "BandGeneral";
+      a.test_type = femorax::io::TestType::NormDispIncr;
+      a.test_tol = 1e-12;
+      a.test_max_iter = 10;
+    }
+    m.process.push_back({"2", "", a});
+    femorax::exec::RunOptions o;
+    o.verbose = false;
+    o.nan_check_interval = 5;
+    try {
+      femorax::exec::run_model(m, o);
+      ADD_FAILURE() << "expected the run to stop (" << (implicit ? "Newmark" : "CentralDifference") << ")";
+    } catch (const femorax::io::ModelError& e) {
+      const std::string w = e.what();
+      std::printf("[ %s: %s ]\n", implicit ? "Newmark" : "CentralDifference", w.c_str());
+      EXPECT_NE(w.find("element iteration of element"), std::string::npos) << w;
+    }
+  }
+}
+
 }  // namespace
