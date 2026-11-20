@@ -1178,6 +1178,18 @@ State per element: committed `Se` (6), `kv` (36), the basic displacement `v` (6)
 section deformations `vs`, flexibility `fs` and resisting forces `Ssr` (ORDER, ORDER^2, ORDER), and the
 section's own state.
 
+**First, a generic contract extension: element state.** Today history state exists only per
+integration point, `Mat::NSTATE` per point (`element_kernels.hpp`: two buffers of
+`Mat::NSTATE * NGP * padded`, `PointArray` views). The force beam needs state of the element
+itself. The extension (written once, like the element constants): an optional trait `NESTATE`
+(doubles per element, 0 by default), two buffers per batch in the per-element layout
+`value[k * nElements + e]` (a `Strided` view per element), commit swaps them with the point state,
+`revertToLastCommit` copies them, the memory estimate counts them; `compute` (and the operator, the
+stable step, the element output) receive the committed and trial element state next to the point
+state. Every existing element has `NESTATE = 0`: the same code, state and bits (tested). The force
+beam keeps its per-point part (`vs`, `fs`, `Ssr`, the section state) as point state, and `Se`, `kv`, `v`
+as element state.
+
 **Design.** Element state: the committed basic forces `Se` (6), the element stiffness `kv` (6 x 6,
 the inverse of the integrated flexibility) and each point's section deformations and section
 state; the element iteration (Neuenhofer-Filippou: from the basic deformation increment, the
