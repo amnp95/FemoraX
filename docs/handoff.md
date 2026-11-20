@@ -156,9 +156,15 @@ diaphragms, the embedded node in any supported solid host with its own shape fun
 and in design.md (3175786); step 1's first part, the resolver and the generators, committed
 (a43ad59; check.sh: debug 271/271, release 274/274, UBSan 271/271; the commit message's counts
 are wrong); step 1 finished, the constraints in the DOF numbering (fe47386; compile_model refuses
-them until step 2). Next: step 2 (design.md has two findings on the masses to settle first:
-rigid links need their block mass, the rot rows' weights sum to zero), then the pile in soil
-with embedded nodes.
+them until step 2); step 2's first part, embedded nodes in explicit stages (fa8d975: the embedded
+pile runs as the equalDOF pile within 5.2e-13). Next: the implicit operator for embedded nodes.
+Where to start: implicit_stage.cpp uses the force object's u (now num_slots long) in 16 places
+(deep_copy to and from num_equations vectors at lines ~268, 332, 334; VectorOps::axpy and
+newmark_update on u, which take sizes from the views): use the equation subview of u there; in
+InternalForce::apply_operator / operator_diagonal / mass_times_ground / store_tangents, copy the
+solver's x and u into num_slots work vectors, expand, run, contract (the diagonal with w^2), copy
+back; then remove require_no_constraints and test Newmark on the embedded pile against the
+equalDOF pile. After that: the block masses (rigid links, diaphragms), the rot rows' mass.
 
 **Embedded piles (2026-11-19):** literature review in docs/research/embedded_and_constraints/.
 The user's own element, `EmbeddedBeamContact3D` (OpenSees C++, with a theory document, tests
