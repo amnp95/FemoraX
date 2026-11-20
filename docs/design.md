@@ -1322,6 +1322,17 @@ exact tie against OpenSees' penalty at K = 1e8, 1e10, 1e12 differs by 1.65e-3, 1
 peak displacement (rotations 1.80e-3, 1.82e-5, 1.82e-7): exactly 1 / K, so FemoraX is the limit of
 OpenSees' penalty. The converter reads `fix node flags...` too. Next: LTS with constraints, benchmarks
 of the expand and contract kernels (TACC), Femora's export (the user's side).
+LTS with embedded nodes done (2026-11-20): an element on a constrained DOF takes, and gives, the
+levels of the equations of the slot's row (`lts_levels.cpp`), so a constraint group sits in one
+level; the substeps expand and contract the slots like every force evaluation, and the ground
+motion acts on the ground mass. Rigid links and diaphragms stay refused under LTS (the substep's
+update is diagonal; their block masses would need the block solve per substep). Test
+(`BeamKernels.LocalTimeSteppingWithAnEmbeddedPile`): the embedded pile at 0.9 of the soil's step
+(6 levels, 32 substeps) against a global run at dt/32: 3.0e-3 of the peak (translations; 39 of 135
+elements in the substeps, an estimated 3.21x) and 3.1e-3 with the rotation tie (71 elements, 1.85x:
+the tie's rows span the whole host brick, so the host bricks join the fine level); the equalDOF pile
+gives 3.05e-3. Next: benchmarks of the expand and contract kernels (TACC), Femora's export (the
+user's side).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

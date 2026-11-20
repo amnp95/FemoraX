@@ -1063,4 +1063,86 @@ TEST(BeamKernels, EmbeddedRotationTieLumpsADominantMass) {
   EXPECT_LE(rerr, 1e-2 * rpeak);
 }
 
+// Local time stepping with embedded nodes (docs/design.md, "Exact constraints u = T q"): a constraint
+// group sits in one level (an element on a constrained DOF takes the levels of its row's
+// equations); the pile tied into the soil by embedded nodes, translations and the rotation tie,
+// under LTS at 0.9 of the soil's step follows a global run at the finest level's step.
+TEST(BeamKernels, LocalTimeSteppingWithAnEmbeddedPile) {
+  for (const bool rot : {false, true}) {
+    SCOPED_TRACE(rot ? "rot" : "translations");
+    const Model m = pile_in_column(true, rot);
+    femorax::compile::CompileOptions co;
+    co.renumbering = femorax::compile::Renumbering::Off;
+    const auto c = femorax::compile::compile_model(m, co);
+    double soil_dt = 1e300;
+    {
+      femorax::exec::InternalForce force(c, femorax::exec::GeometryCache::Auto);
+      const auto dts = force.element_critical_dts(femorax::ExplicitScheme::CentralDifference);
+      for (std::size_t b = 0; b < dts.size(); ++b)
+        if (c.batches[b].element != femorax::io::ElementType::DispBeamColumn)
+          for (const double x : dts[b]) soil_dt = std::min(soil_dt, x);
+    }
+    const double dt = 0.9 * soil_dt;
+    const int steps = 150;
+    auto run_it = [&](double step, int n, const std::string& file, bool lts, femorax::exec::RunReport* rep) {
+      Model mm = m;
+      femorax::io::PathSeries ps;
+      ps.tag = 1;
+      ps.dt = step;
+      const double T = 40 * dt;
+      for (int k = 0; k <= n + 2; ++k) {
+        const double t = k * step;
+        ps.values.push_back(t < T ? std::pow(std::sin(M_PI * t / T), 2) : 0.0);
+      }
+      mm.time_series.push_back(ps);
+      mm.patterns.push_back({2, 1, 1, 0.0, 1.0, {}});
+      femorax::io::NodeRecorder nr;
+      nr.file = temp_file(file);
+      nr.response = femorax::io::NodeResponse::Disp;
+      nr.time = true;
+      nr.precision = 17;
+      for (int k = 1; k <= 8; ++k) nr.nodes.push_back(10000 + k);
+      nr.dofs = {1, 5};
+      mm.recorders.push_back({"d", nr, {}});
+      mm.process.push_back({"0", "", femorax::io::RecorderStep{"d"}});
+      mm.process.push_back({"1", "", femorax::io::PatternStep{2}});
+      femorax::io::AnalysisStep a;
+      a.name = "shake";
+      a.dt = step;
+      a.num_steps = n;
+      a.integrator = femorax::io::Integrator::CentralDifference;
+      mm.process.push_back({"2", "", a});
+      femorax::exec::RunOptions o;
+      o.verbose = false;
+      o.renumbering = femorax::compile::Renumbering::Off;
+      o.local_time_stepping = lts;
+      const auto r = femorax::exec::run_model(mm, o);
+      if (rep) *rep = r;
+      return read_rows(nr.file);
+    };
+    femorax::exec::RunReport rep;
+    const auto lts = run_it(dt, steps, "emb_lts.txt", true, &rep);
+    const auto& st = rep.stages.at(0);
+    const int p = st.lts_substeps;
+    ASSERT_GE(st.lts_levels, 2);
+    const auto fine = run_it(dt / p, steps * p, "emb_fine.txt", false, nullptr);
+    ASSERT_EQ(lts.size(), static_cast<std::size_t>(steps));
+    double peak = 0.0, err = 0.0;
+    for (int k = 0; k < steps; ++k) {
+      const auto& a = lts[static_cast<std::size_t>(k)];
+      const auto& b = fine[static_cast<std::size_t>((k + 1) * p - 1)];
+      for (std::size_t col = 1; col < a.size(); col += 2) {
+        peak = std::max(peak, std::abs(b[col]));
+        err = std::max(err, std::abs(a[col] - b[col]));
+      }
+    }
+    std::printf("[ embedded pile%s under LTS: %d levels, %d substeps, %lld of %lld elements in the substeps (gain "
+                "%.2fx); against a global run at dt/%d: %.2e of the peak %.3e ]\n",
+                rot ? " (rot)" : "", st.lts_levels, p, static_cast<long long>(st.lts_substep_elements),
+                static_cast<long long>(rep.elements), st.lts_speedup, p, err / peak, peak);
+    EXPECT_GT(peak, 0.0);
+    EXPECT_LE(err, 1e-2 * peak);
+  }
+}
+
 }  // namespace

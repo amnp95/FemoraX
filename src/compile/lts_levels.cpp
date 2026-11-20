@@ -8,6 +8,24 @@
 
 namespace femorax::compile {
 
+namespace {
+
+// The equations of an element DOF's map entry q: q itself, or for a constrained DOF's slot
+// (exact constraints) the equations of its row, so a constraint group sits in one level.
+template <class F>
+void for_each_equation(const Compiled& c, std::int32_t q, F&& f) {
+  if (q < 0) return;
+  const auto& n = c.dofs;
+  if (q < n.num_equations) {
+    f(q);
+    return;
+  }
+  const auto k = static_cast<std::size_t>(q - n.num_equations);
+  for (auto t = n.con_start[k]; t < n.con_start[k + 1]; ++t) f(n.con_eq[static_cast<std::size_t>(t)]);
+}
+
+}  // namespace
+
 LtsLevels assign_lts_levels(const Compiled& c, const std::vector<std::vector<double>>& element_dt, double dt,
                             const LtsOptions& opt) {
   if (element_dt.size() != c.batches.size()) {
@@ -50,10 +68,10 @@ LtsLevels assign_lts_levels(const Compiled& c, const std::vector<std::vector<dou
       for (int a = 0; a < b.ndof; ++a) {
         const std::int32_t q = b.eq[static_cast<std::size_t>(a) * static_cast<std::size_t>(b.padded) +
                                     static_cast<std::size_t>(e)];
-        if (q >= 0) {
-          auto& el = L.equation_level[static_cast<std::size_t>(q)];
+        for_each_equation(c, q, [&](std::int32_t eq) {
+          auto& el = L.equation_level[static_cast<std::size_t>(eq)];
           el = std::max(el, static_cast<std::int8_t>(l));
-        }
+        });
       }
     }
   }
@@ -73,7 +91,7 @@ LtsLevels assign_lts_levels(const Compiled& c, const std::vector<std::vector<dou
       for (int a = 0; a < b.ndof; ++a) {
         const std::int32_t q = b.eq[static_cast<std::size_t>(a) * static_cast<std::size_t>(b.padded) +
                                     static_cast<std::size_t>(e)];
-        if (q >= 0) t = std::max(t, L.equation_level[static_cast<std::size_t>(q)]);
+        for_each_equation(c, q, [&](std::int32_t eq) { t = std::max(t, L.equation_level[static_cast<std::size_t>(eq)]); });
       }
       touched[static_cast<std::size_t>(e)] = t;
       ++L.elements_at_level[static_cast<std::size_t>(L.element_level[bi][static_cast<std::size_t>(e)])];

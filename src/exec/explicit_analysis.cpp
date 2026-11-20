@@ -283,11 +283,11 @@ void cd_block(const MassBlocks& b, const Vec& f, const CVec& eq_dof, const Vec& 
 //   k > 0: z_{k+1} = (1 + beta_k) z_k - beta_k z_{k-1} + c g (c = tau^2 2p^2/omega beta_{k+1/2});
 // and the next mixed field into u.
 void lts_substep(bool first, double a1, double a2, double c, const Vec& f, const Vec& ext, const Vec& m,
-                 const CVec& eq_dof, const Vec& g_accel, const IVec& g_dof, int npat, const CVec& fine,
+                 const Vec& mg, const CVec& eq_dof, const Vec& g_accel, const IVec& g_dof, int npat, const CVec& fine,
                  const Vec& un, const Vec& z, const Vec& zp, const Vec& u, Index neq) {
   Kokkos::parallel_for(
       "lts_substep", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq), KOKKOS_LAMBDA(const Index q) {
-        const double g = (-f(q) - ext(q) + ground_load(m(q), eq_dof(q), g_accel, g_dof, npat)) / m(q);
+        const double g = (-f(q) - ext(q) + ground_load(mg(q), eq_dof(q), g_accel, g_dof, npat)) / m(q);
         if (first) {
           zp(q) = un(q);
           z(q) = un(q) + c * g;
@@ -590,9 +590,9 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       Vec un, z, zp, ext;
       ForceSettings lts_settings = choice.settings;
       if (opt.local_time_stepping) {
-        if (force.has_constraints())
-          throw io::UnsupportedComponent("unsupported component: local time stepping with rigid links, diaphragms "
-                                         "or embedded nodes (not yet)");
+        if (blocks.count > 0)
+          throw io::UnsupportedComponent("unsupported component: local time stepping with rigid links or diaphragms "
+                                         "(their block masses; embedded nodes are supported)");
         if (force.has_state())
           throw io::ModelError("stage \"" + an->name + "\": local time stepping does not support materials with state "
                                "or Uniform damping yet");
@@ -680,7 +680,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
           const bool first = j == 0;
           const double bk = first ? 0.0 : lcoef.beta[static_cast<std::size_t>(j - 1)];
           const double cc = first ? 0.5 * tau2 * lcoef.c_first : tau2 * lcoef.c_rest * lcoef.beta_half[static_cast<std::size_t>(j - 1)];
-          lts_substep(first, 1.0 + bk, bk, cc, force.f, ext, m, eq_dof, motions.accel(), motions.dof(),
+          lts_substep(first, 1.0 + bk, bk, cc, force.f, ext, m, mg, eq_dof, motions.accel(), motions.dof(),
                       motions.num_active(), fine_d, un, z, zp, u, n);
         }
       };
