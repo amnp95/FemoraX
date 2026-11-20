@@ -1252,6 +1252,14 @@ equalDOF within 5.2e-13 of the peak (explicit, 300 steps); its force at the same
 5.7e-14. Found by it: the contract step had first landed in the wrong function, so the beam's
 forces never reached the soil. Next: the implicit operator (extended copies of the solver's
 vectors), the block masses for rigid links and diaphragms, the rotation tie's mass.
+Step 2, second part done (2026-11-20): embedded nodes in implicit stages. The implicit stage
+works on the equation part of the force object's u and v (views of the same memory); the
+operator, its diagonal, the ground-motion term and the stored tangents copy the solver's
+equation-long vectors into work vectors with the slots, expand, run, and contract (the diagonal
+with the squared weights: T^T A T's diagonal without the cross terms, a Jacobi preconditioner's);
+the recorder gets the force object's u after an expand. Test: Newmark with Newton on the
+embedded pile equals the equalDOF pile within 1.8e-15 of the peak (40 steps). Next: the block
+masses for rigid links and diaphragms, the rotation tie's mass, then schema 1.2 (asked first).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

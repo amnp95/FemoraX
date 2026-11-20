@@ -687,7 +687,7 @@ TEST(BeamKernels, EmbeddedPileRunsAsTheEqualDofPile) {
     m.elements.push_back(pile);
     return m;
   };
-  auto run_it = [&](Model mm, const std::string& file, double dt, int n) {
+  auto run_it = [&](Model mm, const std::string& file, double dt, int n, bool implicit = false) {
     femorax::io::PathSeries ps;
     ps.tag = 1;
     ps.dt = dt;
@@ -713,6 +713,18 @@ TEST(BeamKernels, EmbeddedPileRunsAsTheEqualDofPile) {
     a.dt = dt;
     a.num_steps = n;
     a.integrator = femorax::io::Integrator::CentralDifference;
+    if (implicit) {
+      a.type = femorax::io::AnalysisType::Transient;
+      a.integrator = femorax::io::Integrator::Newmark;
+      a.gamma = 0.5;
+      a.beta = 0.25;
+      a.algorithm = femorax::io::Algorithm::Newton;
+      a.numberer = "Plain";
+      a.system = "BandGeneral";
+      a.test_type = femorax::io::TestType::NormDispIncr;
+      a.test_tol = 1e-14;
+      a.test_max_iter = 10;
+    }
     mm.process.push_back({"2", "", a});
     femorax::exec::RunOptions o;
     o.verbose = false;
@@ -740,6 +752,21 @@ TEST(BeamKernels, EmbeddedPileRunsAsTheEqualDofPile) {
               err / peak, peak);
   EXPECT_GT(peak, 0.0);
   EXPECT_LE(err, 1e-10 * peak);
+  // Implicit (Newmark, Newton, the matrix-free operator with the slots expanded and contracted).
+  const int isteps = 40;
+  const double idt = 4 * dt;
+  const auto ai = run_it(tied, "tied_i.txt", idt, isteps, true), bi = run_it(emb, "embedded_i.txt", idt, isteps, true);
+  ASSERT_EQ(ai.size(), bi.size());
+  double ipeak = 0.0, ierr = 0.0;
+  for (std::size_t k = 0; k < ai.size(); ++k)
+    for (std::size_t col = 1; col < ai[k].size(); col += 2) {
+      ipeak = std::max(ipeak, std::abs(ai[k][col]));
+      ierr = std::max(ierr, std::abs(ai[k][col] - bi[k][col]));
+    }
+  std::printf("[ embedded pile against the equalDOF pile (Newmark, %d steps): %.2e of the peak %.3e ]\n", isteps,
+              ierr / ipeak, ipeak);
+  EXPECT_GT(ipeak, 0.0);
+  EXPECT_LE(ierr, 1e-9 * ipeak);
 }
 
 }  // namespace

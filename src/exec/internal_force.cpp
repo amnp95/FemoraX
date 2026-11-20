@@ -189,6 +189,9 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
       }
       es.push_back(static_cast<std::int64_t>(eslot.size()));
     }
+    ux_ = Vec("constraint_work_u", static_cast<std::size_t>(nslots_));
+    xx_ = Vec("constraint_work_x", static_cast<std::size_t>(nslots_));
+    yy_ = Vec("constraint_work_y", static_cast<std::size_t>(nslots_));
     eq_start_ = upload("eq_con_start", es);
     eq_slot_ = upload("eq_con_slot", eslot);
     eq_w_ = upload("eq_con_weight", ew);
@@ -293,7 +296,7 @@ void InternalForce::expand_slots(const Vec& x) const {
       });
 }
 
-void InternalForce::contract_slots(const Vec& y) const {
+void InternalForce::contract_slots(const Vec& y, bool squared) const {
   if (nslots_ <= neq_) return;
   const auto es = eq_start_;
   const auto sl = eq_slot_;
@@ -301,9 +304,14 @@ void InternalForce::contract_slots(const Vec& y) const {
   Kokkos::parallel_for(
       "constraint_contract", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_), KOKKOS_LAMBDA(const Index q) {
         double sum = 0.0;
-        for (auto t = es(q); t < es(q + 1); ++t) sum += ew(t) * y(sl(t));
+        for (auto t = es(q); t < es(q + 1); ++t) sum += (squared ? ew(t) * ew(t) : ew(t)) * y(sl(t));
         y(q) += sum;
       });
+}
+
+void InternalForce::copy_equations(const Vec& dst, const Vec& src) const {
+  const std::pair<std::size_t, std::size_t> eqs{0, static_cast<std::size_t>(neq_)};
+  Kokkos::deep_copy(Kokkos::subview(dst, eqs), Kokkos::subview(src, eqs));
 }
 
 void InternalForce::require_no_constraints(const char* what) const {
@@ -407,7 +415,7 @@ void add_nodal_mass(double c, const Vec& m, const Kokkos::View<const double*, Sp
                     bool diagonal) {
   if (c == 0.0) return;
   Kokkos::parallel_for(
-      "operator_nodal_mass", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, static_cast<Index>(y.extent(0))),
+      "operator_nodal_mass", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, static_cast<Index>(m.extent(0))),
       KOKKOS_LAMBDA(const Index q) { y(q) += c * m(q) * (diagonal ? 1.0 : x(q)); });
 }
 
@@ -485,7 +493,12 @@ void InternalForce::enable_stored_tangents() {
 }
 
 void InternalForce::store_tangents(const Vec& u_at, const OperatorSettings& settings) {
-  require_no_constraints("the implicit operator");
+  if (nslots_ > neq_ && static_cast<Index>(u_at.extent(0)) < nslots_) {
+    copy_equations(ux_, u_at);
+    expand_slots(ux_);
+    store_tangents(ux_, settings);
+    return;
+  }
   for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (!has_stored_tangents()) Kokkos::abort("InternalForce::store_tangents: call enable_stored_tangents() first");
@@ -494,7 +507,18 @@ void InternalForce::store_tangents(const Vec& u_at, const OperatorSettings& sett
 
 void InternalForce::apply_operator(const OperatorCoefficients& k, const OperatorSettings& settings, const Vec& u_at,
                                    const Kokkos::View<const double*, Space>& x, const Vec& y) {
-  require_no_constraints("the implicit operator");
+  if (nslots_ > neq_ && static_cast<Index>(x.extent(0)) < nslots_) {
+    // Embedded nodes: the solver's vectors are equation-long; expand into the slots, apply,
+    // contract (docs/design.md, "Exact constraints u = T q").
+    copy_equations(ux_, u_at);
+    expand_slots(ux_);
+    copy_equations(xx_, Vec(const_cast<double*>(x.data()), x.extent(0)));
+    expand_slots(xx_);
+    apply_operator(k, settings, ux_, xx_, yy_);
+    contract_slots(yy_);
+    copy_equations(y, yy_);
+    return;
+  }
   for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (s.tangent == TangentSource::Stored && !has_stored_tangents())
@@ -513,7 +537,16 @@ void InternalForce::apply_operator(const OperatorCoefficients& k, const Operator
 
 void InternalForce::operator_diagonal(const OperatorCoefficients& k, const OperatorSettings& settings,
                                       const Vec& u_at, const Vec& d) {
-  require_no_constraints("the implicit operator");
+  if (nslots_ > neq_ && static_cast<Index>(d.extent(0)) < nslots_) {
+    // Embedded nodes: the slots' diagonal entries onto their equations with the squared weights
+    // (the diagonal of T^T A T without the cross terms: a Jacobi preconditioner's diagonal).
+    copy_equations(ux_, u_at);
+    expand_slots(ux_);
+    operator_diagonal(k, settings, ux_, yy_);
+    contract_slots(yy_, true);
+    copy_equations(d, yy_);
+    return;
+  }
   for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (s.tangent == TangentSource::Stored && !has_stored_tangents())
@@ -530,7 +563,14 @@ void InternalForce::operator_diagonal(const OperatorCoefficients& k, const Opera
 
 void InternalForce::mass_times_ground(int direction, const OperatorSettings& settings, const Vec& u_at,
                                       const Vec& y) {
-  require_no_constraints("the implicit operator");
+  if (nslots_ > neq_ && static_cast<Index>(y.extent(0)) < nslots_) {
+    copy_equations(ux_, u_at);
+    expand_slots(ux_);
+    mass_times_ground(direction, settings, ux_, yy_);
+    contract_slots(yy_);
+    copy_equations(y, yy_);
+    return;
+  }
   for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   const Out out = s.scatter == Scatter::Gather ? Out::Slots : s.scatter == Scatter::Atomic ? Out::Atomic : Out::Plain;

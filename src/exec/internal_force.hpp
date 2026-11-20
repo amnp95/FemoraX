@@ -179,7 +179,8 @@ class InternalForce {
   // equations; compute fills them from the equations first and adds their forces back after.
   // expand_slots(u) refreshes the slots of u (before recording a constrained node).
   void expand_slots(const Vec& x) const;
-  void contract_slots(const Vec& y) const;
+  void contract_slots(const Vec& y, bool squared = false) const;
+  void copy_equations(const Vec& dst, const Vec& src) const;  // the first num_equations values
   bool has_constraints() const { return nslots_ > neq_; }
 
   // Smallest stable explicit step over the elements of the chosen batches (docs/design.md,
@@ -207,6 +208,7 @@ class InternalForce {
   Kokkos::View<std::int64_t*, Space> con_start_, eq_start_;
   Kokkos::View<std::int32_t*, Space> con_eq_, eq_slot_;
   Vec con_w_, eq_w_;
+  Vec ux_, xx_, yy_;  // the implicit operator's work vectors with the slots
   void require_no_constraints(const char* what) const;
   bool has_cache_ = false, has_coloring_ = true;
   std::int64_t cache_bytes_ = 0, stored_bytes_ = 0, last_plastic_points_ = 0;

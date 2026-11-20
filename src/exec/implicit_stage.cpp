@@ -81,7 +81,9 @@ struct ImplicitStage::Impl {
   std::unique_ptr<VectorOps> ops;
 
   Impl(InternalForce& f, const compile::Compiled& cc, Vec u_, Vec v_, Vec a_, const ForceSettings& s)
-      : force(f), c(cc), u(std::move(u_)), v_committed(std::move(v_)), a(std::move(a_)), fs(s),
+      : force(f), c(cc), u(u_.data(), static_cast<std::size_t>(f.num_equations())),  // the equations only:
+        // the force object's u also spans the embedded nodes' slots
+        v_committed(std::move(v_)), a(std::move(a_)), fs(s),
         os(f.resolve(OperatorSettings{})), lanes(simd_width()), n(f.num_equations()) {
     const auto un = static_cast<std::size_t>(n);
     ut = Vec("implicit_ut", un);
@@ -115,7 +117,8 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
   const bool is_static = an.type == io::AnalysisType::Static;
   InternalForce& force = s.force;
   const Vec& u = s.u;
-  const Vec& v = force.v;  // the trial velocity the elements see
+  const Vec v(force.v.data(), static_cast<std::size_t>(force.num_equations()));  // the trial velocity the elements
+                                                                               // see (its equations)
   const Vec& a = s.a;
   const double gamma = an.gamma, beta = an.beta;
   if (!is_static && an.newmark_form != "D")
@@ -346,7 +349,8 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     // converged displacement), then record.
     force.commit_state();
     motions.commit_drm();
-    recorders.record(time, u, is_static ? s.v_committed : v, a);
+    force.expand_slots(force.u);  // the embedded nodes' displacements (their slots)
+    recorders.record(time, force.u, is_static ? s.v_committed : v, a);
     return true;
   };
 

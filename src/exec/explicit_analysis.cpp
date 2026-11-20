@@ -292,8 +292,8 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   const double t_setup = now();
   InternalForce force(c, GeometryCache::Auto);
   if (force.has_constraints()) {
-    // Embedded nodes (docs/design.md, "Exact constraints u = T q", step 2): explicit stages with
-    // displacement recorders so far.
+    // Embedded nodes (docs/design.md, "Exact constraints u = T q", step 2): displacement
+    // recorders so far.
     if (!model.drm_patterns.empty())
       throw io::UnsupportedComponent("unsupported component: H5DRM with embedded nodes (not yet)");
     for (const auto& r : model.recorders) {
@@ -302,10 +302,6 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         throw io::UnsupportedComponent("unsupported component: recorder " + r.name +
                                        " with embedded nodes: node displacement recorders only so far");
     }
-    for (const auto& st : model.process)
-      if (const auto* a = std::get_if<io::AnalysisStep>(&st.step); a && !io::is_explicit(a->integrator))
-        throw io::UnsupportedComponent("unsupported component: the implicit stage \"" + a->name +
-                                       "\" with embedded nodes: explicit stages only so far");
   }
   const Choice choice = choose_force_settings(force, c);
   rep.force_settings = to_string(choice.settings);
