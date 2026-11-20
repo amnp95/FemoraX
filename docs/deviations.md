@@ -131,7 +131,11 @@ Default tolerances (until a component states otherwise):
   the global axes); consistent, OpenSees' matrix plus the torsional mass
   `rho Ip L / 6 [2 1; 1 2]` and the Rayleigh-beam rotary inertia `rho I / (30 L) [36 3L -36 3L;
   ...]`. A model that wants OpenSees' behaviour (or Femora's scaled rotary inertia) gives the
-  beam density 0 and its masses as nodal masses.
+  beam density 0 and its masses as nodal masses. With OpenSees' `-mass` (schema 1.1
+  `mass_per_length`, decided with the user 2026-11-20, option a), the translational mass is the
+  given mass per length and the rotary inertia comes from the density it implies,
+  `mass_per_length / A`; OpenSees gives these rotations no mass (Femora's OpenSees export should
+  warn).
 - Why: a rotation without mass has no inertia, and OpenSees' explicit integrators refuse a
   massless DOF (`DiagonalDirectSolver`: "aii = 0"); Femora works around it with scaled nodal
   masses. The physical rotary inertia keeps the stable step of the order of the axial one

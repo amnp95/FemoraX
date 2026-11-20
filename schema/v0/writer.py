@@ -16,7 +16,7 @@ from __future__ import annotations
 import h5py
 import numpy as np
 
-SCHEMA_VERSION = (1, 0)
+SCHEMA_VERSION = (1, 1)
 
 _ALLOWED = (np.int32, np.uint8, np.float64)
 

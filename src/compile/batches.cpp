@@ -73,8 +73,14 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
       if (q >= 0) c.eq_dof[q] = static_cast<std::int8_t>(d);
     }
 
-  std::unordered_map<std::int32_t, std::size_t> material_index;
-  for (std::size_t i = 0; i < m.materials.size(); ++i) material_index[m.materials[i].tag] = i;
+  // Materials by (kind, tag): sections have a tag space of their own (io::is_section).
+  std::unordered_map<std::int64_t, std::size_t> material_by_key;
+  auto key = [](bool section, std::int32_t tag) { return (static_cast<std::int64_t>(section) << 32) | static_cast<std::uint32_t>(tag); };
+  for (std::size_t i = 0; i < m.materials.size(); ++i)
+    material_by_key[key(io::is_section(m.materials[i]), m.materials[i].tag)] = i;
+  auto material_of = [&](const io::ElementGroup& g) {
+    return material_by_key.at(key(g.type == io::ElementType::DispBeamColumn, g.material));
+  };
 
   // Damping region of every element tag: the last region in file order wins (OpenSees).
   std::unordered_map<std::int32_t, std::int32_t> region_of;
@@ -103,7 +109,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   std::map<int, std::vector<std::int32_t>> members;
   for (const auto ge : c.ordering.element_order) {
     const auto& g = m.elements[where[ge].first];
-    const auto& mat = m.materials[material_index.at(g.material)];
+    const auto& mat = m.materials[material_of(g)];
     const std::int32_t ur = uniform_region(g.tags[where[ge].second]);
     const int pair =
         registry::pair_index(g, mat, ur < 0 ? 0 : uniform_filters[static_cast<std::size_t>(ur)].nFilter);
@@ -163,7 +169,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
         if (fresh) {
           ParamSet ps;
           ps.group = gi;
-          ps.material = static_cast<std::int32_t>(material_index.at(g.material));
+          ps.material = static_cast<std::int32_t>(material_of(g));
           ps.region = region;
           if (region >= 0) {
             const auto& r = m.rayleigh[region];

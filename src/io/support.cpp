@@ -127,6 +127,14 @@ void check_supported(const Model& m, const Capabilities& caps) {
       unsupported(std::string("element type \"") + to_string(g.type) + "\" (/elements/" + g.id +
                   ") is not available in this build");
     }
+    if (g.type == ElementType::DispBeamColumn) {
+      if (g.beam.transf == 2)
+        unsupported("the Corotational transformation (element group " + g.id +
+                    "): not available yet (Linear and PDelta are)");
+      if (g.beam.points < 2 || g.beam.points > 5)
+        unsupported("dispBeamColumn with " + std::to_string(g.beam.points) + " integration points (element group " +
+                    g.id + "): 2 to 5 are supported; for more accuracy use more elements");
+    }
   }
 
   for (const auto& s : m.process) {
@@ -154,7 +162,8 @@ void check_supported(const Model& m, const Capabilities& caps) {
                        " requires the Linear algorithm, as in OpenSees");
     }
     for (const auto& g : m.elements) {
-      if (!g.lumped) {
+      const bool lumped = g.type == ElementType::DispBeamColumn ? !g.beam.consistent_mass : g.lumped;
+      if (!lumped) {
         unsupported(std::string(to_string(a->integrator)) + " (" + where + ") with element group /elements/" +
                     g.id + ", which uses a consistent mass matrix: explicit stages need lumped "
                     "mass (stdBrick -lumped, or SSPbrick); OpenSees would solve with the full "

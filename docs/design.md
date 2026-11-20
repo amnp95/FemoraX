@@ -1110,6 +1110,13 @@ only (conservative; their bits unchanged). Beams with density 0 run in explicit 
 explicit stage refuses a free DOF without any mass, naming the node and the DOF (rule 5 of
 "Structures"). Test: a density-0 cantilever whose element masses sit on its nodes gets the same
 stable step as the beam with its density (1.660910e-04 both) and runs.
+Step 5 done (2026-11-20, approved by the user with option a for `mass_per_length`): schema 1.1
+(`schema/v0/README.md` 3.3.1, 3.3.2, 3.4.1), the reader (`/sections`, `/transformations` with
+Corotational read and refused by the build, `dispBeamColumn` groups; sections in their own tag
+space, materials looked up by kind and tag; beam nodes must have 6 DOFs), `check_supported`
+(Corotational, point counts outside 2-5), the writer's version, 13 fixtures, the support table.
+Not yet: the Tcl converter (`section Elastic`, `geomTransf`, `element dispBeamColumn`) and
+Femora's exporter (the user's side).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

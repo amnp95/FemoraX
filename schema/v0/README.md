@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 0.6
+# FemoraX model file, schema version 1.1
 
-Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 and 0.6 approved 2026-11-09**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 and 0.6 approved 2026-11-09; 1.1 approved 2026-11-20**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -57,6 +57,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.6 | pattern type `H5DRM` (the DRM data in its own file) |
 | 0.7 | optional `/damping/uniform` (Uniform damping per element region, section 3.7.1) |
 | 1.0 | H5DRM: the DRM file is read as it is, its stations and motions in one frame (no flip of the z motion, which OpenSees and FemoraX 0.x applied), and a coordinate transformation turns the motions with the stations; the box description `drmbox_*` is optional. Breaking: an H5DRM pattern in a 0.x file is refused (section 3.9) |
+| 1.1 | beams: optional `/sections/<tag>` (Elastic, section 3.3.1) and `/transformations/<tag>` (Linear, PDelta, Corotational; section 3.3.2), element type `"dispBeamColumn"` (section 3.4.1). Sections have their own tag space (a section and an nD material may share a tag) |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
@@ -178,6 +179,27 @@ parser requires all of them).
 Rules: as above, with `cohesi >= 0`, `0 <= frictionAng < 90`, and `cohesi > 0` when
 `frictionAng = 0` (OpenSees: fatal).
 
+### 3.3.1 `/sections/<tag>` *(optional, 1.1)*
+
+One group per section; the group name is the section tag (the OpenSees tag: sections have their
+own tag space, so `/sections/1` and `/materials/nd/1` may both exist). `femora_name` metadata may
+hold Femora's name.
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `type` | string | `"Elastic"`: `section Elastic <tag> E A Iz Iy G J` (3D). Another type is unsupported |
+| `E`, `A`, `Iz`, `Iy`, `G`, `J` | float64 | as in the Tcl command; finite and positive |
+
+### 3.3.2 `/transformations/<tag>` *(optional, 1.1)*
+
+One group per `geomTransf <type> <tag> vecxz_x vecxz_y vecxz_z [-jntOffset dXi dYi dZi dXj dYj dZj]`.
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `type` | string | `"Linear"`, `"PDelta"` or `"Corotational"` (accepted by the schema; refused by builds that do not run it yet) |
+| `vecxz` | `[3]` float64 | the vector in the local x-z plane; not zero (not parallel to a member: checked when the element is built) |
+| `joint_offset_i`, `joint_offset_j` | `[3]` float64 *(optional)* | the rigid joint offsets, global coordinates; absent: none |
+
 ### 3.4 `/elements/<id>`
 
 One group per **Femora element definition** (one `model.element.brick.std(...)` call): all
@@ -194,6 +216,28 @@ metadata. FemoraX forms its own batches from these groups.
 | attr `lumped` | uint8 | stdBrick only: `1` if `-lumped`; absent or `0` means consistent mass. SSPbrick always lumps (the attribute must be absent) |
 | `tags` | `[M]` int32 | element tags |
 | `connectivity` | `[M, 8]` int32 | node tags in OpenSees order for the type |
+
+### 3.4.1 `dispBeamColumn` groups *(1.1)*
+
+`element dispBeamColumn <tag> <iNode> <jNode> <numIntgrPts> <secTag> <transfTag> [-mass m] [-cMass]`
+(OpenSees' legacy form: Gauss-Legendre points). Instead of `material`, `body_force` and `lumped`:
+
+| Item | Shape, type | Meaning |
+|---|---|---|
+| attr `type` | string | `"dispBeamColumn"` |
+| attr `section` | int32 | tag of a `/sections` group |
+| attr `transformation` | int32 | tag of a `/transformations` group |
+| attr `integration_points` | int32 | Gauss-Legendre points; builds run 2 to 5 (another count is unsupported: use more elements) |
+| attr `density` | float64 *(optional)* | mass per volume (>= 0): FemoraX computes the beam's lumped mass from the section, `rho A L / 2` per translation and the rotary inertia `rho (Iy + Iz) L / 2`, `rho Iy L / 2`, `rho Iz L / 2` per rotation (docs/design.md, "Structures") |
+| attr `mass_per_length` | float64 *(optional)* | OpenSees' `-mass` (>= 0): the translational mass per length; the rotary inertia from `mass_per_length / A` (OpenSees gives the rotations no mass: docs/deviations.md). Not with `density` |
+| attr `consistent_mass` | uint8 *(optional)* | `1`: `-cMass`, the consistent mass (implicit stages only; explicit stages need lumped mass) |
+| `tags` | `[M]` int32 | element tags |
+| `connectivity` | `[M, 2]` int32 | node tags I and J; both nodes must have `ndf = 6` |
+
+Without `density` and `mass_per_length` the beams have no mass of their own: all their mass is
+nodal (`/mass`), as Femora's OpenSees export writes it; every free DOF of an explicit stage must
+have mass. No element loads (`eleLoad -beamUniform`) yet. Rayleigh stiffness damping on beams is
+refused in explicit stages (docs/design.md, "Structures").
 
 Body force semantics (both elements, from `Brick.cpp` and `SSPbrick.cpp`): while no
 `eleLoad` pattern acts on the element, `b` is applied as a **constant** body force in every

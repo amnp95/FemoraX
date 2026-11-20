@@ -22,7 +22,7 @@ struct SchemaVersion {
 // with a minor version up to this one, and the 0.x files (up to 0.7) except their H5DRM
 // patterns: 1.0 changed what an H5DRM pattern means (the DRM file is read in its own frame,
 // with no flip of z; schema/v0/README.md).
-inline constexpr SchemaVersion reader_schema_version{1, 0};
+inline constexpr SchemaVersion reader_schema_version{1, 1};
 inline constexpr int last_v0_minor = 7;
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
@@ -72,6 +72,11 @@ struct ElasticSection3dData {
   double E = 0.0, A = 0.0, Iz = 0.0, Iy = 0.0, G = 0.0, J = 0.0;
 };
 
+// Sections have a tag space of their own (OpenSees, Femora): `section Elastic 1` and
+// `nDMaterial ElasticIsotropic 1` may both exist; look materials up by (kind, tag).
+struct NDMaterial;
+bool is_section(const NDMaterial& m);
+
 struct NDMaterial {
   std::int32_t tag = 0;
   std::variant<ElasticIsotropicData, PressureDependMultiYieldData, PressureIndependMultiYieldData,
@@ -101,7 +106,8 @@ struct ElementGroup {
   // rotary inertia), or `mass_per_length` when it is >= 0 (OpenSees' -mass; the rotary inertia
   // then from mass_per_length / A); `consistent_mass` (-cMass) for implicit stages.
   struct Beam {
-    int transf = 0;  // 0 Linear, 1 PDelta
+    std::int32_t transformation = 0;  // the /transformations tag (schema 1.1)
+    int transf = 0;  // 0 Linear, 1 PDelta, 2 Corotational (read, not supported yet)
     std::array<double, 3> vecxz{0.0, 0.0, 1.0};
     std::array<double, 3> offset_i{}, offset_j{};
     int points = 5;

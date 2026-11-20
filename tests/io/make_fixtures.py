@@ -100,6 +100,49 @@ def m_sspbrick(f):
     del g.attrs["lumped"]
 
 
+def m_beam(section=None, transformation=None, beam=None, ndf=6, version=None, section_tag="1",
+           drop_section=False):
+    """Add a three-node vertical pile of two dispBeamColumn elements (schema 1.1): new nodes
+    9001-9003 with `ndf` DOFs, /sections/<section_tag> (Elastic), /transformations/7, and the
+    element group "beam"."""
+    def m(f):
+        nodes = f["nodes"]
+        tags = np.concatenate([nodes["tags"][...], np.array([9001, 9002, 9003], dtype=np.int32)])
+        coords = np.concatenate([nodes["coords"][...], np.array([[50.0, 0, 0], [50.0, 0, 1], [50.0, 0, 2]])])
+        ndfs = np.concatenate([nodes["ndf"][...], np.full(3, ndf, dtype=np.int32)])
+        replace(nodes, "tags", tags)
+        replace(nodes, "coords", coords)
+        replace(nodes, "ndf", ndfs)
+        if not drop_section:
+            sg = f.require_group("sections").create_group(section_tag)
+            sg.attrs["type"] = "Elastic"
+            for k, v in {"E": 2.5e7, "A": 0.5, "Iz": 0.02, "Iy": 0.015, "G": 1.0e7, "J": 0.03}.items():
+                sg.attrs[k] = np.float64(v)
+            for k, v in (section or {}).items():
+                sg.attrs[k] = v
+        tg = f.require_group("transformations").create_group("7")
+        tg.attrs["type"] = "PDelta"
+        tg.attrs["vecxz"] = np.array([1.0, 0.0, 0.0])
+        for k, v in (transformation or {}).items():
+            tg.attrs[k] = v
+        g = f["elements"].create_group("beam")
+        g.attrs["type"] = "dispBeamColumn"
+        g.attrs["section"] = np.int32(1)
+        g.attrs["transformation"] = np.int32(7)
+        g.attrs["integration_points"] = np.int32(5)
+        g.attrs["density"] = np.float64(2.4)
+        for k, v in (beam or {}).items():
+            if v is None:
+                del g.attrs[k]
+            else:
+                g.attrs[k] = v
+        g.create_dataset("tags", data=np.array([9001, 9002], dtype=np.int32))
+        g.create_dataset("connectivity", data=np.array([[9001, 9002], [9002, 9003]], dtype=np.int32))
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
+
+
 def m_minimal(f):
     for name in ("constraints", "damping", "time_series", "patterns", "recorders"):
         del f[name]
@@ -662,7 +705,28 @@ CASES = [
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 1.x files", m_version(2, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(1, 1)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(1, 2)),
+    # schema 1.1: beams (/sections, /transformations, dispBeamColumn)
+    ("beam", "explicit", "valid", "", m_beam()),
+    ("beam_section_tag_shared_with_a_material", "explicit", "valid", "", m_beam()),
+    ("beam_mass_per_length_offsets_consistent", "implicit", "valid", "",
+     m_beam(transformation={"type": "Linear", "joint_offset_i": np.array([0.0, 0.0, 0.1])},
+            beam={"density": None, "mass_per_length": np.float64(1.2), "consistent_mass": np.uint8(1)})),
+    ("beam_in_1_0_file", "explicit", "invalid", "was added in schema 1.1", m_beam(version=[1, 0])),
+    ("beam_unknown_section", "explicit", "invalid", "section 1 does not exist", m_beam(drop_section=True)),
+    ("beam_unknown_transformation", "explicit", "invalid", "transformation 8 does not exist",
+     m_beam(beam={"transformation": np.int32(8)})),
+    ("beam_node_ndf_3", "explicit", "invalid", "needs 6 DOFs", m_beam(ndf=3)),
+    ("beam_density_and_mass_per_length", "explicit", "invalid", "not both",
+     m_beam(beam={"mass_per_length": np.float64(1.2)})),
+    ("beam_section_negative", "explicit", "invalid", "must be finite and positive",
+     m_beam(section={"Iz": np.float64(-1.0)})),
+    ("beam_transformation_type", "explicit", "invalid", "is not Linear, PDelta or Corotational",
+     m_beam(transformation={"type": "Fancy"})),
+    ("beam_corotational", "explicit", "unsupported", "Corotational transformation",
+     m_beam(transformation={"type": "Corotational"})),
+    ("beam_points", "explicit", "unsupported", "use more elements", m_beam(beam={"integration_points": np.int32(7)})),
+    ("beam_section_type", "explicit", "unsupported", "section type", m_beam(section={"type": "Fiber"})),
     ("unknown_0_minor", "explicit", "invalid", "and 0.x files up to 0.7", m_version(0, 8)),
     # --- schema 0.3: Static / LoadControl, ModifiedNewton, solver attributes ---------
     ("static_in_0_2_file", "implicit", "invalid", "was added in schema 0.3",
@@ -755,8 +819,9 @@ CASES = [
      m_set_attr("materials/nd/1", "type", "DruckerPrager")),
     ("material_kind", "explicit", "unsupported", 'material kind "uniaxial"', m_uniaxial),
     ("ndm_2", "explicit", "unsupported", "ndm = 2", m_set_attr("/", "ndm", np.int32(2))),
-    ("sections_group", "explicit", "unsupported", "unsupported component: /sections",
-     m_new_root_group("sections")),
+    # a root group no schema defines yet (/sections is schema 1.1's)
+    ("unknown_root_group", "explicit", "unsupported", "unsupported component: /interfaces",
+     m_new_root_group("interfaces")),
     ("rigid_link", "explicit", "unsupported", 'MP constraint "rigid_link"', m_rigid_link),
     ("modal_damping", "explicit", "unsupported", 'damping type "modal"', m_modal),
     ("linear_series", "explicit", "unsupported", 'time series type "Linear"',

@@ -32,6 +32,8 @@ const char* material_type_name(const NDMaterial& m) {
   return "PressureIndependMultiYield";
 }
 
+bool is_section(const NDMaterial& m) { return std::holds_alternative<ElasticSection3dData>(m.data); }
+
 bool has_material_stage(const NDMaterial& m) {
   return std::holds_alternative<PressureDependMultiYieldData>(m.data) ||
          std::holds_alternative<PressureIndependMultiYieldData>(m.data);
@@ -111,6 +113,14 @@ void require_minor(const Model& m, int minor, const std::string& what) {
   if (m.version.major == 0 && m.version.minor < minor) {
     invalid(what + " was added in schema 0." + std::to_string(minor) + ", but the file declares " +
             std::to_string(m.version.major) + "." + std::to_string(m.version.minor));
+  }
+}
+
+// An item schema 1.1 added (beams: /sections, /transformations, dispBeamColumn).
+void require_1_1(const Model& m, const std::string& what) {
+  if (m.version.major < 1 || (m.version.major == 1 && m.version.minor < 1)) {
+    invalid(what + " was added in schema 1.1, but the file declares " + std::to_string(m.version.major) + "." +
+            std::to_string(m.version.minor));
   }
 }
 
@@ -347,7 +357,70 @@ void read_materials(Group& root, Model& m) {
   mats.finish();
 }
 
-void read_elements(Group& root, Model& m) {
+// /sections/<tag> (schema 1.1): `section Elastic tag E A Iz Iy G J` (3D).
+void read_sections(Group& root, Model& m) {
+  auto secs = root.optional_group("sections");
+  if (!secs) return;
+  require_1_1(m, "/sections");
+  for (const auto& name : secs->children()) {
+    NDMaterial sec;
+    sec.tag = parse_tag(name, secs->path());
+    Group g = secs->group(name);
+    const std::string type = g.attr_string("type");
+    if (type != "Elastic") unsupported("section type " + quoted(type) + " in " + g.path(), "Elastic");
+    ElasticSection3dData d;
+    d.E = g.attr_double("E");
+    d.A = g.attr_double("A");
+    d.Iz = g.attr_double("Iz");
+    d.Iy = g.attr_double("Iy");
+    d.G = g.attr_double("G");
+    d.J = g.attr_double("J");
+    for (const auto& [k, v] : {std::pair<const char*, double>{"E", d.E}, {"A", d.A}, {"Iz", d.Iz}, {"Iy", d.Iy},
+                               {"G", d.G}, {"J", d.J}})
+      if (!(std::isfinite(v) && v > 0.0)) invalid(g.attr_item(k) + " must be finite and positive");
+    sec.data = d;
+    sec.meta = read_meta(g);
+    g.finish();
+    m.materials.push_back(std::move(sec));
+  }
+  secs->finish();
+}
+
+// /transformations/<tag> (schema 1.1): `geomTransf Linear|PDelta|Corotational tag vecxz
+// [-jntOffset dXi dYi dZi dXj dYj dZj]`.
+void read_transformations(Group& root, Model& m,
+                          std::map<std::int32_t, ElementGroup::Beam>& transformations) {
+  auto ts = root.optional_group("transformations");
+  if (!ts) return;
+  require_1_1(m, "/transformations");
+  for (const auto& name : ts->children()) {
+    const std::int32_t tag = parse_tag(name, ts->path());
+    Group g = ts->group(name);
+    ElementGroup::Beam b;
+    b.transformation = tag;
+    const std::string type = g.attr_string("type");
+    if (type == "Linear") b.transf = 0;
+    else if (type == "PDelta") b.transf = 1;
+    else if (type == "Corotational") b.transf = 2;  // refused by check_supported until ported
+    else invalid(g.attr_item("type") + ": " + quoted(type) + " is not Linear, PDelta or Corotational");
+    const auto v = g.attr_double_array("vecxz", 3);
+    require_finite(v, g.attr_item("vecxz"));
+    if (v[0] == 0.0 && v[1] == 0.0 && v[2] == 0.0) invalid(g.attr_item("vecxz") + " must not be zero");
+    b.vecxz = {v[0], v[1], v[2]};
+    for (const char* k : {"joint_offset_i", "joint_offset_j"}) {
+      if (!g.has_attr(k)) continue;
+      const auto o = g.attr_double_array(k, 3);
+      require_finite(o, g.attr_item(k));
+      auto& dst = std::string(k) == "joint_offset_i" ? b.offset_i : b.offset_j;
+      dst = {o[0], o[1], o[2]};
+    }
+    g.finish();
+    transformations[tag] = b;
+  }
+  ts->finish();
+}
+
+void read_elements(Group& root, Model& m, const std::map<std::int32_t, ElementGroup::Beam>& transformations) {
   Group els = root.group("elements");
   for (const auto& id : els.children()) {
     Group g = els.group(id);
@@ -356,7 +429,41 @@ void read_elements(Group& root, Model& m) {
     const std::string type = g.attr_string("type");
     if (type == "stdBrick") eg.type = ElementType::StdBrick;
     else if (type == "SSPbrick") eg.type = ElementType::SSPbrick;
-    else unsupported("element type " + quoted(type) + " in " + g.path(), "stdBrick, SSPbrick");
+    else if (type == "dispBeamColumn") eg.type = ElementType::DispBeamColumn;
+    else unsupported("element type " + quoted(type) + " in " + g.path(), "stdBrick, SSPbrick, dispBeamColumn");
+
+    if (eg.type == ElementType::DispBeamColumn) {
+      require_1_1(m, g.path() + " (type \"dispBeamColumn\")");
+      eg.material = g.attr_int("section");
+      const std::int32_t t = g.attr_int("transformation");
+      const auto it = transformations.find(t);
+      if (it == transformations.end())
+        invalid(g.attr_item("transformation") + ": transformation " + std::to_string(t) + " does not exist");
+      eg.beam = it->second;
+      eg.beam.points = g.attr_int("integration_points");
+      const auto density = g.opt_attr_double("density");
+      const auto mpl = g.opt_attr_double("mass_per_length");
+      if (density && mpl) invalid(g.path() + ": give density or mass_per_length, not both");
+      if (density) {
+        if (!(std::isfinite(*density) && *density >= 0.0)) invalid(g.attr_item("density") + " must be finite and >= 0");
+        eg.beam.density = *density;
+      }
+      if (mpl) {
+        if (!(std::isfinite(*mpl) && *mpl >= 0.0)) invalid(g.attr_item("mass_per_length") + " must be finite and >= 0");
+        eg.beam.mass_per_length = *mpl;
+      }
+      eg.beam.consistent_mass = g.opt_attr_bool("consistent_mass").value_or(false);
+      const int nn = node_count(eg.type);
+      auto tags = g.dataset_int("tags");
+      auto conn = g.dataset_int("connectivity", nn);
+      if (conn.rows() != tags.rows()) invalid(g.path() + ": tags and connectivity must have the same number of rows");
+      eg.tags = std::move(tags.data);
+      eg.connectivity = std::move(conn.data);
+      eg.meta = read_meta(g);
+      g.finish();
+      m.elements.push_back(std::move(eg));
+      continue;
+    }
 
     eg.material = g.attr_int("material");
     const auto b = g.attr_double_array("body_force", 3);
@@ -929,16 +1036,18 @@ void validate(Model& m) {
   };
 
   // Materials.
-  std::unordered_set<std::int32_t> materials;
-  for (const auto& mat : m.materials) materials.insert(mat.tag);
+  std::unordered_set<std::int32_t> materials, sections;
+  for (const auto& mat : m.materials) (is_section(mat) ? sections : materials).insert(mat.tag);
 
   // Elements: material exists, nodes exist with the element's DOFs, unique tags.
   std::unordered_set<std::int32_t> element_tags;
   for (const auto& g : m.elements) {
     const std::string where = "/elements/" + g.id;
-    if (!materials.count(g.material)) {
-      invalid(where + ": material " + std::to_string(g.material) + " does not exist");
+    const bool beam = g.type == ElementType::DispBeamColumn;
+    if (!(beam ? sections : materials).count(g.material)) {
+      invalid(where + (beam ? ": section " : ": material ") + std::to_string(g.material) + " does not exist");
     }
+    const int need_ndf = beam ? 6 : 3;
     const int nn = node_count(g.type);
     for (std::size_t e = 0; e < g.size(); ++e) {
       const auto tag = g.tags[e];
@@ -947,9 +1056,9 @@ void validate(Model& m) {
       for (int k = 0; k < nn; ++k) {
         const auto node = g.connectivity[e * nn + k];
         const int ndf = ndf_of(node, where + "/connectivity (element " + std::to_string(tag) + ")");
-        if (ndf != 3) {
-          invalid(where + ": element " + std::to_string(tag) + " (" + to_string(g.type) +
-                  ") needs 3 DOFs at node " + std::to_string(node) + ", which has ndf " +
+        if (ndf != need_ndf) {
+          invalid(where + ": element " + std::to_string(tag) + " (" + to_string(g.type) + ") needs " +
+                  std::to_string(need_ndf) + " DOFs at node " + std::to_string(node) + ", which has ndf " +
                   std::to_string(ndf));
         }
       }
@@ -1188,7 +1297,7 @@ Model read_model(const std::string& filename) {
 
   // Root groups that a later schema may define: report them as unsupported, not as typos.
   static const std::set<std::string> known = {
-      "nodes", "materials", "elements", "mass", "constraints", "damping",
+      "nodes", "materials", "sections", "transformations", "elements", "mass", "constraints", "damping",
       "time_series", "patterns", "recorders", "process"};
   for (const auto& c : root.children()) {
     if (!known.count(c)) unsupported("/" + c, "the groups of schema v0 (schema/v0/README.md)");
@@ -1196,7 +1305,10 @@ Model read_model(const std::string& filename) {
 
   read_nodes(root, m);
   read_materials(root, m);
-  read_elements(root, m);
+  read_sections(root, m);
+  std::map<std::int32_t, ElementGroup::Beam> transformations;
+  read_transformations(root, m, transformations);
+  read_elements(root, m, transformations);
   read_mass(root, m);
   read_constraints(root, m);
   read_damping(root, m);
