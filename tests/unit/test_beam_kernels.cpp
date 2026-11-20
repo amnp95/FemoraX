@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "../common/reference_assembly.hpp"
+#include "../common/synthetic_models.hpp"
 #include "compile/batches.hpp"
 #include "physics/elements/disp_beam_3d.hpp"
 #include "physics/sections/elastic_section_3d.hpp"
@@ -506,6 +507,127 @@ TEST(BeamKernels, NodalMassesEnterTheStableStep) {
   femorax::exec::RunOptions o;
   o.verbose = false;
   EXPECT_NO_THROW(femorax::exec::run_model(run, o));
+}
+
+// The local time stepping checkpoint for beams (docs/design.md, "Beams", step 6): a steel pile
+// along the centre line of an undamped 4 x 4 x 8 soil column, its 6-DOF nodes tied to the soil
+// nodes in x, y, z (equalDOF), base shaking with a smooth pulse. The pile's stable step is far
+// below the soil's, so LTS puts the pile and the soil around it on fine levels; LTS at the soil's
+// step must follow a global run at the finest level's step.
+TEST(BeamKernels, LocalTimeSteppingWithAPileInSoil) {
+  femorax::testing::ColumnSpec cs;
+  cs.nx = cs.ny = 4;
+  cs.nz = 8;
+  cs.damping = false;
+  Model m = femorax::testing::soil_column(cs);
+  m.equal_dof = {};
+  for (auto& g : m.elements) g.body_force = {0.0, 0.0, 0.0};
+  const int NX = cs.nx + 1, NY = cs.ny + 1;
+  auto soil_tag = [&](int i, int j, int k) { return 1 + i + NX * (j + NY * k); };
+  // The pile: nodes 10001.. at the soil's centre-line nodes, one beam per soil layer of nodes.
+  m.materials.push_back({1, femorax::io::ElasticSection3dData{2.0e8, 0.05, 4.0e-4, 4.0e-4, 7.7e7, 8.0e-4}, {}});
+  femorax::io::ElementGroup pile;
+  pile.id = "pile";
+  pile.type = femorax::io::ElementType::DispBeamColumn;
+  pile.material = 1;
+  pile.beam.vecxz = {1.0, 0.0, 0.0};
+  pile.beam.points = 3;
+  pile.beam.density = 7.8;
+  for (int k = 0; k <= cs.nz; ++k) {
+    const int ts = soil_tag(2, 2, k);
+    std::size_t idx = 0;
+    while (m.nodes.tags[idx] != ts) ++idx;
+    m.nodes.tags.push_back(10001 + k);
+    m.nodes.ndf.push_back(6);
+    m.nodes.coords.insert(m.nodes.coords.end(), {m.nodes.coords[3 * idx], m.nodes.coords[3 * idx + 1],
+                                                 m.nodes.coords[3 * idx + 2]});
+    for (int d = 1; d <= 3; ++d) {
+      m.equal_dof.retained.push_back(ts);
+      m.equal_dof.constrained.push_back(10001 + k);
+      m.equal_dof.dof.push_back(d);
+    }
+    if (k < cs.nz) {
+      pile.tags.push_back(50001 + k);
+      pile.connectivity.insert(pile.connectivity.end(), {10001 + k, 10002 + k});
+    }
+  }
+  m.elements.push_back(pile);
+  // The stable steps, and the coarse step (0.9 of the soil's).
+  femorax::compile::CompileOptions co;
+  co.renumbering = femorax::compile::Renumbering::Off;
+  const auto c = femorax::compile::compile_model(m, co);
+  double soil_dt = 1e300, pile_dt = 1e300;
+  {
+    femorax::exec::InternalForce force(c, femorax::exec::GeometryCache::Auto);
+    const auto dts = force.element_critical_dts(femorax::ExplicitScheme::CentralDifference);
+    for (std::size_t b = 0; b < dts.size(); ++b)
+      for (const double x : dts[b])
+        (c.batches[b].element == femorax::io::ElementType::DispBeamColumn ? pile_dt : soil_dt) =
+            std::min(c.batches[b].element == femorax::io::ElementType::DispBeamColumn ? pile_dt : soil_dt, x);
+  }
+  const double dt = 0.9 * soil_dt;
+  const int steps = 150;
+  // A smooth base pulse (zero value and slope at t = 0): the start from rest is step-independent.
+  auto with_motion = [&](Model mm, double step, int n, const std::string& file, bool lts,
+                         femorax::exec::RunReport* rep) {
+    femorax::io::PathSeries ps;
+    ps.tag = 1;
+    ps.dt = step;
+    const double T = 40 * dt;
+    for (int k = 0; k <= n + 2; ++k) {
+      const double t = k * step;
+      ps.values.push_back(t < T ? std::pow(std::sin(M_PI * t / T), 2) : 0.0);
+    }
+    mm.time_series.push_back(ps);
+    mm.patterns.push_back({2, 1, 1, 0.0, 1.0, {}});
+    femorax::io::NodeRecorder nr;
+    nr.file = temp_file(file);
+    nr.response = femorax::io::NodeResponse::Disp;
+    nr.time = true;
+    nr.precision = 17;
+    for (int k = 0; k <= cs.nz; ++k) nr.nodes.push_back(10001 + k);  // the pile
+    nr.dofs = {1, 5};                                                 // x and the rotation about y
+    mm.recorders.push_back({"d", nr, {}});
+    mm.process.push_back({"0", "", femorax::io::RecorderStep{"d"}});
+    mm.process.push_back({"1", "", femorax::io::PatternStep{2}});
+    femorax::io::AnalysisStep a;
+    a.name = "shake";
+    a.dt = step;
+    a.num_steps = n;
+    a.integrator = femorax::io::Integrator::CentralDifference;
+    mm.process.push_back({"2", "", a});
+    femorax::exec::RunOptions o;
+    o.verbose = false;
+    o.renumbering = femorax::compile::Renumbering::Off;
+    o.local_time_stepping = lts;
+    const auto r = femorax::exec::run_model(mm, o);
+    if (rep) *rep = r;
+    return read_rows(nr.file);
+  };
+  femorax::exec::RunReport rep;
+  const auto lts = with_motion(m, dt, steps, "lts.txt", true, &rep);
+  const auto& st = rep.stages.at(0);
+  const int p = st.lts_substeps;
+  std::printf("[ pile in soil: soil step %.4e, pile step %.4e (ratio %.1f); %d levels, %d substeps, %lld fine "
+              "equations, %lld of %lld elements in the substeps, estimated gain %.2fx ]\n",
+              soil_dt, pile_dt, soil_dt / pile_dt, st.lts_levels, p, static_cast<long long>(st.lts_fine_equations),
+              static_cast<long long>(st.lts_substep_elements), static_cast<long long>(rep.elements), st.lts_speedup);
+  ASSERT_GE(st.lts_levels, 2);
+  const auto fine = with_motion(m, dt / p, steps * p, "fine.txt", false, nullptr);
+  ASSERT_EQ(lts.size(), static_cast<std::size_t>(steps));
+  double peak = 0.0, err = 0.0;
+  for (int k = 0; k < steps; ++k) {
+    const auto& a = lts[static_cast<std::size_t>(k)];
+    const auto& b = fine[static_cast<std::size_t>((k + 1) * p - 1)];
+    for (std::size_t col = 1; col < a.size(); col += 2) {  // x displacements
+      peak = std::max(peak, std::abs(b[col]));
+      err = std::max(err, std::abs(a[col] - b[col]));
+    }
+  }
+  std::printf("[ pile x displacement, LTS at the soil's step against a global run at dt/%d: %.2e of the peak %.3e ]\n",
+              p, err / peak, peak);
+  EXPECT_GT(peak, 0.0);
+  EXPECT_LE(err, 1e-2 * peak);  // measured 3.05e-3 (the coarse step's time discretization)
 }
 
 }  // namespace

@@ -1125,6 +1125,15 @@ cantilever (PDelta with a joint offset, -mass plus a nodal mass, base shaking), 
 beam groups, validates it and runs it implicit (Newmark) and explicit (`--explicit`): explicit
 against implicit within 1.4e-4 of the peak (their step sizes). Next: the pile in a soil column
 against OpenSees and the LTS checkpoint.
+The LTS checkpoint done (2026-11-20, `BeamKernels.LocalTimeSteppingWithAPileInSoil`): a steel pile
+along the centre line of an undamped 4 x 4 x 8 soil column, its 6-DOF nodes tied to the soil in
+x, y, z (equalDOF), a smooth base pulse. The pile's stable step is 17.6 times smaller than the
+soil's: LTS takes 6 levels (32 substeps of the fine equations with the two-level scheme), 40 of
+the 136 elements in the substeps, an estimated 3.2x over a global run at the pile's step; the
+pile's motion under LTS at 0.9 of the soil's step equals a global run at dt / 32 within 3.05e-3
+of the peak (the coarse step's time discretization). So the substepping works for beams tied
+into soil (the user's question, 2026-11-19); the multilevel scheme (3c) would gain more here,
+since every fine equation now takes the finest level's 32 substeps.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
