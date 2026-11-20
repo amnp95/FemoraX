@@ -53,10 +53,18 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   Compiled c;
   c.ordering = compute_ordering(m, opt.renumbering);
   c.dofs = number_dofs(m, c.ordering.node_order);
-  if (c.dofs.num_constrained() > 0)
-    throw io::UnsupportedComponent("unsupported component: rigid links, rigid diaphragms and embedded nodes are "
-                                   "numbered (compile step) but not yet in the kernels (docs/design.md, \"Exact "
-                                   "constraints u = T q\", step 2)");
+  // Constraints step 2 (docs/design.md): the embedded node's translations run; rigid links,
+  // diaphragms and the rotation tie wait for their masses (block masses; the rot rows' weights
+  // sum to zero).
+  {
+    bool rot = false;
+    for (const auto& en : m.embedded_nodes) rot |= en.rot;
+    if (!m.rigid_links.empty() || !m.rigid_diaphragms.empty() || rot)
+      throw io::UnsupportedComponent("unsupported component: rigid links, rigid diaphragms and the embedded node's "
+                                     "rotation tie are numbered but not yet in the kernels (their masses: docs/"
+                                     "design.md, \"Exact constraints u = T q\", step 2); embedded nodes' "
+                                     "translations are");
+  }
   const auto& n = c.dofs;
   const std::int32_t N = n.num_nodes();
 
@@ -74,7 +82,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   for (std::int32_t i = 0; i < N; ++i)
     for (std::int32_t d = 0; d < n.ndf[i]; ++d) {
       const std::int32_t q = n.equation(i, d);
-      if (q >= 0) c.eq_dof[q] = static_cast<std::int8_t>(d);
+      if (q >= 0 && q < n.num_equations) c.eq_dof[q] = static_cast<std::int8_t>(d);
     }
 
   // Materials by (kind, tag): sections have a tag space of their own (io::is_section).
@@ -127,10 +135,10 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
     members[pair].push_back(ge);
   }
 
-  c.lumped_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
-  c.lumped_alpha_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
-  c.nodal_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
-  c.nodal_alpha_mass.assign(static_cast<std::size_t>(n.num_equations), 0.0);
+  c.lumped_mass.assign(static_cast<std::size_t>(n.num_slots), 0.0);  // slots contracted below
+  c.lumped_alpha_mass.assign(static_cast<std::size_t>(n.num_slots), 0.0);  // slots contracted below
+  c.nodal_mass.assign(static_cast<std::size_t>(n.num_slots), 0.0);  // slots contracted below
+  c.nodal_alpha_mass.assign(static_cast<std::size_t>(n.num_slots), 0.0);  // slots contracted below
   for (const auto& [pair, list] : members) {
     registry::for_each_pair([&]<class E, class M>(int index) {
       if (index != pair) return;
@@ -225,7 +233,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
           c.lumped_alpha_mass[q] += ps.damping.alphaM * mk[k];
         }
       }
-      if (opt.build_coloring) color(b, n.num_equations);
+      if (opt.build_coloring) color(b, n.num_slots);
       c.batches.push_back(std::move(b));
     });
   }
@@ -273,6 +281,20 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
         }
     for (std::size_t q = 0; q < touching.size(); ++q)
       if (touching[q] > 0) c.nodal_mass_share[q] = c.nodal_mass[q] / touching[q];
+  }
+  // The constrained DOFs' masses onto their equations (row-sum lumping of T^T M T: exact total
+  // mass and centre of mass for rows whose weights sum to one, the embedded translations), and
+  // the vectors back to equation length. The shares above keep the slots: an element on a
+  // constrained DOF sees only that DOF's own nodal mass in its stable step (conservative).
+  if (n.num_constrained() > 0) {
+    for (auto* v : {&c.lumped_mass, &c.lumped_alpha_mass, &c.nodal_mass, &c.nodal_alpha_mass}) {
+      for (std::int32_t k = 0; k < n.num_constrained(); ++k) {
+        const double ms = (*v)[static_cast<std::size_t>(n.num_equations + k)];
+        for (auto t = n.con_start[static_cast<std::size_t>(k)]; t < n.con_start[static_cast<std::size_t>(k) + 1]; ++t)
+          (*v)[static_cast<std::size_t>(n.con_eq[static_cast<std::size_t>(t)])] += n.con_weight[static_cast<std::size_t>(t)] * ms;
+      }
+      v->resize(static_cast<std::size_t>(n.num_equations));
+    }
   }
   return c;
 }

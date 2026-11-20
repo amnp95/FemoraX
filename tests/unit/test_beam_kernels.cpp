@@ -630,4 +630,116 @@ TEST(BeamKernels, LocalTimeSteppingWithAPileInSoil) {
   EXPECT_LE(err, 1e-2 * peak);  // measured 3.05e-3 (the coarse step's time discretization)
 }
 
+// Constraints step 2 (docs/design.md, "Exact constraints u = T q"): the pile tied into the soil
+// column by embedded nodes (each pile node in a brick of which its soil node is a corner, so the
+// weights are one at that corner and zero elsewhere) runs as the same pile tied by equalDOF, to
+// rounding: an explicit CentralDifference run under base shaking, the pile's x displacements.
+TEST(BeamKernels, EmbeddedPileRunsAsTheEqualDofPile) {
+  auto pile_model = [](bool embedded) {
+    femorax::testing::ColumnSpec cs;
+    cs.nx = cs.ny = 4;
+    cs.nz = 8;
+    cs.damping = false;
+    Model m = femorax::testing::soil_column(cs);
+    m.equal_dof = {};
+    for (auto& g : m.elements) g.body_force = {0.0, 0.0, 0.0};
+    const int NX = cs.nx + 1, NY = cs.ny + 1;
+    auto soil_tag = [&](int i, int j, int k) { return 1 + i + NX * (j + NY * k); };
+    m.materials.push_back({1, femorax::io::ElasticSection3dData{2.0e8, 0.05, 4.0e-4, 4.0e-4, 7.7e7, 8.0e-4}, {}});
+    femorax::io::ElementGroup pile;
+    pile.id = "pile";
+    pile.type = femorax::io::ElementType::DispBeamColumn;
+    pile.material = 1;
+    pile.beam.vecxz = {1.0, 0.0, 0.0};
+    pile.beam.points = 3;
+    pile.beam.density = 7.8;
+    for (int k = 1; k <= cs.nz; ++k) {
+      const int ts = soil_tag(2, 2, k);
+      std::size_t idx = 0;
+      while (m.nodes.tags[idx] != ts) ++idx;
+      m.nodes.tags.push_back(10000 + k);
+      m.nodes.ndf.push_back(6);
+      m.nodes.coords.insert(m.nodes.coords.end(), {m.nodes.coords[3 * idx], m.nodes.coords[3 * idx + 1],
+                                                   m.nodes.coords[3 * idx + 2]});
+      if (embedded) {
+        // A brick that has the soil node as a corner.
+        int host = -1;
+        for (const auto& g : m.elements) {
+          if (g.type != femorax::io::ElementType::StdBrick) continue;
+          for (std::size_t e = 0; e < g.size() && host < 0; ++e)
+            for (int a = 0; a < 8; ++a)
+              if (g.connectivity[8 * e + static_cast<std::size_t>(a)] == ts) host = g.tags[e];
+          if (host >= 0) break;
+        }
+        m.embedded_nodes.push_back({10000 + k, host, false});
+      } else {
+        for (int d = 1; d <= 3; ++d) {
+          m.equal_dof.retained.push_back(ts);
+          m.equal_dof.constrained.push_back(10000 + k);
+          m.equal_dof.dof.push_back(d);
+        }
+      }
+      if (k < cs.nz) {
+        pile.tags.push_back(50000 + k);
+        pile.connectivity.insert(pile.connectivity.end(), {10000 + k, 10001 + k});
+      }
+    }
+    m.elements.push_back(pile);
+    return m;
+  };
+  auto run_it = [&](Model mm, const std::string& file, double dt, int n) {
+    femorax::io::PathSeries ps;
+    ps.tag = 1;
+    ps.dt = dt;
+    const double T = 40 * dt;
+    for (int k = 0; k <= n + 2; ++k) {
+      const double t = k * dt;
+      ps.values.push_back(t < T ? std::pow(std::sin(M_PI * t / T), 2) : 0.0);
+    }
+    mm.time_series.push_back(ps);
+    mm.patterns.push_back({2, 1, 1, 0.0, 1.0, {}});
+    femorax::io::NodeRecorder nr;
+    nr.file = temp_file(file);
+    nr.response = femorax::io::NodeResponse::Disp;
+    nr.time = true;
+    nr.precision = 17;
+    for (int k = 1; k <= 8; ++k) nr.nodes.push_back(10000 + k);
+    nr.dofs = {1, 5};
+    mm.recorders.push_back({"d", nr, {}});
+    mm.process.push_back({"0", "", femorax::io::RecorderStep{"d"}});
+    mm.process.push_back({"1", "", femorax::io::PatternStep{2}});
+    femorax::io::AnalysisStep a;
+    a.name = "shake";
+    a.dt = dt;
+    a.num_steps = n;
+    a.integrator = femorax::io::Integrator::CentralDifference;
+    mm.process.push_back({"2", "", a});
+    femorax::exec::RunOptions o;
+    o.verbose = false;
+    femorax::exec::run_model(mm, o);
+    return read_rows(nr.file);
+  };
+  const Model tied = pile_model(false), emb = pile_model(true);
+  ASSERT_EQ(emb.embedded_nodes.size(), 8u);
+  double dt = 0.0;
+  {
+    const auto c = femorax::compile::compile_model(tied, femorax::compile::CompileOptions{});
+    femorax::exec::InternalForce f(c, femorax::exec::GeometryCache::Auto);
+    dt = 0.5 * f.min_critical_dt(femorax::ExplicitScheme::CentralDifference);
+  }
+  const int steps = 300;
+  const auto a = run_it(tied, "tied.txt", dt, steps), b = run_it(emb, "embedded.txt", dt, steps);
+  ASSERT_EQ(a.size(), b.size());
+  double peak = 0.0, err = 0.0;
+  for (std::size_t k = 0; k < a.size(); ++k)
+    for (std::size_t col = 1; col < a[k].size(); col += 2) {
+      peak = std::max(peak, std::abs(a[k][col]));
+      err = std::max(err, std::abs(a[k][col] - b[k][col]));
+    }
+  std::printf("[ embedded pile against the equalDOF pile (explicit, %d steps): %.2e of the peak %.3e ]\n", steps,
+              err / peak, peak);
+  EXPECT_GT(peak, 0.0);
+  EXPECT_LE(err, 1e-10 * peak);
+}
+
 }  // namespace

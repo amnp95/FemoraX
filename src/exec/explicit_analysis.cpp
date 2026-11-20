@@ -193,7 +193,8 @@ void check_masses(const compile::Compiled& c, const io::AnalysisStep& an) {
   for (std::int32_t node = 0; node < c.dofs.num_nodes(); ++node)
     for (int d = 0; d < c.dofs.ndf[static_cast<std::size_t>(node)]; ++d) {
       const std::int32_t q = c.dofs.equation(node, d);
-      if (q >= 0 && !(c.lumped_mass[static_cast<std::size_t>(q)] > 0.0))
+      // A constrained DOF's slot (embedded node): its mass is on its host's equations.
+      if (q >= 0 && q < c.dofs.num_equations && !(c.lumped_mass[static_cast<std::size_t>(q)] > 0.0))
         throw io::ModelError("stage \"" + an.name + "\": node " + std::to_string(c.dofs.node_tag[static_cast<std::size_t>(node)]) +
                              " DOF " + std::to_string(d + 1) +
                              " has no mass: an explicit stage needs mass on every free DOF (give its elements a "
@@ -290,6 +291,22 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
 
   const double t_setup = now();
   InternalForce force(c, GeometryCache::Auto);
+  if (force.has_constraints()) {
+    // Embedded nodes (docs/design.md, "Exact constraints u = T q", step 2): explicit stages with
+    // displacement recorders so far.
+    if (!model.drm_patterns.empty())
+      throw io::UnsupportedComponent("unsupported component: H5DRM with embedded nodes (not yet)");
+    for (const auto& r : model.recorders) {
+      const auto* nr = std::get_if<io::NodeRecorder>(&r.data);
+      if (!nr || nr->response != io::NodeResponse::Disp)
+        throw io::UnsupportedComponent("unsupported component: recorder " + r.name +
+                                       " with embedded nodes: node displacement recorders only so far");
+    }
+    for (const auto& st : model.process)
+      if (const auto* a = std::get_if<io::AnalysisStep>(&st.step); a && !io::is_explicit(a->integrator))
+        throw io::UnsupportedComponent("unsupported component: the implicit stage \"" + a->name +
+                                       "\" with embedded nodes: explicit stages only so far");
+  }
   const Choice choice = choose_force_settings(force, c);
   rep.force_settings = to_string(choice.settings);
   rep.force_settings_source = choice.source;
@@ -476,8 +493,10 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       // domainChanged: the integrator starts from the committed state.
       const double dt = an->dt;
       const Index n = static_cast<Index>(neq);
-      if (ed) Kokkos::deep_copy(v_elem, v_rec);  // Utdot = committed velocity
-      else Kokkos::deep_copy(um, u);             // Utm1 = Ut ("assuming Ut-1 = Ut")
+      // The equations only: u and v_elem also span the embedded nodes' slots (InternalForce).
+      const std::pair<std::size_t, std::size_t> eqs{0, static_cast<std::size_t>(neq)};
+      if (ed) Kokkos::deep_copy(Kokkos::subview(v_elem, eqs), v_rec);  // Utdot = committed velocity
+      else Kokkos::deep_copy(um, Kokkos::subview(u, eqs));             // Utm1 = Ut ("assuming Ut-1 = Ut")
       const double c2 = 0.5 / dt, c3 = 1.0 / (dt * dt);
       const double t0 = now();
       std::int64_t k = 0;
@@ -487,7 +506,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       // field (the finish kernels restore it). The loads and the DRM forces are held at t.
       const double tau2 = (dt / lcoef.p) * (dt / lcoef.p);
       auto lts_substeps = [&](double t) {
-        Kokkos::deep_copy(un, u);
+        Kokkos::deep_copy(un, Kokkos::subview(u, std::pair<std::size_t, std::size_t>{0, static_cast<std::size_t>(neq)}));
         Kokkos::deep_copy(ext, 0.0);
         motions.apply_drm(t, ext);
         force.step = StepContext{t, dt, 1};
@@ -536,6 +555,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         ++k;
         force.commit_state();  // Domain::commit: the materials' trial state becomes committed
         motions.commit_drm();
+        force.expand_slots(u);  // the constrained nodes' displacements (embedded nodes)
         recorders.record(time, u, v_rec, a);
         if (recheck && k % opt.stable_step_check_interval == 0) {
           // History materials change their stiffness during the stage (PressureDependMultiYield

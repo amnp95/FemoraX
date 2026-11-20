@@ -103,10 +103,11 @@ extern template void register_batches<15>(BatchFactory*);
 using batch_impl::upload;
 
 InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
-    : u("u", static_cast<std::size_t>(c.dofs.num_equations)),
-      v("v", static_cast<std::size_t>(c.dofs.num_equations)),
-      f("f", static_cast<std::size_t>(c.dofs.num_equations)),
+    : u("u", static_cast<std::size_t>(std::max(c.dofs.num_slots, c.dofs.num_equations))),
+      v("v", static_cast<std::size_t>(std::max(c.dofs.num_slots, c.dofs.num_equations))),
+      f("f", static_cast<std::size_t>(std::max(c.dofs.num_slots, c.dofs.num_equations))),
       neq_(c.dofs.num_equations),
+      nslots_(std::max(c.dofs.num_slots, c.dofs.num_equations)),
       nnodes_(c.dofs.num_nodes()) {
   coords_ = upload("coords", c.coords);
   eq_dof_ = upload("eq_dof", c.eq_dof.empty() ? std::vector<std::int8_t>(static_cast<std::size_t>(neq_), 0) : c.eq_dof);
@@ -164,7 +165,34 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
     batches_.push_back(factory[static_cast<std::size_t>(hb.pair)](hb, offsets[i], has_cache_ && cacheable, coords_,
                                                                   nnodes_));
   }
-  gather_ = SlotGather(nslots, neq_, pairs);
+  gather_ = SlotGather(nslots, nslots_, pairs);
+  // Exact constraints (docs/design.md, "Exact constraints u = T q"): each slot's row in
+  // equations (expand), and each equation's slots in a fixed order (contract).
+  if (nslots_ > neq_) {
+    const auto& d = c.dofs;
+    std::vector<std::int64_t> cs(d.con_start.begin(), d.con_start.end());
+    con_start_ = upload("con_start", cs);
+    con_eq_ = upload("con_eq", d.con_eq);
+    con_w_ = upload("con_weight", d.con_weight);
+    std::vector<std::vector<std::pair<Index, double>>> of_eq(static_cast<std::size_t>(neq_));
+    for (Index k = 0; k < nslots_ - neq_; ++k)
+      for (auto t = d.con_start[static_cast<std::size_t>(k)]; t < d.con_start[static_cast<std::size_t>(k) + 1]; ++t)
+        of_eq[static_cast<std::size_t>(d.con_eq[static_cast<std::size_t>(t)])].push_back(
+            {neq_ + k, d.con_weight[static_cast<std::size_t>(t)]});
+    std::vector<std::int64_t> es{0};
+    std::vector<Index> eslot;
+    std::vector<double> ew;
+    for (const auto& l : of_eq) {
+      for (const auto& [sl, w] : l) {
+        eslot.push_back(sl);
+        ew.push_back(w);
+      }
+      es.push_back(static_cast<std::int64_t>(eslot.size()));
+    }
+    eq_start_ = upload("eq_con_start", es);
+    eq_slot_ = upload("eq_con_slot", eslot);
+    eq_w_ = upload("eq_con_weight", ew);
+  }
   // The nodal masses' shares, for the stable step of elements that take them (beams).
   if (!c.nodal_mass_share.empty()) {
     bool any = false;
@@ -250,8 +278,45 @@ ForceSettings InternalForce::resolve(const ForceSettings& s) const {
   return r;
 }
 
+void InternalForce::expand_slots(const Vec& x) const {
+  if (nslots_ <= neq_) return;
+  const auto cs = con_start_;
+  const auto ce = con_eq_;
+  const auto cw = con_w_;
+  const Index n = neq_;
+  Kokkos::parallel_for(
+      "constraint_expand", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, nslots_ - neq_),
+      KOKKOS_LAMBDA(const Index k) {
+        double sum = 0.0;
+        for (auto t = cs(k); t < cs(k + 1); ++t) sum += cw(t) * x(ce(t));
+        x(n + k) = sum;
+      });
+}
+
+void InternalForce::contract_slots(const Vec& y) const {
+  if (nslots_ <= neq_) return;
+  const auto es = eq_start_;
+  const auto sl = eq_slot_;
+  const auto ew = eq_w_;
+  Kokkos::parallel_for(
+      "constraint_contract", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_), KOKKOS_LAMBDA(const Index q) {
+        double sum = 0.0;
+        for (auto t = es(q); t < es(q + 1); ++t) sum += ew(t) * y(sl(t));
+        y(q) += sum;
+      });
+}
+
+void InternalForce::require_no_constraints(const char* what) const {
+  if (nslots_ > neq_)
+    throw io::UnsupportedComponent(std::string("unsupported component: ") + what +
+                                   " with embedded nodes (exact constraints): explicit stages only so far "
+                                   "(docs/design.md, \"Exact constraints u = T q\", step 2)");
+}
+
 void InternalForce::compute(const ForceSettings& settings) {
   for (auto& b : batches_) b->set_step(step);
+  expand_slots(u);
+  expand_slots(v);
   const ForceSettings s = resolve(settings);
   if (s.scatter == Scatter::Colored && !has_coloring_) {
     Kokkos::abort("InternalForce: colored scatter needs CompileOptions::build_coloring");
@@ -271,6 +336,7 @@ void InternalForce::compute(const ForceSettings& settings) {
         "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_),
         KOKKOS_LAMBDA(const Index q) { ff(q) += am(q) * vv(q); });
   }
+  contract_slots(f);  // the constrained DOFs' forces onto their equations (embedded nodes)
 }
 
 int InternalForce::add_element_subset(const std::vector<std::vector<std::uint8_t>>& member) {
@@ -294,6 +360,8 @@ std::int64_t InternalForce::subset_elements(int subset) const {
 
 void InternalForce::compute_subset(const ForceSettings& settings, int subset) {
   for (auto& b : batches_) b->set_step(step);
+  expand_slots(u);
+  expand_slots(v);
   const ForceSettings s = resolve(settings);
   const Subset& sub = subsets_[static_cast<std::size_t>(subset)];
   for (std::size_t bi = 0; bi < batches_.size(); ++bi)
@@ -305,6 +373,7 @@ void InternalForce::compute_subset(const ForceSettings& settings, int subset) {
         "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_),
         KOKKOS_LAMBDA(const Index q) { ff(q) += am(q) * vv(q); });
   }
+  contract_slots(f);
 }
 
 void InternalForce::drm_forces(int batch, const Kokkos::View<std::int32_t*, Space>& elems,
@@ -416,6 +485,7 @@ void InternalForce::enable_stored_tangents() {
 }
 
 void InternalForce::store_tangents(const Vec& u_at, const OperatorSettings& settings) {
+  require_no_constraints("the implicit operator");
   for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (!has_stored_tangents()) Kokkos::abort("InternalForce::store_tangents: call enable_stored_tangents() first");
@@ -424,6 +494,7 @@ void InternalForce::store_tangents(const Vec& u_at, const OperatorSettings& sett
 
 void InternalForce::apply_operator(const OperatorCoefficients& k, const OperatorSettings& settings, const Vec& u_at,
                                    const Kokkos::View<const double*, Space>& x, const Vec& y) {
+  require_no_constraints("the implicit operator");
   for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (s.tangent == TangentSource::Stored && !has_stored_tangents())
@@ -442,6 +513,7 @@ void InternalForce::apply_operator(const OperatorCoefficients& k, const Operator
 
 void InternalForce::operator_diagonal(const OperatorCoefficients& k, const OperatorSettings& settings,
                                       const Vec& u_at, const Vec& d) {
+  require_no_constraints("the implicit operator");
   for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   if (s.tangent == TangentSource::Stored && !has_stored_tangents())
@@ -458,6 +530,7 @@ void InternalForce::operator_diagonal(const OperatorCoefficients& k, const Opera
 
 void InternalForce::mass_times_ground(int direction, const OperatorSettings& settings, const Vec& u_at,
                                       const Vec& y) {
+  require_no_constraints("the implicit operator");
   for (auto& b : batches_) b->set_step(step);
   const OperatorSettings s = resolve(settings);
   const Out out = s.scatter == Scatter::Gather ? Out::Slots : s.scatter == Scatter::Atomic ? Out::Atomic : Out::Plain;

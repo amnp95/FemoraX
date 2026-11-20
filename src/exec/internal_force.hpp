@@ -175,6 +175,13 @@ class InternalForce {
   // slots. Bit for bit what compute() would give if the others' forces are unchanged.
   void compute_subset(const ForceSettings& settings, int subset);
 
+  // Exact constraints (embedded nodes): u, v, f span the constrained DOFs' slots after the
+  // equations; compute fills them from the equations first and adds their forces back after.
+  // expand_slots(u) refreshes the slots of u (before recording a constrained node).
+  void expand_slots(const Vec& x) const;
+  void contract_slots(const Vec& y) const;
+  bool has_constraints() const { return nslots_ > neq_; }
+
   // Smallest stable explicit step over the elements of the chosen batches (docs/design.md,
   // "Stable time step"): all of them, or only those whose stable step can change during a
   // stage (contracts.hpp, stability_may_change), or only those whose step cannot.
@@ -196,7 +203,11 @@ class InternalForce {
   struct Batch;  // one per registered pair present (internal_force.cpp)
 
  private:
-  std::int32_t neq_ = 0, nnodes_ = 0;
+  std::int32_t neq_ = 0, nslots_ = 0, nnodes_ = 0;
+  Kokkos::View<std::int64_t*, Space> con_start_, eq_start_;
+  Kokkos::View<std::int32_t*, Space> con_eq_, eq_slot_;
+  Vec con_w_, eq_w_;
+  void require_no_constraints(const char* what) const;
   bool has_cache_ = false, has_coloring_ = true;
   std::int64_t cache_bytes_ = 0, stored_bytes_ = 0, last_plastic_points_ = 0;
   Vec coords_;

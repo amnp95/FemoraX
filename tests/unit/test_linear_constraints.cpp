@@ -11,7 +11,7 @@
 //   - the DOF numbering: constrained DOFs get slots after the equations, their rows in equations
 //     (through equalDOF groups, fixed DOFs dropped); a constrained DOF that is also fixed or tied
 //     by equalDOF is refused; an embedded node in a brick element of the model; the compile step
-//     refuses these constraints until the kernels have them.
+//     takes the embedded translations and refuses the rotation tie (its masses, step 2).
 
 #include <gtest/gtest.h>
 
@@ -286,8 +286,14 @@ TEST(LinearConstraints, EmbeddedNodeInABrickElementOfTheModel) {
   auto bad = m;
   bad.embedded_nodes[0].host = 8;
   EXPECT_THROW(femorax::compile::number_dofs(bad, femorax::compile::file_order(bad)), femorax::io::ModelError);
-  // The compile step refuses these constraints until the kernels have them.
-  EXPECT_THROW(femorax::compile::compile_model(m, femorax::compile::CompileOptions{}), femorax::io::UnsupportedComponent);
+  // The compile step takes the embedded node's translations (step 2) and refuses its rotation
+  // tie until the kernels have the masses for it.
+  EXPECT_NO_THROW(femorax::compile::compile_model(m, femorax::compile::CompileOptions{}));
+  auto with_rot = m;
+  with_rot.nodes.ndf.back() = 6;
+  with_rot.embedded_nodes[0].rot = true;
+  EXPECT_THROW(femorax::compile::compile_model(with_rot, femorax::compile::CompileOptions{}),
+               femorax::io::UnsupportedComponent);
 }
 
 }  // namespace

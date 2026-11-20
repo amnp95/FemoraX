@@ -1236,6 +1236,22 @@ Step 2's mechanics otherwise: the force object sizes u, v, f to num_slots; compu
 v into the slots before the kernels, gathers into all slots, then contracts the slots into the
 equations in a fixed order; the time loops keep their num_equations sizes; recorders read a
 constrained node after an expand.
+Step 2, first part done (2026-11-20): embedded nodes' translations in explicit stages.
+`InternalForce`'s u, v, f span the slots; `compute` and `compute_subset` expand u and v into the
+slots before the kernels and contract the slots' forces onto their equations after (each
+equation's slots in a fixed order: deterministic); the gather's targets include the slots. The
+compile step contracts the slots' masses (row-sum lumping, the embedded translations: exact total
+mass and centre of mass) and keeps the nodal-mass shares of the slots for the stable step (an
+element on a constrained DOF sees that DOF's own nodal mass: conservative). The explicit loop
+copies the equation part only and refreshes the slots before recording. Refused for now with a
+message: implicit stages, H5DRM, and recorders other than node displacements with embedded
+nodes; rigid links, diaphragms and the rotation tie (their masses). Test
+(`BeamKernels.EmbeddedPileRunsAsTheEqualDofPile`): the pile tied into the soil column by
+embedded nodes (each in a brick of which its soil node is a corner) runs as the pile tied by
+equalDOF within 5.2e-13 of the peak (explicit, 300 steps); its force at the same field within
+5.7e-14. Found by it: the contract step had first landed in the wrong function, so the beam's
+forces never reached the soil. Next: the implicit operator (extended copies of the solver's
+vectors), the block masses for rigid links and diaphragms, the rotation tie's mass.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
