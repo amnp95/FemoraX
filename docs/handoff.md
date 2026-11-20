@@ -368,10 +368,8 @@ schema 1.2, reader, fixtures, converter, 79d8a1a; against OpenSees, 19513ad: the
 d41014d; the targeted contraction and the constraint benchmarks, c67d827). Benchmarks still to be
 measured on TACC spr / gh (`benchmarks/run_all.sh`).
 
-Next: the force-based beam (plan approved, design.md "Beams: the force-based beam"). First the
-generic element-state extension (`NESTATE`, design.md there: the kernels hold history only per
-integration point today, `element_kernels.hpp` ~line 553), with a test that the existing elements
-keep their bits and memory; then step 1: the
+Next: the force-based beam (plan approved, design.md "Beams: the force-based beam"). The element
+point-state extension is done (`POINT_STATE`, `point_state_size<E>()`); step 1: the
 physics header `physics/elements/force_beam_3d.hpp` (`ForceBeam3d<Section, NIP>`, NIP 3-7, Lobatto
 points and weights from `LobattoBeamIntegration.cpp`), porting `ForceBeamColumn3d::update()`
 (lines 954-1420 of OpenSees 955ceb0: the three schemes, the subdivision, `f` and `vr` integration

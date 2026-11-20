@@ -1178,17 +1178,17 @@ State per element: committed `Se` (6), `kv` (36), the basic displacement `v` (6)
 section deformations `vs`, flexibility `fs` and resisting forces `Ssr` (ORDER, ORDER^2, ORDER), and the
 section's own state.
 
-**First, a generic contract extension: element state.** Today history state exists only per
-integration point, `Mat::NSTATE` per point (`element_kernels.hpp`: two buffers of
-`Mat::NSTATE * NGP * padded`, `PointArray` views). The force beam needs state of the element
-itself. The extension (written once, like the element constants): an optional trait `NESTATE`
-(doubles per element, 0 by default), two buffers per batch in the per-element layout
-`value[k * nElements + e]` (a `Strided` view per element), commit swaps them with the point state,
-`revertToLastCommit` copies them, the memory estimate counts them; `compute` (and the operator, the
-stable step, the element output) receive the committed and trial element state next to the point
-state. Every existing element has `NESTATE = 0`: the same code, state and bits (tested). The force
-beam keeps its per-point part (`vs`, `fs`, `Ssr`, the section state) as point state, and `Se`, `kv`, `v`
-as element state.
+**First, a generic contract extension: the element's point state (done 2026-11-20).** History
+state existed only as the material's `NSTATE` per integration point. An element may now declare
+`POINT_STATE` (doubles per point, at least its material's `NSTATE`; `NSTATE = NGP * POINT_STATE`):
+the kernels allocate, commit (swap) and revert that much per point (`point_state_size<E>()` in
+`contracts.hpp`; `init_state`, `has_state`), and the element reads it through the same point views.
+Chosen over a separate per-element buffer (planned first) because no kernel signature changes: every
+kernel already passes the element its points' committed and trial views. The force beam keeps each
+point's section data (`vs`, `fs`, `Ssr`, the section's own state) there, and spreads its element
+values (`Se`, `kv`, `v`, a flag for a fresh state) over the points' extra slots (a few doubles per
+point). An element that declares `POINT_STATE` starts from zeros (its update knows a fresh state).
+Existing elements declare nothing: the same state and bits.
 
 **Design.** Element state: the committed basic forces `Se` (6), the element stiffness `kv` (6 x 6,
 the inverse of the integrated flexibility) and each point's section deformations and section

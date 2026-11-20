@@ -340,6 +340,21 @@ FEMORAX_HD void stability_tangent(const typename M::Params& p, Strided<const dou
   else M::committed_tangent(p, committed, D);
 }
 
+// Doubles of history state per integration point: the element's POINT_STATE when it declares
+// one (an element with state of its own beside its material's: the force-based beam keeps its
+// section data and its element values there, read through the same point views), otherwise its
+// material's NSTATE. The kernels allocate, commit and revert this much per point.
+template <class E>
+constexpr int point_state_size() {
+  if constexpr (requires { E::POINT_STATE; }) {
+    static_assert(E::POINT_STATE >= E::Material::NSTATE, "POINT_STATE holds the material's state too");
+    static_assert(E::NSTATE == E::NGP * E::POINT_STATE, "NSTATE = NGP * POINT_STATE");
+    return E::POINT_STATE;
+  } else {
+    return E::Material::NSTATE;
+  }
+}
+
 // Whether the stable-step tangent can change during a stage; the explicit time loop re-checks
 // the stable step only where it can. Optional constant STABILITY_CONSTANT; without it, a
 // material without state is constant and one with state is not.

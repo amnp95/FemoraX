@@ -364,7 +364,7 @@ struct TypedBatch final : InternalForce::Batch {
     return static_cast<std::int64_t>(n) * 8;
   }
   TangentSymmetry tangent_symmetry() const override { return Elem::TANGENT; }
-  bool has_state() const override { return Elem::Material::NSTATE > 0; }
+  bool has_state() const override { return point_state_size<Elem>() > 0; }
   void element_output(int which, const Kokkos::View<Index*, Space>& elems, const Kokkos::View<Index*, Space>& rows,
                       const Vec& out, std::int64_t offset, const Vec& coords, Index N, const Vec& u) override {
     if constexpr (PointwiseElement<Elem>) {

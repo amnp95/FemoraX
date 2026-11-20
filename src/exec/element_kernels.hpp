@@ -47,8 +47,8 @@ struct DevBatch {
   // Element constants (ElementTermElement), per element: value[k * padded + e], k < NCONST.
   // Built with the geometry cache; without it the kernels recompute them.
   Vec constants;
-  // Material history state, two buffers (committed and trial) of Mat::NSTATE values per
-  // Gauss point: value[k * (NGP * padded) + e * NGP + gp]. state[current] is committed;
+  // History state, two buffers (committed and trial) of point_state_size<Elem>() values per
+  // Gauss point (the material's NSTATE unless the element declares POINT_STATE): value[k * (NGP * padded) + e * NGP + gp]. state[current] is committed;
   // commit swaps the roles (the update writes every trial value). Empty for materials
   // without state.
   Vec state[2];
@@ -550,10 +550,14 @@ namespace femorax::exec::kernels {
 template <class Elem>
 void init_state(DevBatch<Elem>& b) {
   using Mat = typename Elem::Material;
-  if constexpr (Mat::NSTATE > 0) {
-    const std::size_t n = static_cast<std::size_t>(Mat::NSTATE) * Elem::NGP * b.padded;
+  constexpr int PS = point_state_size<Elem>();  // the material's NSTATE unless the element sets it
+  if constexpr (PS > 0) {
+    const std::size_t n = static_cast<std::size_t>(PS) * Elem::NGP * b.padded;
     for (auto& s : b.state) s = Vec("material_state", n);
-    if constexpr (requires(const typename Mat::Params& q, Strided<double> v) { Mat::initial_state(q, v); }) {
+    // The material's initial state where the point holds the material's state alone; an element
+    // with its own point state starts from zeros (its update knows a fresh state).
+    if constexpr (PS == Mat::NSTATE &&
+                  requires(const typename Mat::Params& q, Strided<double> v) { Mat::initial_state(q, v); }) {
       const auto params = b.params;
       const auto param = b.param;
       const auto s0 = b.state[0], s1 = b.state[1];

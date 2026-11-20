@@ -399,4 +399,14 @@ INSTANTIATE_TEST_SUITE_P(Types, DispBeam3dReference,
                          ::testing::Values(femorax::CrdTransfType::Linear, femorax::CrdTransfType::PDelta),
                          [](const auto& tp) { return tp.param == femorax::CrdTransfType::Linear ? "Linear" : "PDelta"; });
 
+// The point state the kernels allocate (physics/contracts.hpp, point_state_size): the
+// material's NSTATE by default, the element's POINT_STATE when it declares one (the force-based
+// beam's section data and element values).
+struct WithPointState {
+  using Material = femorax::ElasticSection3d;
+  static constexpr int NGP = 3, POINT_STATE = 10, NSTATE = 30;
+};
+static_assert(femorax::point_state_size<femorax::DispBeam3d<femorax::ElasticSection3d, 3>>() == 0);
+static_assert(femorax::point_state_size<WithPointState>() == 10);
+
 }  // namespace
