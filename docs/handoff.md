@@ -357,3 +357,23 @@ ARM and Grace-Hopper.
 - WSL keeps Linux in one disk file on C: (`C:\Users\aminp\AppData\Local\wsl\{77eeef0c-...}\ext4.vhdx`,
   53 GB for 37 GB used, set sparse on 2026-11-10). C: was nearly full: free space inside
   Linux comes back to C: only after `sudo fstrim -av` (sparse) or a `diskpart` compaction.
+
+## 2026-11-20 (pvc node, second half)
+
+Done and pushed: constraints complete (rigid links and diaphragms with exact block masses,
+c865b78; H5DRM and every recorder with constraints, 8894b1b; the embedded rotation tie with the
+dominant lumping, ac3c4dd + 32b7cb6 (ac3c4dd was pushed with a failing test; fixed and noted);
+schema 1.2, reader, fixtures, converter, 79d8a1a; against OpenSees, 19513ad: the diaphragm frame to
+3.4e-15, the embedded pile converging to OpenSees' penalty as 1 / K; LTS with embedded nodes,
+d41014d; the targeted contraction and the constraint benchmarks, c67d827). Benchmarks still to be
+measured on TACC spr / gh (`benchmarks/run_all.sh`).
+
+Next: the force-based beam (plan approved, design.md "Beams: the force-based beam"), step 1: the
+physics header `physics/elements/force_beam_3d.hpp` (`ForceBeam3d<Section, NIP>`, NIP 3-7, Lobatto
+points and weights from `LobattoBeamIntegration.cpp`), porting `ForceBeamColumn3d::update()`
+(lines 954-1420 of OpenSees 955ceb0: the three schemes, the subdivision, `f` and `vr` integration
+by the section codes, `kv = f^-1`, convergence on |dW| < tol), `getInitialFlexibility` (2425),
+`getTangentStiff` / `getResistingForce` (759, 909) through the transformation, from the committed
+state each evaluation (design.md). Mirror `disp_beam_3d.hpp` for the transformation, mass and
+damping parts; tests: one element of an elastic cantilever exact for end loads; then an OpenSees
+driver like `tests/reference/drivers/disp_beam_column.cpp`.

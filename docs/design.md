@@ -1158,8 +1158,25 @@ originals.
   matrix-free operator path.
 - Integration points: Lobatto 3 to 7 (compile-time buckets; more is refused with a message).
 - A non-converged element iteration fails the step: implicit stages retry and substep as Femora's
-  recovery does; explicit stages stop, naming the element (a deliberate difference: OpenSees warns
-  and continues by default; docs/deviations.md when it lands).
+  recovery does; explicit stages stop, naming the element. This is OpenSees' behaviour too
+  (`update()` prints a warning and returns -1, which fails the analysis step).
+
+**Where each update starts (read in OpenSees, 2026-11-20).** OpenSees' `update()` is incremental
+from the last *trial* state: `dv = getBasicIncrDeltaDisp()` (the change since the last Newton
+iterate), its trial `Se`, `kv`, `vs`, `fs`, `Ssr` carried from iterate to iterate (a warm start),
+and three schemes in turn (Newton; the initial flexibility; the initial flexibility first, then
+Newton), each with `maxIters` (10 x for the second), then subdivision of `dv` (`maxSubdivisions`,
+1 by default: none). FemoraX's element contract computes the trial state from the committed state
+(`compute(committed, trial)`), which keeps every kernel variant, the LTS substeps and repeated
+evaluations at the same displacement deterministic. So each FemoraX evaluation iterates from the
+committed state with the whole increment `v - v_committed`, the same three schemes and the
+subdivision. For the elastic section the element is linear: the same result to rounding. For
+nonlinear sections (later), the section materials depend only on the committed and the trial
+strain, so the converged state is the same within the element tolerance, but not bit for bit
+with OpenSees across Newton iterations (docs/deviations.md, with that step's evidence).
+State per element: committed `Se` (6), `kv` (36), the basic displacement `v` (6) and per point the
+section deformations `vs`, flexibility `fs` and resisting forces `Ssr` (ORDER, ORDER^2, ORDER), and the
+section's own state.
 
 **Design.** Element state: the committed basic forces `Se` (6), the element stiffness `kv` (6 x 6,
 the inverse of the integrated flexibility) and each point's section deformations and section
