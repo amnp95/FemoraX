@@ -53,6 +53,7 @@ differences are most likely Intel's own math library (`exp`, `pow`, ...).
 build/reference/drivers/nd_material tests/reference/data/nd
 build/reference/drivers/soil_material tests/reference/data/nd
 build/reference/drivers/brick_element tests/reference/data/element
+build/reference/drivers/crd_transf tests/reference/data/transf
 .venv/bin/python tests/reference/make_constraint_cases.py tests/reference/data/constraints/cases
 for f in tests/reference/data/constraints/cases/*.txt; do
   build/reference/drivers/dof_numbering $f tests/reference/data/constraints/$(basename $f)

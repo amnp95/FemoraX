@@ -1035,6 +1035,14 @@ and PDelta transformations with joint offsets; (3) the element physics (mass, st
 support table; (6) system tests and the LTS checkpoint; (7) TACC benchmarks. Then rigid links
 and diaphragms, the force-based beam, fiber sections, damping on beams, and LTS steps 3c-6.
 Step 1 done (2026-11-19): `physics/sections/elastic_section_3d.hpp`, `test_elastic_section_3d`.
+Step 2 done (2026-11-19): `physics/transformations/crd_transf_3d.hpp` (Linear and PDelta, rigid
+joint offsets; the geometry once per element, the basic displacements, the global force with
+PDelta's leaning-column terms, the tangent and initial stiffness), against OpenSees' classes
+through a new reference driver (`tests/reference/drivers/crd_transf.cpp`, data in
+`tests/reference/data/transf/`): bit for bit for six geometries x three states, both types; rigid
+motion gives no basic deformation, force and stiffness are the transpose of the kinematics,
+PDelta's geometric stiffness is the derivative of its force. Not ported: nodal displacements
+present when an element is created (OpenSees' `nodeIInitialDisp`, staged construction).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
