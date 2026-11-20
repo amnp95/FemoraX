@@ -1333,6 +1333,13 @@ elements in the substeps, an estimated 3.21x) and 3.1e-3 with the rotation tie (
 the tie's rows span the whole host brick, so the host bricks join the fine level); the equalDOF pile
 gives 3.05e-3. Next: benchmarks of the expand and contract kernels (TACC), Femora's export (the
 user's side).
+Benchmarks (2026-11-20, `benchmarks/bench_explicit.cpp`): `constraints/<n>^3/{expand,contract}` and
+`explicit_force_piles/<n>^3/{soil,piles}` (the undamped column with a pile line every 4 bricks, each
+pile node embedded at a brick centre, elastic beams between them). The contraction now loops over the
+equations that receive slots only (before: every equation, a pass over the whole vector per force
+evaluation; the same bits). Orientation on a pvc node's CPU (16 threads, not a baseline machine),
+40^3 with 100 piles (4,000 embedded nodes): soil 3063 us, with the piles 3148 us (+2.8 %: expand 8 us
+twice and contract 10 us, the rest the beams). Baselines: TACC spr and gh (`benchmarks/run_all.sh`).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

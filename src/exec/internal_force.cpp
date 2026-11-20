@@ -181,16 +181,21 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
       for (auto t = d.con_start[static_cast<std::size_t>(k)]; t < d.con_start[static_cast<std::size_t>(k) + 1]; ++t)
         of_eq[static_cast<std::size_t>(d.con_eq[static_cast<std::size_t>(t)])].push_back(
             {neq_ + k, d.con_weight[static_cast<std::size_t>(t)]});
+    // Only the equations that receive slots (a model with a few embedded piles has millions
+    // of equations and a few hundred targets), each its slots in a fixed order.
     std::vector<std::int64_t> es{0};
-    std::vector<Index> eslot;
+    std::vector<Index> eslot, etarget;
     std::vector<double> ew;
-    for (const auto& l : of_eq) {
-      for (const auto& [sl, w] : l) {
+    for (std::size_t q = 0; q < of_eq.size(); ++q) {
+      if (of_eq[q].empty()) continue;
+      etarget.push_back(static_cast<Index>(q));
+      for (const auto& [sl, w] : of_eq[q]) {
         eslot.push_back(sl);
         ew.push_back(w);
       }
       es.push_back(static_cast<std::int64_t>(eslot.size()));
     }
+    eq_target_ = upload("eq_con_target", etarget);
     ux_ = Vec("constraint_work_u", static_cast<std::size_t>(nslots_));
     xx_ = Vec("constraint_work_x", static_cast<std::size_t>(nslots_));
     yy_ = Vec("constraint_work_y", static_cast<std::size_t>(nslots_));
@@ -303,11 +308,13 @@ void InternalForce::contract_slots(const Vec& y, bool squared) const {
   const auto es = eq_start_;
   const auto sl = eq_slot_;
   const auto ew = eq_w_;
+  const auto tg = eq_target_;
   Kokkos::parallel_for(
-      "constraint_contract", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_), KOKKOS_LAMBDA(const Index q) {
+      "constraint_contract", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, static_cast<Index>(tg.extent(0))),
+      KOKKOS_LAMBDA(const Index i) {
         double sum = 0.0;
-        for (auto t = es(q); t < es(q + 1); ++t) sum += (squared ? ew(t) * ew(t) : ew(t)) * y(sl(t));
-        y(q) += sum;
+        for (auto t = es(i); t < es(i + 1); ++t) sum += (squared ? ew(t) * ew(t) : ew(t)) * y(sl(t));
+        y(tg(i)) += sum;
       });
 }
 

@@ -21,6 +21,19 @@
 //                                          (committed read, trial written: NSTATE doubles per
 //                                          point each) and, compacted, the per-point results
 //                                          (48 doubles written and read) and flag and list.
+//   constraints/<n>^3/{expand,contract}    exact constraints (docs/design.md, "Exact
+//                                          constraints u = T q"): embedded piles in the
+//                                          undamped column (a pile line every 4 bricks in x
+//                                          and y, a node at each brick centre embedded in its
+//                                          brick, elastic dispBeamColumn between them). expand:
+//                                          the rows (start, equation, weight) read, the
+//                                          equations' values gathered, the slots written;
+//                                          contract: the targets' rows read, the slots'
+//                                          values gathered, the targets read-modify-written.
+//   explicit_force_piles/<n>^3/{soil,piles} the default force evaluation of the column without
+//                                          and with the piles (expand, kernels, contract);
+//                                          traffic: the soil's alone (bound memory), so the
+//                                          piles' cost shows as a lower bandwidth.
 // Compulsory traffic per call: u, v, the element maps (8 nodes + 24 equations + 1 parameter
 // index, int32), f (zeroed, then read-modify-written once per equation), and either the
 // coordinates (recompute) or the geometry cache (cached); the gather scatter adds its slots
@@ -38,6 +51,9 @@
 #include "physics/materials/pressure_depend_multi_yield.hpp"
 #include "../tests/common/synthetic_models.hpp"
 
+#include <array>
+#include <unordered_map>
+#include <vector>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -206,7 +222,108 @@ void register_pdmy(Registry& registry, const Options& options, io::ElementType t
 
 }  // namespace
 
+// The undamped soil column with embedded piles (see the header).
+io::Model with_piles(int n) {
+  testing::ColumnSpec s;
+  s.nx = s.ny = s.nz = n;
+  s.damping = false;
+  io::Model m = testing::soil_column(s);
+  for (auto& g : m.elements) g.body_force = {0.0, 0.0, 0.0};
+  // The brick whose lowest corner is node (i, j, k): soil_column numbers nodes x fastest.
+  const int NX = n + 1;
+  auto node_tag = [&](int i, int j, int k) { return 1 + i + NX * (j + NX * k); };
+  std::unordered_map<std::int32_t, std::int32_t> brick_at;  // lowest corner -> element tag
+  std::unordered_map<std::int32_t, std::array<double, 3>> xyz;
+  for (std::size_t i = 0; i < m.nodes.tags.size(); ++i)
+    xyz[m.nodes.tags[i]] = {m.nodes.coords[3 * i], m.nodes.coords[3 * i + 1], m.nodes.coords[3 * i + 2]};
+  for (const auto& g : m.elements)
+    for (std::size_t e = 0; e < g.size(); ++e) brick_at[g.connectivity[8 * e]] = g.tags[e];
+  m.materials.push_back({900, io::ElasticSection3dData{2.0e8, 0.05, 4.0e-4, 4.0e-4, 7.7e7, 8.0e-4}, {}});
+  io::ElementGroup pile;
+  pile.id = "piles";
+  pile.type = io::ElementType::DispBeamColumn;
+  pile.material = 900;
+  pile.beam.vecxz = {1.0, 0.0, 0.0};
+  pile.beam.points = 3;
+  pile.beam.density = 7.8;
+  std::int32_t next_node = 10000000, next_elem = 10000000;
+  for (int i = 2; i < n; i += 4)
+    for (int j = 2; j < n; j += 4)
+      for (int k = 0; k < n; ++k) {
+        const auto lo = node_tag(i, j, k), hi = node_tag(i + 1, j + 1, k + 1);
+        const auto a = xyz.at(lo), b = xyz.at(hi);
+        const std::int32_t t = next_node++;
+        m.nodes.tags.push_back(t);
+        m.nodes.ndf.push_back(6);
+        m.nodes.coords.insert(m.nodes.coords.end(), {0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]), 0.5 * (a[2] + b[2])});
+        m.embedded_nodes.push_back({t, brick_at.at(lo), false});
+        if (k > 0) {
+          pile.tags.push_back(next_elem++);
+          pile.connectivity.insert(pile.connectivity.end(), {t - 1, t});
+        }
+      }
+  m.elements.push_back(pile);
+  return m;
+}
+
+void register_constraints(Registry& registry, const Options& options) {
+  const int n = options.side();
+  compile::CompileOptions co;
+  co.renumbering = compile::Renumbering::RCM;
+  co.simd_width = simd_width();
+  const std::string size = std::to_string(n) + "^3/";
+  for (const bool piles : {false, true}) {
+    testing::ColumnSpec s;
+    s.nx = s.ny = s.nz = n;
+    s.damping = false;
+    io::Model model = piles ? with_piles(n) : testing::soil_column(s);
+    if (!piles)
+      for (auto& g : model.elements) g.body_force = {0.0, 0.0, 0.0};
+    const auto compiled = std::make_shared<compile::Compiled>(compile::compile_model(model, co));
+    auto k = std::make_shared<exec::InternalForce>(*compiled, exec::GeometryCache::On);
+    k->fill(1e-4, 1e-3);
+    const auto& d = compiled->dofs;
+    const std::int64_t neq = d.num_equations, nel = k->num_elements(), N = d.num_nodes();
+    const auto v = k->resolve(exec::default_force_settings());
+    // The soil's compulsory traffic (as register_model, without damping's colouring).
+    std::int64_t bytes = 2 * neq * 8 + 3 * neq * 8 + nel * 33 * 4 +
+                         (v.geometry == exec::Geometry::Cached ? k->geometry_cache_bytes() : 3 * N * 8);
+    if (v.scatter == exec::Scatter::Gather) bytes += 2 * nel * 24 * 8 + nel * 24 * 8 + neq * 8;
+    registry.add({.name = "explicit_force_piles/" + size + (piles ? "piles" : "soil"),
+                  .unit = "call",
+                  .bytes = bytes,
+                  .items = nel,
+                  .run = [k, v] { k->compute(v); },
+                  .gated = true,
+                  .bound = "memory"});
+    if (!piles) continue;
+    const std::int64_t ns = d.num_constrained(), nt = static_cast<std::int64_t>(d.con_eq.size());
+    std::int64_t targets = 0;
+    {
+      std::vector<char> hit(static_cast<std::size_t>(neq), 0);
+      for (const auto q : d.con_eq) targets += !hit[static_cast<std::size_t>(q)]++;
+    }
+    registry.add({.name = "constraints/" + size + "expand",
+                  .unit = "call",
+                  .bytes = (ns + 1) * 8 + nt * (4 + 8) + nt * 8 + ns * 8,
+                  .flops = 2.0 * static_cast<double>(nt),
+                  .items = ns,
+                  .run = [k] { k->expand_slots(k->u); },
+                  .gated = true,
+                  .bound = "memory"});
+    registry.add({.name = "constraints/" + size + "contract",
+                  .unit = "call",
+                  .bytes = (targets + 1) * 8 + targets * 4 + nt * (4 + 8) + nt * 8 + targets * 16,
+                  .flops = 2.0 * static_cast<double>(nt),
+                  .items = targets,
+                  .run = [k] { k->contract_slots(k->f); },
+                  .gated = true,
+                  .bound = "memory"});
+  }
+}
+
 void register_explicit(Registry& registry, const Options& options) {
+  register_constraints(registry, options);
   register_model(registry, options, true);
   register_model(registry, options, false);
   register_model(registry, options, true, io::ElementType::SSPbrick);

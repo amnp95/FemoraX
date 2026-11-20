@@ -212,7 +212,7 @@ class InternalForce {
  private:
   std::int32_t neq_ = 0, nslots_ = 0, nnodes_ = 0;
   Kokkos::View<std::int64_t*, Space> con_start_, eq_start_;
-  Kokkos::View<std::int32_t*, Space> con_eq_, eq_slot_;
+  Kokkos::View<std::int32_t*, Space> con_eq_, eq_slot_, eq_target_;
   Vec con_w_, eq_w_;
   Vec ux_, xx_, yy_;  // the implicit operator's work vectors with the slots
   void require_no_constraints(const char* what) const;
