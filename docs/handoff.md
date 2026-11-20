@@ -155,8 +155,10 @@ runtime's free-memory report fell to 0). The constraints plan (u = T q: rigid li
 diaphragms, the embedded node in any supported solid host with its own shape functions) approved
 and in design.md (3175786); step 1's first part, the resolver and the generators, committed
 (a43ad59; check.sh: debug 271/271, release 274/274, UBSan 271/271; the commit message's counts
-are wrong). Next: step 1's wiring into the DOF numbering with step 2's expand / contract kernels;
-then the pile in soil with embedded nodes.
+are wrong); step 1 finished, the constraints in the DOF numbering (fe47386; compile_model refuses
+them until step 2). Next: step 2 (design.md has two findings on the masses to settle first:
+rigid links need their block mass, the rot rows' weights sum to zero), then the pile in soil
+with embedded nodes.
 
 **Embedded piles (2026-11-19):** literature review in docs/research/embedded_and_constraints/.
 The user's own element, `EmbeddedBeamContact3D` (OpenSees C++, with a theory document, tests

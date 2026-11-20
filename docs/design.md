@@ -1224,6 +1224,18 @@ refused; the Transformation-handler check skips the slots. Until the kernels hav
 `compile_model` refuses these constraints as unsupported. Tests: the slots and rows of a rigid
 link, through an equalDOF group with a fixed DOF, the refusals, an embedded node in a brick
 element of a model (8 weights summing to one), the compile step's refusal.
+Found while planning step 2 (2026-11-20), to settle before its masses: (i) row-sum lumping of
+T^T M T is right only for rows whose weights sum to one (the embedded node's translations: the
+total mass and the centre of mass kept); a rigid link's translation rows carry rotation terms
+with lever arms, so a row sum mixes translations and rotations: rigid links and diaphragms take
+their exact block mass (6 x 6 / 3 x 3 per master, as planned) from the start; (ii) the embedded
+node's rotation rows (rot) have weights that sum to zero (shape-function derivatives), so a row
+sum would drop the node's rotary inertia (a pile head's): those rows need another lumping (for
+example the diagonal of T^T M T), checked against the exact T^T M T eigenvalues of a small model.
+Step 2's mechanics otherwise: the force object sizes u, v, f to num_slots; compute expands u and
+v into the slots before the kernels, gathers into all slots, then contracts the slots into the
+equations in a fixed order; the time loops keep their num_equations sizes; recorders read a
+constrained node after an expand.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
