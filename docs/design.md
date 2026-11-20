@@ -997,11 +997,11 @@ default nIP = 5), `section Elastic tag E A Iz Iy G J`, `geomTransf Linear|PDelta
 
 **Decisions with the user (2026-11-19):**
 - *Mass:* the beam computes its own lumped mass from its density and the section (rho A L / 2
-  per translation, physical rotary inertia rho (Iy + Iz) L / 2 in torsion (the polar moment) and rho Iz L / 2, rho Iy L / 2
-  in bending, the polar moment rho (Iy + Iz) in torsion; "Structures"); no scaling option: a model that wants Femora's scaled rotary
+  per translation, physical rotary inertia rho (Iy + Iz) L / 2 in torsion (the polar moment) and rho Iz L / 2,
+  rho Iy L / 2 in bending; "Structures"); no scaling option: a model that wants Femora's scaled rotary
   inertia gives the beam density 0 and writes all its masses as nodal masses. With physical
-  rotary inertia a rotation's stable step is about L / (sqrt(2) c), close to the axial L / c,
-  so scaling would gain at most 1.4x. The consistent mass (`-cMass`) for implicit stages only.
+  rotary inertia the stable step stays of the order of the axial L / c (measured in step 3:
+  0.58 L / c for a typical section), so scaling the rotations gains little. The consistent mass (`-cMass`) for implicit stages only.
 - *Integration points:* compile-time buckets 2 to 5 (each count is a kernel instantiation; a
   displacement-based beam's curvature is linear, so more points add no accuracy: more elements
   do); another count is refused with that message. The force-based beam gets its own range.

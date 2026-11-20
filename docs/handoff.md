@@ -112,6 +112,29 @@ reference within 7e-13 (docs/design.md). Next: 3c, the recursive multilevel sche
 damping (mass, stiffness, Uniform); step 5, the substeps' vector work and gather restricted to
 the fine equations, and Kokkos Graph capture, with benchmarks.
 
+**Beams (2026-11-19, plan in docs/design.md, "Beams"):** steps 1, 2 and the first part of 3
+committed: the Section contract and ElasticSection3d (179510f); the Linear and PDelta
+transformations with joint offsets, bit for bit against OpenSees through a new driver
+(tests/reference/drivers/crd_transf.cpp, fb4776e); DispBeam3d<Section, NIP> physics with the
+lumped mass (physical rotary inertia) and the stable step, verified against Euler-Bernoulli
+cantilevers (53dea5b). Next: step 3's OpenSees DispBeamColumn3d driver (force, tangent), the
+Rayleigh damping terms and the consistent mass; then step 4 (registry, batches with 6-DOF nodes,
+kernels), step 5 (schema 1.1, ask the user with the exact text), step 6 (system tests and the
+LTS checkpoint: an undamped pile in soil). The OpenSees reference build on Stampede3 is
+build/reference-s3-intel (scripts/stampede3_opensees.sh; a driver alone:
+`cmake --build build/reference-s3-intel --target <driver>` with the Intel modules).
+
+**check.sh (2026-11-19):** about 5 minutes on a Stampede3 spr node (was about 40): the presets
+build in turn, then their test suites run at the same time; the whole-binary repeats run in
+release presets only (25c4890).
+
+**Seismo-VLab** cloned read-only in ../SVL (GPL: read, never copy). Reviewed with the user: not
+better than OpenSees in general; worth noting a Timoshenko option for thick piles, rotational
+lumped mass from the consistent diagonal, equivalent-linear soil quads, Composite Bathe. OpenSees'
+ASDPlasticMaterial3D (yield function + flow + elasticity + hardening as templates) is the
+candidate design for "more soil materials" (a FemoraX rewrite: closed-form returns where they
+exist, the compacted corrector, small state), to decide with the user then.
+
 **Embedded piles (2026-11-19):** literature review in docs/research/embedded_and_constraints/.
 The user's own element, `EmbeddedBeamContact3D` (OpenSees C++, with a theory document, tests
 and studies), is in /work2/08189/amnp95/uploads/embedded_beam/ (not in the repository): surface
