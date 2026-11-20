@@ -369,7 +369,9 @@ d41014d; the targeted contraction and the constraint benchmarks, c67d827). Bench
 measured on TACC spr / gh (`benchmarks/run_all.sh`).
 
 Next: the force-based beam (plan approved, design.md "Beams: the force-based beam"). The element
-point-state extension is done (`POINT_STATE`, `point_state_size<E>()`); step 1: the
+point-state extension is done (`POINT_STATE`, `point_state_size<E>()`), and step 1's physics with
+its closed-form test (`force_beam_3d.hpp`, `test_force_beam_3d`). Next in step 1: the OpenSees driver
+(like `tests/reference/drivers/disp_beam_column.cpp`). Step 1 as planned: the
 physics header `physics/elements/force_beam_3d.hpp` (`ForceBeam3d<Section, NIP>`, NIP 3-7, Lobatto
 points and weights from `LobattoBeamIntegration.cpp`), porting `ForceBeamColumn3d::update()`
 (lines 954-1420 of OpenSees 955ceb0: the three schemes, the subdivision, `f` and `vr` integration

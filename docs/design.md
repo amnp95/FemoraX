@@ -1200,6 +1200,16 @@ come (docs/design.md, "Hard parts"). Stable step: the exact 12 x 12 element eige
 lumped mass, as the displacement beam. Kernels: the beam's flat force kernel, the operator through
 `kv` and the transformation, tangent blocks per node pair.
 
+**Step 1, first part done (2026-11-20):** `physics/elements/force_beam_3d.hpp`, `ForceBeam3d<Sec, NIP>`
+(Lobatto 3-7; update from the committed state with OpenSees' three schemes, the integration of `f`
+and `vr` by the section codes, `kv = f^-1`, convergence on |dW| < tol; the point state with the
+element values in the points' extra slots; a fresh state formed as setDomain does; getResistingForce
+and getTangentStiff through the transformation). Test (`test_force_beam_3d`): one element of an
+elastic cantilever gives Euler-Bernoulli's tip flexibilities in both planes, axial and torsion to
+1e-12 for 3-7 points; force = K u; a committed state gives the same force and scales linearly; rigid
+translation gives no force. Next: the OpenSees driver (ForceBeamColumn3d in a Domain, bit for bit or
+to rounding), then step 2 (mass, damping, stable step).
+
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);
 an OpenSees driver (ForceBeamColumn3d with ElasticSection3d in a Domain: force, tangent, initial
