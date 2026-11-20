@@ -20,11 +20,13 @@
 #include "compile/uniform_damping_fit.hpp"
 #include "physics/contracts.hpp"
 #include "physics/damping/uniform_damped.hpp"
+#include "physics/elements/disp_beam_3d.hpp"
 #include "physics/elements/ssp_brick.hpp"
 #include "physics/elements/std_brick.hpp"
 #include "physics/materials/elastic_isotropic.hpp"
 #include "physics/materials/pressure_depend_multi_yield.hpp"
 #include "physics/materials/pressure_independ_multi_yield.hpp"
+#include "physics/sections/elastic_section_3d.hpp"
 
 namespace femorax::registry {
 
@@ -56,6 +58,17 @@ struct ElasticIsotropicEntry {
 
 // PressureDependMultiYield in surface buckets: the batch of a material is the smallest
 // bucket that holds its surfaces. Another bucket is one more line in Materials below.
+// `section Elastic` (3D): sections share the materials table in memory (io/model.hpp).
+struct ElasticSection3dEntry {
+  using Material = ElasticSection3d;
+  static constexpr const char* name = "ElasticSection3d";
+  static bool matches(const io::NDMaterial& m) { return std::holds_alternative<io::ElasticSection3dData>(m.data); }
+  static Material::Params params(const io::NDMaterial& m) {
+    const auto& d = std::get<io::ElasticSection3dData>(m.data);
+    return {d.E, d.A, d.Iz, d.Iy, d.G, d.J};
+  }
+};
+
 template <int NS>
 struct PressureDependMultiYieldEntry {
   using Material = PressureDependMultiYield<NS>;
@@ -162,6 +175,7 @@ struct StdBrickEntry {
   template <class Mat>
   using Element = StdBrick<Mat>;
   static constexpr io::ElementType type = io::ElementType::StdBrick;
+  static constexpr MaterialKind kind = MaterialKind::NDMaterial3D;  // checked before Element<Mat> is formed
   static constexpr const char* name = "stdBrick";
   template <class Mat>
   static typename Element<Mat>::Params params(const io::ElementGroup& g,
@@ -174,11 +188,48 @@ struct SSPbrickEntry {
   template <class Mat>
   using Element = SSPbrick<Mat>;
   static constexpr io::ElementType type = io::ElementType::SSPbrick;
+  static constexpr MaterialKind kind = MaterialKind::NDMaterial3D;
   static constexpr const char* name = "SSPbrick";
   template <class Mat>
   static typename Element<Mat>::Params params(const io::ElementGroup& g,
                                               const typename Mat::Params& mp) {
     return {mp, {g.body_force[0], g.body_force[1], g.body_force[2]}};
+  }
+};
+
+// dispBeamColumn with NIP integration points (one entry per bucket; the group's point count
+// picks it, accepts()). The mass per length and the rotary inertia from the density (or the
+// group's mass per length) and the section's geometry (docs/design.md, "Beams").
+template <int NIP>
+struct DispBeam3dEntry {
+  template <class Sec>
+  using Element = DispBeam3d<Sec, NIP>;
+  static constexpr io::ElementType type = io::ElementType::DispBeamColumn;
+  static constexpr MaterialKind kind = MaterialKind::Section3d;
+  static constexpr const char* name = NIP == 2   ? "dispBeamColumn2"
+                                      : NIP == 3 ? "dispBeamColumn3"
+                                      : NIP == 4 ? "dispBeamColumn4"
+                                                 : "dispBeamColumn5";
+  static bool accepts(const io::ElementGroup& g) { return g.beam.points == NIP; }
+  template <class Sec>
+  static typename Element<Sec>::Params params(const io::ElementGroup& g, const typename Sec::Params& sp) {
+    typename Element<Sec>::Params p{};
+    p.mat = sp;
+    p.transf.type = g.beam.transf == 1 ? CrdTransfType::PDelta : CrdTransfType::Linear;
+    for (int i = 0; i < 3; ++i) {
+      p.transf.vecxz[i] = g.beam.vecxz[static_cast<std::size_t>(i)];
+      p.transf.nodeIOffset[i] = g.beam.offset_i[static_cast<std::size_t>(i)];
+      p.transf.nodeJOffset[i] = g.beam.offset_j[static_cast<std::size_t>(i)];
+    }
+    const SectionProperties sec = Sec::properties(sp);
+    double rho = g.beam.density;
+    if (g.beam.mass_per_length >= 0.0) rho = sec.A > 0.0 ? g.beam.mass_per_length / sec.A : 0.0;
+    p.rhoA = g.beam.mass_per_length >= 0.0 ? g.beam.mass_per_length : rho * sec.A;
+    p.rot[0] = rho * (sec.Iy + sec.Iz);
+    p.rot[1] = rho * sec.Iy;
+    p.rot[2] = rho * sec.Iz;
+    p.cMass = g.beam.consistent_mass ? 1 : 0;
+    return p;
   }
 };
 
@@ -208,7 +259,7 @@ struct UniformDampedEntry {
 template <class M>
 inline constexpr bool is_damped_entry = requires { M::filters; };
 
-using Materials = TypeList<ElasticIsotropicEntry, PressureDependMultiYieldEntry<20>, PressureDependMultiYieldEntry<40>,
+using Materials = TypeList<ElasticIsotropicEntry, ElasticSection3dEntry, PressureDependMultiYieldEntry<20>, PressureDependMultiYieldEntry<40>,
                            PressureIndependMultiYieldEntry<20>, PressureIndependMultiYieldEntry<40>,
                            UniformDampedEntry<ElasticIsotropicEntry, 8>, UniformDampedEntry<ElasticIsotropicEntry, 32>,
                            UniformDampedEntry<PressureDependMultiYieldEntry<20>, 8>,
@@ -231,7 +282,8 @@ bool PressureIndependMultiYieldEntry<NS>::matches(const io::NDMaterial& m) {
   if constexpr (NS == 20) return n <= 20;
   else return n > 20 && n <= NS;
 }
-using Elements = TypeList<StdBrickEntry, SSPbrickEntry>;
+using Elements = TypeList<StdBrickEntry, SSPbrickEntry, DispBeam3dEntry<2>, DispBeam3dEntry<3>, DispBeam3dEntry<4>,
+                          DispBeam3dEntry<5>>;
 
 // --- Dispatch ------------------------------------------------------------------------------
 // Pair index: element entry index * number of materials + material entry index.
@@ -251,9 +303,11 @@ void for_materials(F& f, int e_index, TypeList<Ms...>, std::index_sequence<I...>
   (
       [&] {
         using M = Ms;
-        if constexpr (CompatiblePair<typename E::template Element<typename M::Material>,
-                                     typename M::Material>)
-          f.template operator()<E, M>(e_index * num_materials + static_cast<int>(I));
+        // The kinds first: an element is never formed with a material of another kind.
+        if constexpr (E::kind == M::Material::KIND) {
+          if constexpr (CompatiblePair<typename E::template Element<typename M::Material>, typename M::Material>)
+            f.template operator()<E, M>(e_index * num_materials + static_cast<int>(I));
+        }
       }(),
       ...);
 }
@@ -271,10 +325,13 @@ void for_each_pair(F&& f) {
 // The pair index of (element type, material), or -1 if no registered pair matches. filters:
 // 0 for an element without Uniform damping; else the region's fitted filter count, which
 // picks the smallest damped bucket that holds it.
-inline int pair_index(io::ElementType type, const io::NDMaterial& m, int filters = 0) {
+inline int pair_index(const io::ElementGroup& g, const io::NDMaterial& m, int filters = 0) {
   int found = -1, bucket = 1 << 30;
   for_each_pair([&]<class E, class M>(int index) {
-    if (E::type != type || !M::matches(m)) return;
+    if (E::type != g.type || !M::matches(m)) return;
+    if constexpr (requires { E::accepts(g); }) {
+      if (!E::accepts(g)) return;
+    }
     if constexpr (is_damped_entry<M>) {
       if (filters > 0 && filters <= M::filters && M::filters < bucket) {
         found = index;

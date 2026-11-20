@@ -171,6 +171,24 @@ void fill_constants(const DevBatch<Elem>& b, const Vec& coords, Index N) {
   }
 }
 
+// The cached-geometry force of one element (compute_with on the cache). A function, not code
+// inside the kernel lambda: nvcc cannot capture inside if constexpr, and elements without a
+// geometry cache (beams) never take this path (the dispatch instantiates Cached only for
+// GEOMETRY_CACHEABLE elements; this keeps the lambda compilable for them).
+template <class Elem>
+KOKKOS_INLINE_FUNCTION void flat_cached_force(const DevParams<Elem>& pr, const StepContext& step, const Vec& geo,
+                                              const Vec& cst, Index e, Index P, const double* ue, const double* ve,
+                                              PointArray<const double> sc, PointArray<double> st, double* fe) {
+  if constexpr (Elem::GEOMETRY_CACHEABLE) {
+    typename Elem::Work work;
+    Elem::template compute_with<false>(SerialInner{}, cached_geometry<Elem>(geo, cst, e, P), pr.p,
+                                       with_step(pr.damp, step), ue, ve, sc, st, fe, nullptr, work);
+  } else {
+    (void)pr, (void)step, (void)geo, (void)cst, (void)e, (void)P, (void)ue, (void)ve, (void)sc, (void)st;
+    for (int k = 0; k < Elem::NDOF; ++k) fe[k] = 0.0;
+  }
+}
+
 // One thread per element.
 template <class Elem, bool Cached>
 void launch_flat(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec& u, const Vec& v,
@@ -195,11 +213,8 @@ void launch_flat(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
         }
         const DevParams<Elem>& pr = params(param(e));
         if (Cached) {  // a constant (template argument); nvcc cannot capture inside if constexpr
-          typename Elem::Work work;
-          Elem::template compute_with<false>(SerialInner{}, cached_geometry<Elem>(geo, cst, e, P), pr.p,
-                                             with_step(pr.damp, step),
-                                             ue, ve, state_of<Elem>(sc, e, P), state_of<Elem>(st, e, P), fe,
-                                             nullptr, work);
+          flat_cached_force<Elem>(pr, step, geo, cst, e, P, ue, ve, state_of<Elem>(sc, e, P), state_of<Elem>(st, e, P),
+                                  fe);
         } else {
           double xe[NNODE][NDM];
           for (int a = 0; a < NNODE; ++a) {

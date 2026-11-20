@@ -69,7 +69,7 @@ template <class Elem>
 void assemble_batch(const compile::Compiled& c, const compile::Batch& b, const std::vector<double>& u,
                     ReferenceSystem& r) {
   using Mat = typename Elem::Material;
-  constexpr int NDOF = Elem::NDOF, NNODE = Elem::NNODE, NS = Elem::NSTRESS;
+  constexpr int NDOF = Elem::NDOF, NNODE = Elem::NNODE;
   const std::int32_t N = c.dofs.num_nodes();
   std::vector<double> committed(Elem::NSTATE > 0 ? Elem::NSTATE : 1, 0.0), trial = committed;
   for (std::int32_t e = 0; e < b.count; ++e) {
@@ -91,6 +91,16 @@ void assemble_batch(const compile::Compiled& c, const compile::Batch& b, const s
     static thread_local double Kt[NDOF][NDOF], K0[NDOF][NDOF], Kc[NDOF][NDOF], Me[NDOF * NDOF];
     double fe[NDOF];
     Elem::template compute<true>(p, Rayleigh{}, xe, ue, ve, co, tr, fe, Kt);
+    if constexpr (!PointwiseElement<Elem>) {
+      // Elements without the pointwise functions (beams): K_0 and K_c are the tangent at zero
+      // displacement (elastic sections; the beam's betaKcomm convention: no geometric term).
+      double f0[NDOF];
+      const double zero[NDOF] = {};
+      Elem::template compute<true>(p, Rayleigh{}, xe, zero, ve, co, tr, f0, K0);
+      for (int a = 0; a < NDOF; ++a)
+        for (int k = 0; k < NDOF; ++k) Kc[a][k] = K0[a][k];
+    } else {
+    constexpr int NS = Elem::NSTRESS;
     // K_0 and K_c from the pointwise functions, with the materials' D_0 and D_c.
     double xl[3][8];
     Elem::local_coords(xe, xl);
@@ -130,11 +140,17 @@ void assemble_batch(const compile::Compiled& c, const compile::Batch& b, const s
       for (int a = 0; a < NDOF; ++a)
         for (int k = 0; k < NDOF; ++k) K0[a][k] = Kt[a][k];
     }
+    }
     Elem::mass(p, xe, Me);
     const Rayleigh& d = ps.damping;
+    // The translation direction of each element DOF (-1: a rotation), from NODE_NDF.
+    int dir[NDOF];
+    for (int j = 0, k = 0; j < NNODE; ++j)
+      for (int q = 0; q < Elem::NODE_NDF[static_cast<std::size_t>(j)]; ++q, ++k) dir[k] = q < 3 ? q : -1;
     for (int a = 0; a < NDOF; ++a) {
       if (eq[a] < 0) continue;
-      for (int k = 0; k < NDOF; ++k) r.Mr[k % 3][static_cast<std::size_t>(eq[a])] += Me[a * NDOF + k];
+      for (int k = 0; k < NDOF; ++k)
+        if (dir[k] >= 0) r.Mr[dir[k]][static_cast<std::size_t>(eq[a])] += Me[a * NDOF + k];
     }
     for (int a = 0; a < NDOF; ++a) {
       if (eq[a] < 0) continue;

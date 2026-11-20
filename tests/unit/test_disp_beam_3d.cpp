@@ -39,7 +39,7 @@ constexpr double E = 2.0e8, A = 0.05, Iz = 4.0e-4, Iy = 2.5e-4, G = 7.7e7, J = 3
 template <int NIP>
 typename Beam<NIP>::Params params() {
   typename Beam<NIP>::Params p;
-  p.sec = {E, A, Iz, Iy, G, J};
+  p.mat = {E, A, Iz, Iy, G, J};
   p.transf.vecxz[2] = 1.0;  // member along x: local axes = global axes
   return p;
 }
@@ -203,7 +203,7 @@ TEST(DispBeam3d, StableStepMatchesClosedForms) {
   const double xe[2][3] = {{0, 0, 0}, {L, 0, 0}};
   {  // axial only: two masses rhoA L / 2 on a spring EA / L
     typename Beam<2>::Params p;
-    p.sec = {E, A, 0.0, 0.0, G, 0.0};
+    p.mat = {E, A, 0.0, 0.0, G, 0.0};
     p.transf.vecxz[2] = 1.0;
     p.rhoA = rho * A;
     const double w2 = Beam<2>::max_omega_sq(p, xe, no_state());
@@ -214,7 +214,7 @@ TEST(DispBeam3d, StableStepMatchesClosedForms) {
   }
   {  // torsion only: two rotary inertias rho Ip L / 2 on a spring GJ / L
     typename Beam<2>::Params p;
-    p.sec = {E, 0.0, 0.0, 0.0, G, J};
+    p.mat = {E, 0.0, 0.0, 0.0, G, J};
     p.transf.vecxz[2] = 1.0;
     p.rot[0] = rho * (Iy + Iz);
     const double w2 = Beam<2>::max_omega_sq(p, xe, no_state());
@@ -307,7 +307,7 @@ void compare_row(const femorax::test::ReferenceFile& ref, const std::vector<doub
   auto at = [&](const std::string& col) { return r[static_cast<std::size_t>(ref.column(col))]; };
   auto atk = [&](const std::string& col, int k) { return at(col + std::to_string(k)); };
   typename Beam<NIP>::Params p;
-  p.sec = {at("E"), at("A"), at("Iz"), at("Iy"), at("G"), at("J")};
+  p.mat = {at("E"), at("A"), at("Iz"), at("Iy"), at("G"), at("J")};
   p.transf.type = type;
   p.rhoA = at("rhoA");
   double xe[2][3];

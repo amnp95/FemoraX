@@ -151,7 +151,8 @@ struct TypedBatch final : InternalForce::Batch {
       }
       t.constant = upload("batch_constant_tangent", d);
     }
-    if (cache) {
+    if constexpr (!Elem::GEOMETRY_CACHEABLE) (void)cache;
+    else if (cache) {
       b.geometry = Vec("batch_geometry", static_cast<std::size_t>(Elem::NGEOM) * Elem::NGP * b.padded);
       kernels::fill_geometry<Elem>(b, coords, N);
       if constexpr (ElementTermElement<Elem>) {
@@ -190,7 +191,7 @@ struct TypedBatch final : InternalForce::Batch {
     if (n <= 0) return;
     kernels::DevBatch<Elem> lb = b;  // the same device data, launched over the list
     lb.color_elements = list;
-    const bool cached = s.geometry == Geometry::Cached;
+    const bool cached = s.geometry == Geometry::Cached && Elem::GEOMETRY_CACHEABLE;
     const Vec none;
     if (s.layout == Layout::Team) {
       if constexpr (PointwiseElement<Elem>) {
@@ -222,7 +223,8 @@ struct TypedBatch final : InternalForce::Batch {
   template <class E>
   static void run_kernels(const kernels::DevBatch<E>& b, const ForceSettings& s, Out out, const Vec& coords, Index N,
                           const Vec& u, const Vec& v, const Vec& f, const Vec& slots) {
-    const bool cached = s.geometry == Geometry::Cached;
+    // Cached geometry only for elements that have a cache (beams recompute theirs).
+    const bool cached = s.geometry == Geometry::Cached && E::GEOMETRY_CACHEABLE;
     auto launch = [&](Index begin, Index end, bool by_color) {
       if (s.layout == Layout::Flat) {
         if (cached) kernels::launch_flat<E, true>(b, coords, N, u, v, f, slots, out, begin, end, by_color);
@@ -288,7 +290,7 @@ struct TypedBatch final : InternalForce::Batch {
                     const Vec& coords, Index N, const Vec& u, const Vec& x, const Vec& y,
                     const Vec& slots, int unit_dir) override {
     if constexpr (MatrixFreeElement<Elem>) {
-      const bool cached = s.geometry == Geometry::Cached;
+      const bool cached = s.geometry == Geometry::Cached && Elem::GEOMETRY_CACHEABLE;
       const int src = s.tangent == TangentSource::Constant ? 0 : s.tangent == TangentSource::Stored ? 1 : 2;
       auto launch = [&](Index begin, Index end, bool by_color) {
         dispatch(cached, src, diagonal, k, coords, N, u, x, y, slots, out, begin, end, by_color, unit_dir);
@@ -348,7 +350,11 @@ struct TypedBatch final : InternalForce::Batch {
   bool has_state() const override { return Elem::Material::NSTATE > 0; }
   void element_output(int which, const Kokkos::View<Index*, Space>& elems, const Kokkos::View<Index*, Space>& rows,
                       const Vec& out, std::int64_t offset, const Vec& coords, Index N, const Vec& u) override {
-    if (elems.extent(0) > 0) kernels::launch_element_output<Elem>(b, which, elems, rows, out, offset, coords, N, u);
+    if constexpr (PointwiseElement<Elem>) {
+      if (elems.extent(0) > 0) kernels::launch_element_output<Elem>(b, which, elems, rows, out, offset, coords, N, u);
+    } else if (elems.extent(0) > 0) {
+      Kokkos::abort("InternalForce: element output (stress3D6, strain3D6) is for solid elements");
+    }
   }
   void drm_forces(bool cached, const Vec& coords, Index N, const Kokkos::View<Index*, Space>& elems,
                   const Kokkos::View<std::uint32_t*, Space>& masks, const Kokkos::View<Index*, Space>& node_slot,
@@ -427,10 +433,12 @@ void register_batches(BatchFactory* table) {
     [&]<std::size_t... I>(std::index_sequence<I...>) {
       (
           [&] {
-            using Elem = typename registry::TypeAt<static_cast<int>(I), registry::Elements>::type::template Element<
-                typename MatEntry::Material>;
-            if constexpr (CompatiblePair<Elem, typename MatEntry::Material>)
-              table[static_cast<int>(I) * registry::num_materials + M] = &make_typed_batch<Elem>;
+            using ElemEntry = typename registry::TypeAt<static_cast<int>(I), registry::Elements>::type;
+            if constexpr (ElemEntry::kind == MatEntry::Material::KIND) {  // never form a mismatched pair
+              using Elem = typename ElemEntry::template Element<typename MatEntry::Material>;
+              if constexpr (CompatiblePair<Elem, typename MatEntry::Material>)
+                table[static_cast<int>(I) * registry::num_materials + M] = &make_typed_batch<Elem>;
+            }
           }(),
           ...);
     }(std::make_index_sequence<registry::num_elements>{});

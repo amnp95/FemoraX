@@ -65,9 +65,18 @@ struct PressureIndependMultiYieldData {
   std::vector<double> pairs;
 };
 
+// `section Elastic tag E A Iz Iy G J` (3D). Sections share the materials table in memory (an
+// element group names one by tag); the schema keeps them in /sections (docs/design.md, "Beams",
+// step 5).
+struct ElasticSection3dData {
+  double E = 0.0, A = 0.0, Iz = 0.0, Iy = 0.0, G = 0.0, J = 0.0;
+};
+
 struct NDMaterial {
   std::int32_t tag = 0;
-  std::variant<ElasticIsotropicData, PressureDependMultiYieldData, PressureIndependMultiYieldData> data;
+  std::variant<ElasticIsotropicData, PressureDependMultiYieldData, PressureIndependMultiYieldData,
+               ElasticSection3dData>
+      data;
   Metadata meta;
 };
 
@@ -76,7 +85,7 @@ const char* material_type_name(const NDMaterial& m);
 bool has_material_stage(const NDMaterial& m);
 
 // ---------------------------------------------------------------------------
-enum class ElementType { StdBrick, SSPbrick };
+enum class ElementType { StdBrick, SSPbrick, DispBeamColumn };
 
 const char* to_string(ElementType t);
 int node_count(ElementType t);
@@ -87,6 +96,19 @@ struct ElementGroup {
   std::int32_t material = 0;            // tag of an NDMaterial
   std::array<double, 3> body_force{};   // b1 b2 b3
   bool lumped = false;                  // stdBrick -lumped; SSPbrick always lumps
+  // dispBeamColumn (docs/design.md, "Beams"): its geomTransf, the number of integration
+  // points, and the mass: the section's geometry times `density` (mass per volume, with the
+  // rotary inertia), or `mass_per_length` when it is >= 0 (OpenSees' -mass; the rotary inertia
+  // then from mass_per_length / A); `consistent_mass` (-cMass) for implicit stages.
+  struct Beam {
+    int transf = 0;  // 0 Linear, 1 PDelta
+    std::array<double, 3> vecxz{0.0, 0.0, 1.0};
+    std::array<double, 3> offset_i{}, offset_j{};
+    int points = 5;
+    double density = 0.0;
+    double mass_per_length = -1.0;
+    bool consistent_mass = false;
+  } beam;
   std::vector<std::int32_t> tags;       // [M]
   std::vector<std::int32_t> connectivity;  // [M * node_count(type)], node tags
   Metadata meta;

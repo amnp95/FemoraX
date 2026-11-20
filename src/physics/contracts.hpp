@@ -364,6 +364,6 @@ concept ScaledStability = requires(const typename M::Params& p, Strided<const do
 
 // An (element, material) pair that can be instantiated as a batch.
 template <class E, class M>
-concept CompatiblePair = Element<E> && Material<M> && (E::MATERIAL_KIND == M::KIND);
+concept CompatiblePair = Element<E> && (Material<M> || Section<M>) && (E::MATERIAL_KIND == M::KIND);
 
 }  // namespace femorax

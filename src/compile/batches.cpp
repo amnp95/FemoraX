@@ -106,7 +106,7 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
     const auto& mat = m.materials[material_index.at(g.material)];
     const std::int32_t ur = uniform_region(g.tags[where[ge].second]);
     const int pair =
-        registry::pair_index(g.type, mat, ur < 0 ? 0 : uniform_filters[static_cast<std::size_t>(ur)].nFilter);
+        registry::pair_index(g, mat, ur < 0 ? 0 : uniform_filters[static_cast<std::size_t>(ur)].nFilter);
     if (pair < 0) {
       throw io::UnsupportedComponent(std::string("unsupported component: element type \"") +
                                      io::to_string(g.type) + "\" with material " +
@@ -196,16 +196,24 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
         // Lumped mass of this element into its equations (fixed DOFs drop out, tied DOFs
         // add to their shared equation), and alphaM-weighted for CentralDifference.
         const ParamSet& ps = b.params[b.param[e]];
-        double mj[Elem::NNODE];
-        Elem::lumped_mass(ps.template params<Elem>(), xe, mj);
-        k = 0;
-        for (int a = 0; a < b.nnode; ++a)
-          for (int d = 0; d < Elem::NODE_NDF[a]; ++d, ++k) {
-            const std::int32_t q = b.eq[static_cast<std::size_t>(k) * P + e];
-            if (q < 0) continue;
-            c.lumped_mass[q] += mj[a];
-            c.lumped_alpha_mass[q] += ps.damping.alphaM * mj[a];
-          }
+        // Per DOF for elements whose DOFs at a node have different masses (beams: rotations),
+        // per node for the solids.
+        double mk[Elem::NDOF];
+        if constexpr (requires(double* x) { Elem::lumped_mass_dof(ps.template params<Elem>(), xe, x); }) {
+          Elem::lumped_mass_dof(ps.template params<Elem>(), xe, mk);
+        } else {
+          double mj[Elem::NNODE];
+          Elem::lumped_mass(ps.template params<Elem>(), xe, mj);
+          k = 0;
+          for (int a = 0; a < b.nnode; ++a)
+            for (int d = 0; d < Elem::NODE_NDF[a]; ++d, ++k) mk[k] = mj[a];
+        }
+        for (k = 0; k < Elem::NDOF; ++k) {
+          const std::int32_t q = b.eq[static_cast<std::size_t>(k) * P + e];
+          if (q < 0) continue;
+          c.lumped_mass[q] += mk[k];
+          c.lumped_alpha_mass[q] += ps.damping.alphaM * mk[k];
+        }
       }
       if (opt.build_coloring) color(b, n.num_equations);
       c.batches.push_back(std::move(b));

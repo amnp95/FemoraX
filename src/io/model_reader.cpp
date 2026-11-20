@@ -20,6 +20,7 @@ const char* to_string(ElementType t) {
   switch (t) {
     case ElementType::StdBrick: return "stdBrick";
     case ElementType::SSPbrick: return "SSPbrick";
+    case ElementType::DispBeamColumn: return "dispBeamColumn";
   }
   return "?";
 }
@@ -27,6 +28,7 @@ const char* to_string(ElementType t) {
 const char* material_type_name(const NDMaterial& m) {
   if (std::holds_alternative<ElasticIsotropicData>(m.data)) return "ElasticIsotropic";
   if (std::holds_alternative<PressureDependMultiYieldData>(m.data)) return "PressureDependMultiYield";
+  if (std::holds_alternative<ElasticSection3dData>(m.data)) return "ElasticSection3d";
   return "PressureIndependMultiYield";
 }
 
@@ -39,6 +41,7 @@ int node_count(ElementType t) {
   switch (t) {
     case ElementType::StdBrick:
     case ElementType::SSPbrick: return 8;
+    case ElementType::DispBeamColumn: return 2;
   }
   return 0;
 }

@@ -1068,6 +1068,25 @@ driver (each Rayleigh factor alone, a second element with `-cMass`): the consist
 alphaM bit for bit, betaK / betaK0 / betaKc within 4.3e-14; betaKc with PDelta leaves out the
 geometric term (2.2e-2, docs/deviations.md); the consistent mass gives the exact kinetic energy
 of rigid translations and rotations. Next: step 4.
+Step 4a done (2026-11-19): beams in explicit stages through the real kernels. In memory (the
+schema is step 5): `io::ElementType::DispBeamColumn`, the group's beam data
+(`ElementGroup::beam`: transformation, points, density or mass per length, consistent mass),
+and `io::ElasticSection3dData` in the materials table. Registry: `ElasticSection3dEntry`,
+`DispBeam3dEntry<2..5>` (picked by the group's point count, `accepts`), every entry with its
+material kind, checked before an element type is formed with a material (a beam with a soil
+material or a brick with a section is never instantiated). Batches: a per-DOF lumped mass
+(`lumped_mass_dof`, the rotations' own masses). Kernels: the flat force kernel (the team layout
+falls back to it); cached geometry only for elements with a cache (a run asks for cached
+geometry whenever the model has a cache, and a beam must recompute: found by the explicit test,
+where the beam got no force at all); element output (stress3D6) refused for beams. Refused for
+now with a message: beams in implicit stages (step 4b), Rayleigh stiffness damping on beams in
+explicit stages (by design), beams without a mass of their own (density 0: their nodal masses do
+not reach the element's stable step yet, todo 22). Tests (`test_beam_kernels`): a six-element
+vertical cantilever, the force kernel equal to the host reference (K u for Linear, the elements'
+own force for PDelta) in every variant, bit for bit between the deterministic ones; the lumped
+mass (rho A on the translations, the rotary inertia on the rotations, global axes); an explicit
+CentralDifference run under base shaking through `run_model` equal to the host recurrence
+within 9.3e-13 of the peak; the refusals. Next: 4b, the implicit operator for beams.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

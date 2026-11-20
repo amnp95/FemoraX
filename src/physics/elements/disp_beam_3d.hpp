@@ -99,9 +99,15 @@ struct DispBeam3d {
   static constexpr std::array<int, NNODE> NODE_NDF = {6, 6};
   static constexpr int NSTATE = NGP * Sec::NSTATE;
   static constexpr int ORDER = Sec::NSTRAIN;
+  static constexpr MassType MASS = MassType::Selectable;  // lumped, or consistent with cMass
+  static constexpr bool EXPLICIT = true;
+  // The geometry is two nodes and a transformation, recomputed in every kernel (no cache).
+  static constexpr bool GEOMETRY_CACHEABLE = false;
+  static constexpr MaterialKind MATERIAL_KIND = MaterialKind::Section3d;
+  static constexpr TangentSymmetry TANGENT = Sec::TANGENT;  // PDelta's geometric term is symmetric
 
   struct Params {
-    typename Sec::Params sec;
+    typename Sec::Params mat;  // the section (named mat, as every element names its material)
     CrdTransf3dParams transf;
     double rhoA = 0.0;                     // translational mass per length
     double rot[3] = {0.0, 0.0, 0.0};      // rotary inertia per length about local x, y, z
@@ -237,7 +243,7 @@ struct DispBeam3d {
     basic_response(
         g.L, v,
         [&](int i, const double* e, double* s, double (*ks)[ORDER]) {
-          Sec::update(p.sec, committed.point(i), trial.point(i), e, s, ks);
+          Sec::update(p.mat, committed.point(i), trial.point(i), e, s, ks);
         },
         q, (WantK || stiff_damping) ? kb : nullptr);
     const double p0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
@@ -272,7 +278,7 @@ struct DispBeam3d {
         basic_response(
             g.L, zero_q,
             [&](int, const double*, double* s, double (*ks)[ORDER]) {
-              Sec::initial_tangent(p.sec, ks);
+              Sec::initial_tangent(p.mat, ks);
               for (int j = 0; j < ORDER; ++j) s[j] = 0.0;
             },
             qq, kb0);
@@ -280,7 +286,7 @@ struct DispBeam3d {
         basic_response(
             g.L, zero_q,
             [&](int i, const double*, double* s, double (*ks)[ORDER]) {
-              Sec::committed_tangent(p.sec, committed.point(i), ks);
+              Sec::committed_tangent(p.mat, committed.point(i), ks);
               for (int j = 0; j < ORDER; ++j) s[j] = 0.0;
             },
             qq, kbc);
@@ -381,7 +387,29 @@ struct DispBeam3d {
     crd_transf_3d_global_from_local(g, ml, M);
   }
 
-  // The lumped mass per DOF (12 values, node I then node J).
+  // The 12 x 12 mass matrix (row-major, Me[a * NDOF + c]): consistent with cMass, else the lumped
+  // diagonal.
+  FEMORAX_HD static void mass(const Params& p, const double (*xe)[NDM], double* Me) {
+    for (int a = 0; a < NDOF * NDOF; ++a) Me[a] = 0.0;
+    if (p.cMass) {
+      CrdTransf3dGeometry g;
+      geometry(p, xe, g);
+      double M[12][12];
+      consistent_mass(p, g, M);
+      for (int a = 0; a < 12; ++a)
+        for (int b = 0; b < 12; ++b) Me[a * NDOF + b] = M[a][b];
+    } else {
+      double m[12];
+      lumped_mass_dof(p, xe, m);
+      for (int a = 0; a < 12; ++a) Me[a * NDOF + a] = m[a];
+    }
+  }
+
+  // The lumped mass per DOF (12 values, node I then node J): the rotations have their own
+  // masses, so the per-node form of the solids does not fit (compile/batches.cpp reads this).
+  FEMORAX_HD static void lumped_mass_dof(const Params& p, const double (*xe)[NDM], double m[NDOF]) {
+    lumped_mass(p, xe, m);
+  }
   FEMORAX_HD static void lumped_mass(const Params& p, const double (*xe)[NDM], double m[NDOF]) {
     CrdTransf3dGeometry g;
     geometry(p, xe, g);
@@ -410,7 +438,7 @@ struct DispBeam3d {
     basic_response(
         g.L, v,
         [&](int i, const double*, double* s, double (*ks)[ORDER]) {
-          Sec::committed_tangent(p.sec, committed.point(i), ks);
+          Sec::committed_tangent(p.mat, committed.point(i), ks);
           for (int j = 0; j < ORDER; ++j) s[j] = 0.0;
         },
         q, kb);

@@ -169,6 +169,33 @@ void ed_lts_finish(const Vec& z, const Vec& un, const Vec& u, const Vec& vh, con
       });
 }
 
+// What beams cannot do yet (docs/design.md, "Beams", step 4): implicit stages (no matrix-free
+// operator for beams yet); in explicit stages, Rayleigh stiffness damping (refused on beams by
+// design: "Structures") and beams without a mass of their own (their nodal masses do not reach
+// the element's stable step yet, docs/todo.md item 22, so the step would be overstated).
+void check_beams(const io::Model& model, const compile::Compiled& c, const io::AnalysisStep& an) {
+  const bool expl = io::is_explicit(an.integrator);
+  for (const auto& b : c.batches) {
+    if (b.element != io::ElementType::DispBeamColumn) continue;
+    if (!expl)
+      throw io::UnsupportedComponent("unsupported component: dispBeamColumn in the implicit stage \"" + an.name +
+                                     "\" (beams run in explicit stages so far; their implicit operator is next)");
+    for (const auto& ps : b.params) {
+      const auto& g = model.elements[static_cast<std::size_t>(ps.group)];
+      if (ps.damping.betaK != 0.0 || ps.damping.betaKinit != 0.0 || ps.damping.betaKcomm != 0.0)
+        throw io::ModelError("stage \"" + an.name + "\": element group \"" + g.id +
+                             "\" (dispBeamColumn) has Rayleigh stiffness damping, which FemoraX refuses on beams in "
+                             "explicit stages (it cuts the stable step and gives spurious damping forces in yielding "
+                             "frames); use mass-proportional damping (docs/design.md, \"Structures\")");
+      if (g.beam.density <= 0.0 && g.beam.mass_per_length <= 0.0)
+        throw io::ModelError("stage \"" + an.name + "\": element group \"" + g.id +
+                             "\" (dispBeamColumn) has no mass of its own (density 0): give the beams their density "
+                             "(FemoraX computes their mass, rotations included); nodal masses alone do not reach the "
+                             "element's stable step yet");
+    }
+  }
+}
+
 bool all_finite(const Vec& u) {
   int bad = 0;
   Kokkos::parallel_reduce(
@@ -342,6 +369,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       if (lc->time) time = *lc->time;
     } else if (const auto* ia = std::get_if<io::AnalysisStep>(&step.step); ia && !io::is_explicit(ia->integrator)) {
       const auto* an = ia;
+      check_beams(model, c, *an);
       if (!implicit) implicit = std::make_unique<ImplicitStage>(force, c, u, v_rec, a, choice.settings);
       StageReport st;
       st.name = an->name;
@@ -365,6 +393,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       st.name = an->name;
       st.integrator = io::to_string(an->integrator);
       st.dt = an->dt;
+      check_beams(model, c, *an);
       const bool ed = an->integrator == io::Integrator::ExplicitDifference;
       const ExplicitScheme scheme = ed ? ExplicitScheme::ExplicitDifference : ExplicitScheme::CentralDifference;
       // Batches whose stable step cannot change keep it for the whole stage: computed once
