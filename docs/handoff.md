@@ -370,8 +370,9 @@ measured on TACC spr / gh (`benchmarks/run_all.sh`).
 
 Next: the force-based beam (plan approved, design.md "Beams: the force-based beam"). The element
 point-state extension is done (`POINT_STATE`, `point_state_size<E>()`), and step 1's physics with
-its closed-form test (`force_beam_3d.hpp`, `test_force_beam_3d`). Next in step 1: the OpenSees driver
-(like `tests/reference/drivers/disp_beam_column.cpp`). Step 1 as planned: the
+its closed-form test (`force_beam_3d.hpp`, `test_force_beam_3d`). Step 1 done with the OpenSees
+driver (`force_beam_column`: 3.4e-16). Next: step 2 (mass, damping, stable step, mirroring
+`disp_beam_3d.hpp`), step 3 (registry, kernels, the failed-iteration flag that fails the step). Step 1 as planned: the
 physics header `physics/elements/force_beam_3d.hpp` (`ForceBeam3d<Section, NIP>`, NIP 3-7, Lobatto
 points and weights from `LobattoBeamIntegration.cpp`), porting `ForceBeamColumn3d::update()`
 (lines 954-1420 of OpenSees 955ceb0: the three schemes, the subdivision, `f` and `vr` integration

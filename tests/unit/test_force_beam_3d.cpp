@@ -8,11 +8,15 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <string>
 #include <vector>
 
 #include "physics/elements/force_beam_3d.hpp"
 #include "physics/sections/elastic_section_3d.hpp"
+#include "reference_data.hpp"
 
 namespace {
 
@@ -101,5 +105,73 @@ TEST(ForceBeam3d, OneElementCantileverIsExactFor3To7Points) {
   cantilever<6>();
   cantilever<7>();
 }
+
+// Against OpenSees' ForceBeamColumn3d with ElasticSection3d and LobattoBeamIntegration in a
+// Domain (tests/reference/drivers/force_beam_column.cpp): the force, the tangent and the initial
+// stiffness for four geometries (joint offsets included), 3, 5, 7 points and two displacement
+// fields, Linear and PDelta.
+double rel_diff(const double* a, const double* b, int n) {
+  double d = 0.0, m = 0.0;
+  for (int k = 0; k < n; ++k) {
+    d = std::max(d, std::fabs(a[k] - b[k]));
+    m = std::max(m, std::fabs(b[k]));
+  }
+  return m > 0.0 ? d / m : d;
+}
+
+template <int NIP>
+void compare_row(const femorax::test::ReferenceFile& ref, const std::vector<double>& r, femorax::CrdTransfType type,
+                 double worst[3]) {
+  using Beam = femorax::ForceBeam3d<ElasticSection3d, NIP>;
+  auto at = [&](const std::string& col) { return r[static_cast<std::size_t>(ref.column(col))]; };
+  auto atk = [&](const std::string& col, int k) { return at(col + std::to_string(k)); };
+  typename Beam::Params p{};
+  p.mat = {at("E"), at("A"), at("Iz"), at("Iy"), at("G"), at("J")};
+  p.transf.type = type;
+  double xe[2][3];
+  for (int i = 0; i < 3; ++i) {
+    xe[0][i] = atk("xi", i);
+    xe[1][i] = atk("xj", i);
+    p.transf.vecxz[i] = atk("vecxz", i);
+    p.transf.nodeIOffset[i] = atk("offi", i);
+    p.transf.nodeJOffset[i] = atk("offj", i);
+  }
+  double ug[12], os_f[12], os_K[144], os_K0[144];
+  for (int k = 0; k < 12; ++k) ug[k] = atk("ug", k), os_f[k] = atk("f", k);
+  for (int k = 0; k < 144; ++k) os_K[k] = atk("K", k), os_K0[k] = atk("K0", k);
+  std::vector<double> sc(Beam::NSTATE, 0.0), st(Beam::NSTATE, 0.0), st0(Beam::NSTATE, 0.0);
+  const femorax::PointArray<const double> c{sc.data(), 1, Beam::POINT_STATE};
+  double f[12], K[12][12], f0[12], K0[12][12];
+  ASSERT_TRUE((Beam::template compute<true>(p, xe, ug, c, {st.data(), 1, Beam::POINT_STATE}, f, K)));
+  const double zero[12] = {};
+  ASSERT_TRUE((Beam::template compute<true>(p, xe, zero, c, {st0.data(), 1, Beam::POINT_STATE}, f0, K0)));
+  worst[0] = std::max(worst[0], rel_diff(f, os_f, 12));
+  worst[1] = std::max(worst[1], rel_diff(&K[0][0], os_K, 144));
+  worst[2] = std::max(worst[2], rel_diff(&K0[0][0], os_K0, 144));
+}
+
+class ForceBeam3dReference : public ::testing::TestWithParam<femorax::CrdTransfType> {};
+
+TEST_P(ForceBeam3dReference, MatchesOpenSees) {
+  const auto type = GetParam();
+  const std::string name = type == femorax::CrdTransfType::Linear ? "Linear" : "PDelta";
+  const auto ref = femorax::test::read_reference(std::string(FEMORAX_REFERENCE_DATA) + "/element/ForceBeamColumn3d_" +
+                                                 name + ".txt");
+  ASSERT_EQ(ref.rows.size(), 24u);
+  double worst[3] = {0, 0, 0};
+  for (const auto& r : ref.rows) {
+    const int nip = static_cast<int>(r[static_cast<std::size_t>(ref.column("nip"))]);
+    if (nip == 3) compare_row<3>(ref, r, type, worst);
+    else if (nip == 5) compare_row<5>(ref, r, type, worst);
+    else compare_row<7>(ref, r, type, worst);
+  }
+  std::printf("[ ForceBeamColumn3d %s against OpenSees: f %.2e, K %.2e, K0 %.2e ]\n", name.c_str(), worst[0], worst[1],
+              worst[2]);
+  for (int k = 0; k < 3; ++k) EXPECT_LE(worst[k], 1e-14) << k;  // measured 3.4e-16
+}
+
+INSTANTIATE_TEST_SUITE_P(Types, ForceBeam3dReference,
+                         ::testing::Values(femorax::CrdTransfType::Linear, femorax::CrdTransfType::PDelta),
+                         [](const auto& tp) { return tp.param == femorax::CrdTransfType::Linear ? "Linear" : "PDelta"; });
 
 }  // namespace

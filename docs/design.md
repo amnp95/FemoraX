@@ -1207,8 +1207,11 @@ element values in the points' extra slots; a fresh state formed as setDomain doe
 and getTangentStiff through the transformation). Test (`test_force_beam_3d`): one element of an
 elastic cantilever gives Euler-Bernoulli's tip flexibilities in both planes, axial and torsion to
 1e-12 for 3-7 points; force = K u; a committed state gives the same force and scales linearly; rigid
-translation gives no force. Next: the OpenSees driver (ForceBeamColumn3d in a Domain, bit for bit or
-to rounding), then step 2 (mass, damping, stable step).
+translation gives no force. Against OpenSees (2026-11-20): a reference driver calls ForceBeamColumn3d
+with ElasticSection3d and LobattoBeamIntegration in a real Domain (`tests/reference/drivers/
+force_beam_column.cpp`, data in `tests/reference/data/element/`): force within 3.4e-16, tangent within
+1.6e-16 and initial stiffness within 4.0e-17 for four geometries (offsets included) x 3, 5, 7 points x
+two states, Linear and PDelta. Step 1 done. Next: step 2 (mass, damping, stable step).
 
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);
