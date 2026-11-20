@@ -1143,6 +1143,67 @@ displacements within 1.9e-15 of the peak over 200 steps (stored OpenSees output)
 way: without rotational mass the pile's twist about its axis is a massless rigid mode (the ties
 hold only translations), and OpenSees' implicit solve is singular there, as it should be.
 
+## Exact constraints u = T q: rigid links, rigid diaphragms, embedded nodes (plan approved by the user, 2026-11-20)
+
+Backed by the literature review `docs/research/embedded_and_constraints/` ("eliminate the tie,
+model the slip softly"). What Femora writes (`../Femora/src/femora/components/constraint/
+mp_constraints.py`, `element/asd_embedded_node.py`, `interface/embedded_node_interface.py`):
+`rigidLink beam|bar master slave`, `rigidDiaphragm dir master slave...`, and
+`element ASDEmbeddedNodeElement C R1 R2 R3 R4 [-rot] [-p] [-K K] [-KP KP]`: OpenSees embeds a node
+only in a tetrahedron (or a triangle), with a penalty, so Femora splits brick meshes into
+tetrahedra for it.
+
+**Decisions with the user (2026-11-20):**
+- Every constrained DOF is a fixed weighted sum of retained DOFs, exact (DOF elimination, no
+  penalty, no time-step cost, CG-friendly): equalDOF (weight 1, as today), `rigidLink beam`
+  (the slave follows the master rigidly: u_s = u_m + theta_m x r, theta_s = theta_m), `rigidLink
+  bar` (equal translations), `rigidDiaphragm dir` (the in-plane translations and the rotation
+  about dir follow the master rigidly), and the embedded node.
+- The embedded node's host is any supported solid element, and its weights are that element's
+  own shape functions at the node (8-node brick: trilinear, at natural coordinates found once
+  by Newton; 4-node tetrahedron: barycentric, then the same tie as OpenSees' but exact); the
+  element contract gains an optional "shape-function values at a point inside me". So the node
+  follows the soil it sits in, in bricks and in tetrahedra of a mixed mesh. An unsupported host
+  (tetrahedra until a tetrahedron element is added) is refused with a message.
+- Femora's FemoraX export names each embedded node and its host element (no tetrahedralization
+  for FemoraX); its OpenSees export keeps the tetrahedra (OpenSees' only option) and should warn.
+  A file that lists 4 tetrahedron corners (the Tcl converter, comparisons with OpenSees) can be
+  read in a tetrahedron mode with exactly those corners (recorded as a deviation from the
+  penalty only).
+- `-rot`: the node's rotations tied to the soil's local rotation (half the curl of the host's
+  displacement gradient at the node, linear in the host DOFs). `-K`, `-KP`: ignored (the tie is
+  exact; a deviation). `-p` and the contact options: refused until the soft interfaces
+  (slip, gap, friction as element batches with physical or FLAC3D-bounded stiffness: a later
+  step, as the review recommends).
+
+**Design.**
+- *Compile step:* the general T from every constraint (chains resolved by substitution; a cycle
+  or a DOF constrained twice refused with a message; a fixed retained DOF drops out of the sum;
+  checked against the emulation of OpenSees' Transformation handler as equalDOF is today).
+- *Kernels unchanged:* each constrained DOF gets a slot after the equations; an expand kernel
+  fills the slots before an element evaluation (u_s = T q) and a contract kernel adds their forces
+  back to the retained equations (f_q += T^T f_s), in a fixed order (deterministic). The implicit
+  operator, its diagonal and the ground-motion term use the same expand / contract.
+- *Mass:* implicit: T^T M T exactly, matrix-free. Explicit: an embedded node's mass row-sum lumped
+  onto its host's nodes (total mass, centre of mass and momentum exact); a rigid link or diaphragm
+  group keeps its exact block mass (6 x 6 or 3 x 3 per master), inverted once per stage.
+- *Stable step and LTS:* elements see the masses after the constraint (constraints do not lower
+  the step); a constraint group sits in one LTS level by construction.
+
+**Verification:** patch tests (a node embedded in a distorted brick under uniform strain and rigid
+motion: exact); the pile in soil with embedded nodes where the pile nodes coincide with soil
+nodes (weights reduce to equalDOF: today's result to rounding), then a pile whose nodes are not
+at soil nodes against a refined conforming model; rigid links and a diaphragm floor against
+OpenSees (static, dynamic); embedded nodes against OpenSees' ASDEmbeddedNodeElement with growing
+K (converging to the exact tie); explicit runs with block masses (the step, stability), LTS with
+an embedded pile; benchmarks of the expand and contract kernels.
+
+**Steps (one commit each):** (1) the compile step: T from every constraint type, the host search
+and natural coordinates, conflicts; host tests. (2) Kernels: expand / contract in the force, the
+operator, its diagonal, the ground-motion term; tests against the assembled T^T K T. (3) Explicit:
+lumped and block masses, the stable step. (4) Schema 1.2 (asked with the exact text), reader,
+converter, the OpenSees comparisons. (5) LTS, benchmarks.
+
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
 **The problem.** An explicit stage steps every element at the smallest stable step of the
