@@ -11,6 +11,8 @@
 #include <string>
 
 #include "compile/batches.hpp"
+#include "compile/local_time_stepping.hpp"
+#include "compile/lts_levels.hpp"
 #include "compile/registry.hpp"
 #include "compile/uniform_damping_fit.hpp"
 #include "exec/device_memory.hpp"
@@ -107,6 +109,63 @@ void cd_solve(const Vec& f, const Vec& m, const Vec& cm, const CVec& eq_dof, con
         u(q) = U;
         v_rec(q) = Udot;
         a(q) = Udotdot;
+      });
+}
+
+// --- Local time stepping (docs/design.md; compile/local_time_stepping.hpp, the host reference)
+// One substep of the stabilized leapfrog LTS from the force f at the mixed field (the coarse
+// equations at u_n, the fine ones at z_k): g = (loads - f - ext) / m = -(w + A Pi_f z_k), then
+//   k = 0: z_1 = u_n + c g (c = 1/2 tau^2 2p^2/(omega delta)), z_0 = u_n;
+//   k > 0: z_{k+1} = (1 + beta_k) z_k - beta_k z_{k-1} + c g (c = tau^2 2p^2/omega beta_{k+1/2});
+// and the next mixed field into u.
+void lts_substep(bool first, double a1, double a2, double c, const Vec& f, const Vec& ext, const Vec& m,
+                 const CVec& eq_dof, const Vec& g_accel, const IVec& g_dof, int npat, const CVec& fine,
+                 const Vec& un, const Vec& z, const Vec& zp, const Vec& u, Index neq) {
+  Kokkos::parallel_for(
+      "lts_substep", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq), KOKKOS_LAMBDA(const Index q) {
+        const double g = (-f(q) - ext(q) + ground_load(m(q), eq_dof(q), g_accel, g_dof, npat)) / m(q);
+        if (first) {
+          zp(q) = un(q);
+          z(q) = un(q) + c * g;
+        } else {
+          const double next = a1 * z(q) - a2 * zp(q) + c * g;
+          zp(q) = z(q);
+          z(q) = next;
+        }
+        u(q) = fine(q) ? z(q) : un(q);
+      });
+}
+
+// CentralDifference after the LTS substeps: u(n+1) = -u(n-1) + 2 z_p (no damping), then the
+// velocity and acceleration as cd_solve.
+void cd_lts_finish(const Vec& z, const Vec& un, const Vec& u, const Vec& um, const Vec& v_rec, const Vec& a,
+                   double c2, double dt, Index neq) {
+  Kokkos::parallel_for(
+      "cd_lts_finish", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq), KOKKOS_LAMBDA(const Index q) {
+        const double U = -um(q) + 2.0 * z(q);
+        double Udot = U * 3.0;
+        Udot += un(q) * -4.0;
+        Udot += um(q);
+        Udot *= c2;
+        const double Udotdot = (Udot - v_rec(q)) / dt;
+        um(q) = un(q);
+        u(q) = U;
+        v_rec(q) = Udot;
+        a(q) = Udotdot;
+      });
+}
+
+// ExplicitDifference after the LTS substeps: the step's acceleration 2 (z_p - u) / dt^2 in
+// place of R / m, then as ed_correct.
+void ed_lts_finish(const Vec& z, const Vec& un, const Vec& u, const Vec& vh, const Vec& a, const Vec& v_rec,
+                   double dt, Index neq) {
+  const double halfT = dt * 0.125, s = 2.0 / (dt * dt);
+  Kokkos::parallel_for(
+      "ed_lts_finish", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq), KOKKOS_LAMBDA(const Index q) {
+        const double a_new = (z(q) - un(q)) * s;
+        u(q) = un(q);
+        v_rec(q) = vh(q) + (3.0 * a_new + a(q)) * halfT;
+        a(q) = a_new;
       });
 }
 
@@ -312,7 +371,63 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       // here; the periodic re-check below covers only the others, with the cheap bound.
       const double fixed_dt = force.min_critical_dt(scheme, InternalForce::Batches::Fixed);
       st.critical_dt = std::min(fixed_dt, force.min_critical_dt(scheme, InternalForce::Batches::Changing));
-      if (an->dt > st.critical_dt) {
+      // Local time stepping: the levels from every element's own stable step.
+      bool lts = false;
+      compile::LtsCoefficients lcoef;
+      int ring = -1;
+      CVec fine_d;
+      Vec un, z, zp, ext;
+      ForceSettings lts_settings = choice.settings;
+      if (opt.local_time_stepping) {
+        if (force.has_state())
+          throw io::ModelError("stage \"" + an->name + "\": local time stepping does not support materials with state "
+                               "or Uniform damping yet");
+        for (const auto& rr : model.rayleigh)
+          if (rr.alphaM != 0.0 || rr.betaK != 0.0 || rr.betaKinit != 0.0 || rr.betaKcomm != 0.0)
+            throw io::ModelError("stage \"" + an->name + "\": local time stepping does not support Rayleigh damping yet");
+        const compile::LtsLevels lv = compile::assign_lts_levels(c, force.element_critical_dts(scheme), an->dt, opt.lts);
+        if (lv.too_fine > 0) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg),
+                        "stage \"%s\": %lld elements need a step finer than %d local time stepping levels give "
+                        "(their smallest stable step %.6g, dt = %.6g)",
+                        an->name.c_str(), static_cast<long long>(lv.too_fine), opt.lts.max_levels, lv.min_element_dt,
+                        an->dt);
+          throw io::ModelError(msg);
+        }
+        st.lts_levels = lv.levels;
+        if (lv.levels > 1) {
+          lts = true;
+          int ratio_p = 1;
+          for (int l = 1; l < lv.levels; ++l) ratio_p *= opt.lts.ratio;
+          lcoef = compile::lts_coefficients(ratio_p, opt.lts_nu);
+          std::vector<std::int8_t> fine(lv.equation_level.size());
+          for (std::size_t q = 0; q < fine.size(); ++q) {
+            fine[q] = lv.equation_level[q] > 0 ? 1 : 0;
+            st.lts_fine_equations += fine[q];
+          }
+          fine_d = upload("lts_fine", fine);
+          std::vector<std::vector<std::uint8_t>> member(lv.touched_level.size());
+          for (std::size_t b = 0; b < member.size(); ++b)
+            for (const auto l : lv.touched_level[b]) member[b].push_back(l > 0 ? 1 : 0);
+          ring = force.add_element_subset(member);
+          st.lts_substeps = ratio_p;
+          st.lts_substep_elements = force.subset_elements(ring);
+          // Element evaluations per coarse step: a global step at dt / p runs every element p
+          // times; the two-level scheme runs the substep elements p times and the others once.
+          const double all = static_cast<double>(lv.elements), sub = static_cast<double>(st.lts_substep_elements);
+          st.lts_speedup = all * ratio_p / (all - sub + sub * ratio_p);
+          un = Vec("lts_u", static_cast<std::size_t>(neq));
+          z = Vec("lts_z", static_cast<std::size_t>(neq));
+          zp = Vec("lts_z_prev", static_cast<std::size_t>(neq));
+          ext = Vec("lts_ext", static_cast<std::size_t>(neq));
+          // The substeps re-evaluate only some elements and keep the others' slots: the gather
+          // scatter, the fused material path.
+          lts_settings.scatter = Scatter::Gather;
+          lts_settings.material = MaterialPath::Fused;
+        }
+      }
+      if (an->dt > st.critical_dt && !lts) {
         char msg[256];
         std::snprintf(msg, sizeof(msg), "stage \"%s\": dt = %.6g exceeds the stable step %.6g of %s",
                       an->name.c_str(), an->dt, st.critical_dt, st.integrator.c_str());
@@ -333,8 +448,38 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       std::int64_t k = 0;
       const double final_time = an->final_time ? as_tcl_time(*an->final_time) : 0.0;
       auto more = [&] { return an->final_time ? as_tcl_time(time) < final_time : k < *an->num_steps; };
+      // The LTS substeps from u = u_n at time t: z_p in z, u_n in un, u holds the last mixed
+      // field (the finish kernels restore it). The loads and the DRM forces are held at t.
+      const double tau2 = (dt / lcoef.p) * (dt / lcoef.p);
+      auto lts_substeps = [&](double t) {
+        Kokkos::deep_copy(un, u);
+        Kokkos::deep_copy(ext, 0.0);
+        motions.apply_drm(t, ext);
+        force.step = StepContext{t, dt, 1};
+        for (int j = 0; j < lcoef.p; ++j) {
+          if (j == 0) force.compute(lts_settings);
+          else force.compute_subset(lts_settings, ring);
+          const bool first = j == 0;
+          const double bk = first ? 0.0 : lcoef.beta[static_cast<std::size_t>(j - 1)];
+          const double cc = first ? 0.5 * tau2 * lcoef.c_first : tau2 * lcoef.c_rest * lcoef.beta_half[static_cast<std::size_t>(j - 1)];
+          lts_substep(first, 1.0 + bk, bk, cc, force.f, ext, m, eq_dof, motions.accel(), motions.dof(),
+                      motions.num_active(), fine_d, un, z, zp, u, n);
+        }
+      };
       while (more()) {
-        if (ed) {
+        if (lts && ed) {
+          ed_predict(u, v_elem, a, dt, n);
+          time += dt;
+          motions.evaluate(time);
+          lts_substeps(time);
+          ed_lts_finish(z, un, u, v_elem, a, v_rec, dt, n);
+        } else if (lts) {
+          motions.evaluate(time);
+          cd_garbage_velocity(v_elem, um, c2, n);
+          lts_substeps(time);
+          cd_lts_finish(z, un, u, um, v_rec, a, c2, dt, n);
+          time += dt;
+        } else if (ed) {
           ed_predict(u, v_elem, a, dt, n);
           time += dt;
           motions.evaluate(time);
@@ -398,6 +543,11 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         std::printf("femorax: stage %s: %s, %lld steps of %.6g (%s), %.3f s (%.3f ms/step)\n", st.name.c_str(),
                     st.integrator.c_str(), static_cast<long long>(st.steps), st.dt, limit, st.seconds,
                     st.steps ? 1e3 * st.seconds / st.steps : 0.0);
+        if (lts)
+          std::printf("femorax: stage %s: local time stepping, %d levels: %lld fine equations take %d substeps, "
+                      "%lld elements evaluated in each substep, estimated gain over a global step %.2fx\n",
+                      st.name.c_str(), st.lts_levels, static_cast<long long>(st.lts_fine_equations), st.lts_substeps,
+                      static_cast<long long>(st.lts_substep_elements), st.lts_speedup);
       }
     }
   }

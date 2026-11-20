@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 #include "compile/registry.hpp"
@@ -254,6 +255,40 @@ void InternalForce::compute(const ForceSettings& settings) {
   if (nodal_damping_) {
     // The nodal masses' Rayleigh damping force alphaM M v, with the velocity the elements see
     // (OpenSees: Node::getUnbalancedLoadIncInertia).
+    const Vec am = nodal_alpha_mass_, ff = f, vv = v;
+    Kokkos::parallel_for(
+        "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_),
+        KOKKOS_LAMBDA(const Index q) { ff(q) += am(q) * vv(q); });
+  }
+}
+
+int InternalForce::add_element_subset(const std::vector<std::vector<std::uint8_t>>& member) {
+  if (member.size() != batches_.size()) throw std::invalid_argument("add_element_subset: one flag list per batch");
+  Subset sub;
+  for (std::size_t bi = 0; bi < batches_.size(); ++bi) {
+    std::vector<Index> list;
+    for (std::size_t e = 0; e < member[bi].size(); ++e)
+      if (member[bi][e]) list.push_back(static_cast<Index>(e));
+    sub.count.push_back(static_cast<Index>(list.size()));
+    sub.elements += static_cast<std::int64_t>(list.size());
+    sub.lists.push_back(upload("subset_elements", list));
+  }
+  subsets_.push_back(std::move(sub));
+  return static_cast<int>(subsets_.size()) - 1;
+}
+
+std::int64_t InternalForce::subset_elements(int subset) const {
+  return subsets_[static_cast<std::size_t>(subset)].elements;
+}
+
+void InternalForce::compute_subset(const ForceSettings& settings, int subset) {
+  for (auto& b : batches_) b->set_step(step);
+  const ForceSettings s = resolve(settings);
+  const Subset& sub = subsets_[static_cast<std::size_t>(subset)];
+  for (std::size_t bi = 0; bi < batches_.size(); ++bi)
+    batches_[bi]->run_list(s, coords_, nnodes_, u, v, gather_.slots(), sub.lists[bi], sub.count[bi]);
+  gather_.gather(f);
+  if (nodal_damping_) {
     const Vec am = nodal_alpha_mass_, ff = f, vv = v;
     Kokkos::parallel_for(
         "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_),

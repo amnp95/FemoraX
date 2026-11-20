@@ -1113,7 +1113,29 @@ global / LTS); nothing uses them yet. Found by its test: a laminar boundary's ti
 level's side nodes into one equation, so a fine element on the side pulls the elements around
 the whole tied perimeter into its level's substeps (correct: a constraint group sits in one
 level; a cost to remember for fine elements at laminar boundaries).
-(3) The undamped LTS in the explicit time loop, tests (2)-(3). (4) Mass then stiffness
+(3) The undamped LTS in the explicit time loop, tests (2)-(3). 3a done (2026-11-19,
+`test_lts_3d`): the host scheme on a 4 x 4 x 8 stdBrick column with one stiff element, its levels
+from the device's element steps: 16x stiffer, LTS at the soil's step as accurate as the global
+step (0.165 against 0.167 of the peak); 256x, the global coarse step blows up and LTS stays
+stable at the same accuracy; the modified energy constant to 2.8e-14 over 5,000 steps.
+3b done (2026-11-19): in `run_model` (`RunOptions::local_time_stepping`, a developer option
+until step 6), both schemes, two levels (every equation above level 0 takes ratio^(levels-1)
+substeps; the recursive multilevel scheme is step 3c). At the start of an explicit stage the
+levels come from the elements' own steps (more than `max_levels` needed: the run stops; one
+level: the usual stage, bit for bit); the substeps evaluate only the elements touching a fine
+equation (`InternalForce::compute_subset`: those elements write their own gather slots, the
+others keep the slots of the coarse step's full evaluation, so the force at the mixed field
+coarse u_n / fine z_k is bit for bit a full evaluation there); the loads and the DRM forces are
+held at the step's time; CentralDifference takes u(n+1) = -u(n-1) + 2 z_p and
+ExplicitDifference the step's acceleration 2 (z_p - u_n) / dt^2. Refused for now (step 4):
+Rayleigh damping, material state, Uniform damping. Tests: the run equals the host reference
+recurrence within 7e-13 of the peak (256x inclusion, gravity from rest, 16 substeps, 27 of 128
+elements in the substeps), ExplicitDifference the same one step later; with 16x it is as
+accurate as the global coarse step against a run at dt/64 (5.7 % against 5.8 %, mostly the
+start from rest); the subset force equals the full force bit for bit; one level gives the usual
+run bit for bit. Not yet: vector work over the fine equations only and a gather of the ring's
+equations only (each substep still gathers and updates every equation: step 5).
+(4) Mass then stiffness
 damping, then Uniform, each with the same checks (the eigenvalue sweep, the energy decaying
 steadily, a global small-step reference). (5) The GPU launch strategy (each coarse step's
 launches captured in a Kokkos Graph, as SeisSol captures CUDA/HIP graphs; measured), benchmarks.

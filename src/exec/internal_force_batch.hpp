@@ -47,6 +47,11 @@ struct InternalForce::Batch {
   // Returns the number of points that took the plastic corrector (compacted path; 0 else).
   virtual std::int64_t run(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,
                            const Vec& v, const Vec& f, const Vec& slots) = 0;
+  // The force of the listed elements only (list(0 .. n-1), batch element indices) into their
+  // own slots (Out::Slots, the fused material path): local time stepping's substeps
+  // (docs/design.md, "Local time stepping"); the other slots keep their values.
+  virtual void run_list(const ForceSettings& s, const Vec& coords, Index N, const Vec& u, const Vec& v,
+                        const Vec& slots, const Kokkos::View<Index*, Space>& list, Index n) = 0;
   virtual bool split_material() const = 0;
   virtual std::int64_t count() const = 0;
   virtual std::int64_t device_bytes() const = 0;
@@ -178,6 +183,25 @@ struct TypedBatch final : InternalForce::Batch {
     }
     run_kernels(b, s, out, coords, N, u, v, f, slots);
     return 0;
+  }
+
+  void run_list(const ForceSettings& s, const Vec& coords, Index N, const Vec& u, const Vec& v, const Vec& slots,
+                const Kokkos::View<Index*, Space>& list, Index n) override {
+    if (n <= 0) return;
+    kernels::DevBatch<Elem> lb = b;  // the same device data, launched over the list
+    lb.color_elements = list;
+    const bool cached = s.geometry == Geometry::Cached;
+    const Vec none;
+    if (s.layout == Layout::Team) {
+      if constexpr (PointwiseElement<Elem>) {
+        const int ept = s.elements_per_team;
+        if (cached) kernels::launch_team<Elem, true>(lb, coords, N, u, v, none, slots, Out::Slots, 0, n, true, ept);
+        else kernels::launch_team<Elem, false>(lb, coords, N, u, v, none, slots, Out::Slots, 0, n, true, ept);
+        return;
+      }
+    }
+    if (cached) kernels::launch_flat<Elem, true>(lb, coords, N, u, v, none, slots, Out::Slots, 0, n, true);
+    else kernels::launch_flat<Elem, false>(lb, coords, N, u, v, none, slots, Out::Slots, 0, n, true);
   }
 
   std::int64_t run_compacted(const ForceSettings& s, Out out, const Vec& coords, Index N, const Vec& u,

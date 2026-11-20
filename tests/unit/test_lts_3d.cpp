@@ -9,6 +9,9 @@
 //   - LTS at the coarse step follows the global leapfrog at the fine step (the inclusion's
 //     level) to the schemes' accuracy;
 //   - the scheme's modified energy is conserved.
+// Step 3b: the same scheme in the explicit time loop (exec::run_model with
+// RunOptions::local_time_stepping, the real force kernels; the substeps re-evaluate only the
+// fine elements and their ring, InternalForce::compute_subset), against the host reference.
 
 #include <Kokkos_Core.hpp>
 #include <gtest/gtest.h>
@@ -16,7 +19,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <sstream>
+#include <string>
+#include <unistd.h>
 #include <variant>
 #include <vector>
 
@@ -24,6 +32,7 @@
 #include "../common/synthetic_models.hpp"
 #include "compile/local_time_stepping.hpp"
 #include "compile/lts_levels.hpp"
+#include "exec/explicit_analysis.hpp"
 #include "exec/internal_force.hpp"
 
 namespace {
@@ -42,7 +51,8 @@ struct Column {
   femorax::compile::LtsLevels levels;
 };
 
-Column make_column(double stiffness = 16.0) {
+Column make_column(double stiffness = 16.0,
+                   femorax::compile::Renumbering renumbering = femorax::compile::Renumbering::RCM) {
   femorax::testing::ColumnSpec s;
   s.nx = s.ny = 4;
   s.nz = 8;
@@ -68,7 +78,9 @@ Column make_column(double stiffness = 16.0) {
   stiff.tag = 3;
   std::get<femorax::io::ElasticIsotropicData>(stiff.data).E *= stiffness;
   r.model.materials.push_back(stiff);
-  r.c = femorax::compile::compile_model(r.model, femorax::compile::CompileOptions{});
+  femorax::compile::CompileOptions co;
+  co.renumbering = renumbering;
+  r.c = femorax::compile::compile_model(r.model, co);
   r.ref = femorax::testing::assemble_reference(r.model, r.c);
   const auto n = static_cast<std::size_t>(r.c.dofs.num_equations);
   r.m.assign(n, 0.0);
@@ -232,6 +244,191 @@ TEST(Lts3D, ConservesTheModifiedEnergy) {
   }
   std::printf("[ 5000 coarse steps: largest relative change of the modified energy %.2e ]\n", worst);
   EXPECT_LE(worst, 1e-10);
+}
+
+// --- Step 3b: the time loop ----------------------------------------------------------
+
+namespace fs = std::filesystem;
+
+std::string temp_file(const std::string& name) {
+  const fs::path d = fs::temp_directory_path() / ("femorax_test_lts_" + std::to_string(::getpid()));
+  fs::create_directories(d);
+  return (d / name).string();
+}
+
+std::vector<std::vector<double>> read_rows(const std::string& file) {
+  std::vector<std::vector<double>> rows;
+  std::ifstream in(file);
+  for (std::string line; std::getline(in, line);) {
+    std::istringstream ss(line);
+    std::vector<double> r;
+    for (double x; ss >> x;) r.push_back(x);
+    if (!r.empty()) rows.push_back(r);
+  }
+  return rows;
+}
+
+// Runs `steps` explicit steps of `dt` from rest under gravity (the body force), every node's
+// displacement recorded after each step; returns the rows as equation-space vectors (the
+// compile step's numbering with renumbering off).
+std::vector<std::vector<double>> run(const Column& s, femorax::io::Integrator integrator, double dt, int steps,
+                                     bool lts, femorax::exec::RunReport* report = nullptr,
+                                     bool allow_unstable_dt = false) {
+  femorax::io::Model m = s.model;
+  femorax::io::NodeRecorder nr;
+  nr.file = temp_file("disp.txt");
+  nr.response = femorax::io::NodeResponse::Disp;
+  nr.time = true;
+  nr.precision = 17;
+  nr.nodes = m.nodes.tags;
+  nr.dofs = {1, 2, 3};
+  m.recorders.push_back({"d", nr, {}});
+  m.process.push_back({"0", "", femorax::io::RecorderStep{"d"}});
+  femorax::io::AnalysisStep a;
+  a.name = "run";
+  a.dt = dt;
+  a.num_steps = steps;
+  a.integrator = integrator;
+  a.allow_unstable_dt = allow_unstable_dt;
+  m.process.push_back({"1", "", a});
+  femorax::exec::RunOptions o;
+  o.verbose = false;
+  o.renumbering = femorax::compile::Renumbering::Off;
+  o.local_time_stepping = lts;
+  const auto rep = femorax::exec::run_model(m, o);
+  if (report) *report = rep;
+  const auto rows = read_rows(nr.file);
+  std::vector<std::vector<double>> out;
+  const auto n = static_cast<std::size_t>(s.c.dofs.num_equations);
+  for (const auto& r : rows) {
+    std::vector<double> u(n, 0.0);
+    for (std::int32_t node = 0; node < s.c.dofs.num_nodes(); ++node)
+      for (int d = 0; d < 3; ++d) {
+        const std::int32_t q = s.c.dofs.equation(node, d);
+        if (q >= 0) u[static_cast<std::size_t>(q)] = r[static_cast<std::size_t>(1 + 3 * node + d)];
+      }
+    out.push_back(u);
+  }
+  return out;
+}
+
+// The force of the subset after a change of the subset's inputs only equals the full force,
+// bit for bit.
+TEST(Lts3D, SubsetForceEqualsTheFullForce) {
+  const Column s = make_column(256.0);
+  femorax::exec::InternalForce force(s.c, femorax::exec::GeometryCache::Auto);
+  std::vector<std::vector<std::uint8_t>> member(s.levels.touched_level.size());
+  for (std::size_t b = 0; b < member.size(); ++b)
+    for (const auto l : s.levels.touched_level[b]) member[b].push_back(l > 0 ? 1 : 0);
+  const int ring = force.add_element_subset(member);
+  ASSERT_GT(force.subset_elements(ring), 0);
+  ASSERT_LT(force.subset_elements(ring), force.num_elements());
+  const auto u0 = initial(s);
+  auto hu = Kokkos::create_mirror_view(force.u);
+  for (std::size_t i = 0; i < u0.size(); ++i) hu(i) = u0[i];
+  Kokkos::deep_copy(force.u, hu);
+  Kokkos::deep_copy(force.v, 0.0);
+  femorax::exec::ForceSettings fs;
+  force.compute(fs);
+  for (std::size_t i = 0; i < u0.size(); ++i)
+    if (s.fine[i]) hu(i) = u0[i] * 1.7 + 1e-4;
+  Kokkos::deep_copy(force.u, hu);
+  force.compute_subset(fs, ring);
+  const auto sub = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), force.f);
+  force.compute(fs);
+  const auto full = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), force.f);
+  for (std::size_t i = 0; i < u0.size(); ++i) ASSERT_EQ(sub(i), full(i)) << i;
+}
+
+// With one level (no inclusion) the run is the usual one, bit for bit, for both schemes.
+TEST(Lts3D, OneLevelIsTheUsualRunBitForBit) {
+  const Column s = make_column(1.0, femorax::compile::Renumbering::Off);
+  ASSERT_EQ(s.levels.levels, 1);
+  for (const auto integ : {femorax::io::Integrator::CentralDifference, femorax::io::Integrator::ExplicitDifference}) {
+    femorax::exec::RunReport rep;
+    const auto a = run(s, integ, s.dt, 50, true, &rep);
+    const auto b = run(s, integ, s.dt, 50, false);
+    ASSERT_EQ(rep.stages.at(0).lts_levels, 1);
+    ASSERT_EQ(a.size(), 50u);
+    for (std::size_t k = 0; k < a.size(); ++k) ASSERT_EQ(a[k], b[k]) << k;
+  }
+}
+
+// The run with the 256 times stiffer inclusion at the soil's step: CentralDifference with LTS
+// equals the host reference recurrence (lts_step on the reference assembly, the body force as
+// an affine term) to rounding; ExplicitDifference is the same recurrence one step later
+// (it starts from the committed acceleration 0); the global run at the fine step stays close.
+TEST(Lts3D, TimeLoopMatchesTheHostReference) {
+  const Column s = make_column(256.0, femorax::compile::Renumbering::Off);
+  ASSERT_GE(s.levels.levels, 2);
+  const int steps = 200;
+  femorax::exec::RunReport rep;
+  const auto cd = run(s, femorax::io::Integrator::CentralDifference, s.dt, steps, true, &rep);
+  const auto& st = rep.stages.at(0);
+  std::printf("[ LTS run: %d levels, %d substeps, %lld fine equations, %lld of %lld elements in the substeps, "
+              "estimated gain %.2fx ]\n",
+              st.lts_levels, st.lts_substeps, static_cast<long long>(st.lts_fine_equations),
+              static_cast<long long>(st.lts_substep_elements), static_cast<long long>(rep.elements), st.lts_speedup);
+  ASSERT_EQ(st.lts_substeps, s.p);
+  ASSERT_EQ(cd.size(), static_cast<std::size_t>(steps));
+
+  // The host reference: f(u) = K u + f0 (f0 = f(0): the body force), so the mixed-field force
+  // is A Pi_c u + A Pi_f z + M^-1 f0, split in two halves over the two applications.
+  femorax::exec::InternalForce force(s.c, femorax::exec::GeometryCache::Off);
+  force.fill(0.0, 0.0);
+  force.compute(femorax::exec::ForceSettings{});
+  const auto hf = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), force.f);
+  const auto n = s.m.size();
+  auto apply = [&](const std::vector<double>& x, std::vector<double>& y) {
+    y = s.ref.multiply(s.ref.K, x);
+    for (std::size_t i = 0; i < n; ++i) y[i] = (y[i] + 0.5 * hf(i)) / s.m[i];
+  };
+  const auto c = femorax::compile::lts_coefficients(s.p, 0.05);
+  std::vector<double> a(n, 0.0), b(n, 0.0), next;  // CentralDifference: u(-1) = u(0) = 0
+  double peak = 0.0, err = 0.0;
+  for (int k = 0; k < steps; ++k) {
+    femorax::compile::lts_step(c, s.dt, s.fine, apply, a, b, next);
+    a.swap(b);
+    b.swap(next);
+    peak = std::max(peak, max_abs(b));
+    err = std::max(err, max_diff(b, cd[static_cast<std::size_t>(k)]));
+  }
+  std::printf("[ CentralDifference with LTS against the host reference: %.2e of the peak %.3e ]\n", err / peak, peak);
+  EXPECT_LE(err, 1e-10 * peak);
+
+  const auto ed = run(s, femorax::io::Integrator::ExplicitDifference, s.dt, steps, true);
+  double err_ed = 0.0;
+  for (int k = 0; k + 1 < steps; ++k)
+    err_ed = std::max(err_ed, max_diff(ed[static_cast<std::size_t>(k + 1)], cd[static_cast<std::size_t>(k)]));
+  std::printf("[ ExplicitDifference with LTS against CentralDifference one step earlier: %.2e of the peak ]\n",
+              err_ed / peak);
+  EXPECT_LE(err_ed, 1e-10 * peak);
+
+}
+
+// Accuracy in the time loop: with the inclusion 16 times stiffer the global run at the soil's
+// step is still stable in the assembled model (allowed past the element check here), so LTS
+// must be as accurate as it, both measured against a global run at a 64 times smaller step.
+// The comparison is at the same scheme and start (CentralDifference from rest), so the start's
+// own dependence on dt is in both errors.
+TEST(Lts3D, TimeLoopIsAsAccurateAsTheGlobalCoarseStep) {
+  const Column s = make_column(16.0, femorax::compile::Renumbering::Off);
+  ASSERT_GE(s.levels.levels, 2);
+  const int steps = 100;
+  const auto cd = femorax::io::Integrator::CentralDifference;
+  const auto lts = run(s, cd, s.dt, steps, true);
+  const auto coarse = run(s, cd, s.dt, steps, false, nullptr, true);
+  const auto truth = run(s, cd, s.dt / 64, steps * 64, false);
+  double peak = 0.0, e_lts = 0.0, e_coarse = 0.0;
+  for (int k = 0; k < steps; ++k) {
+    const auto& t = truth[static_cast<std::size_t>((k + 1) * 64 - 1)];
+    peak = std::max(peak, max_abs(t));
+    e_lts = std::max(e_lts, max_diff(lts[static_cast<std::size_t>(k)], t));
+    e_coarse = std::max(e_coarse, max_diff(coarse[static_cast<std::size_t>(k)], t));
+  }
+  std::printf("[ against a global run at dt/64: LTS %.2e, global at the coarse step %.2e (of the peak) ]\n",
+              e_lts / peak, e_coarse / peak);
+  EXPECT_LE(e_lts, 1.2 * e_coarse);
 }
 
 }  // namespace

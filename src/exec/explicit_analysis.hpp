@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "compile/batches.hpp"
+#include "compile/lts_levels.hpp"
 #include "compile/renumber.hpp"
 #include "io/model.hpp"
 
@@ -41,6 +42,14 @@ struct RunOptions {
   bool vtkhdf_single_precision = false;  // VTKHDF responses as float32 (computation stays FP64)
   // H5DRM: history samples on the device per pattern (0: from a 256 MB budget; tests set 2).
   std::int64_t drm_window_samples = 0;
+  // Local time stepping in explicit stages (docs/design.md, "Local time stepping"; step 3b,
+  // a developer option until the schema option): each element at the coarsest level its own
+  // stable step allows, the stage's dt as the coarse step. Two levels for now: every equation
+  // above level 0 takes ratio^(levels-1) substeps (the stabilized leapfrog LTS, lts_nu). Only
+  // undamped models without material state; with one level the stage is the usual one.
+  bool local_time_stepping = false;
+  compile::LtsOptions lts{};
+  double lts_nu = 0.05;
 };
 
 struct StageReport {
@@ -56,6 +65,11 @@ struct StageReport {
   // (steps plus substeps).
   std::int64_t retries = 0, substepped = 0, commits = 0;
   std::string solver;
+  // Explicit stages with local time stepping: the levels, the substeps of the fine equations
+  // per step, the elements evaluated in the substeps, and the estimated gain over a global step.
+  int lts_levels = 1, lts_substeps = 1;
+  std::int64_t lts_fine_equations = 0, lts_substep_elements = 0;
+  double lts_speedup = 1.0;
 };
 
 struct RunReport {

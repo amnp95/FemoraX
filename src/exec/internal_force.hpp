@@ -165,6 +165,16 @@ class InternalForce {
   bool drm_needs_state(int batch) const;
   std::int64_t drm_state_doubles(int batch) const;
 
+  // Element subsets (local time stepping, docs/design.md): member[b][e] marks element e of
+  // batch b (the compile step's order, real elements); returns the subset's id. Setup work.
+  int add_element_subset(const std::vector<std::vector<std::uint8_t>>& member);
+  std::int64_t subset_elements(int subset) const;
+  // f at (u, v) when only the subset's elements changed since the last compute() with the
+  // gather scatter: the subset's elements are evaluated (fused material path) into their own
+  // slots, the other elements keep the slots of that compute, then every equation adds its
+  // slots. Bit for bit what compute() would give if the others' forces are unchanged.
+  void compute_subset(const ForceSettings& settings, int subset);
+
   // Smallest stable explicit step over the elements of the chosen batches (docs/design.md,
   // "Stable time step"): all of them, or only those whose stable step can change during a
   // stage (contracts.hpp, stability_may_change), or only those whose step cannot.
@@ -201,6 +211,12 @@ class InternalForce {
     std::vector<Kokkos::View<std::int32_t*, Space>> elems, rows;  // per batch
   };
   std::vector<Selection> selections_;
+  struct Subset {
+    std::vector<Kokkos::View<std::int32_t*, Space>> lists;  // per batch
+    std::vector<std::int32_t> count;
+    std::int64_t elements = 0;
+  };
+  std::vector<Subset> subsets_;
 };
 
 }  // namespace femorax::exec

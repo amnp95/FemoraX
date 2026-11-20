@@ -106,9 +106,11 @@ Done today besides: the DRM frame (schema 1.0), nodal masses damped by their reg
 the mass and damping standard for structures (docs/design.md, "Structures").
 
 **LTS (2026-11-19):** steps 1, 2 and 3a committed (b555557): the host reference scheme, the
-levels, and the 3D brick column with a stiff inclusion. Next: 3b, the device version in the
-explicit time loop (a force kernel over an element subset; the substeps evaluate the fine
-elements and their ring at the mixed field coarse u_n / fine z_k), tested against 3a.
+levels, and the 3D brick column with a stiff inclusion. 3b done: the scheme in `run_model`
+(`RunOptions::local_time_stepping`), two levels, undamped and stateless only, matching the host
+reference within 7e-13 (docs/design.md). Next: 3c, the recursive multilevel scheme; then step 4,
+damping (mass, stiffness, Uniform); step 5, the substeps' vector work and gather restricted to
+the fine equations, and Kokkos Graph capture, with benchmarks.
 
 **Embedded piles (2026-11-19):** literature review in docs/research/embedded_and_constraints/.
 The user's own element, `EmbeddedBeamContact3D` (OpenSees C++, with a theory document, tests
