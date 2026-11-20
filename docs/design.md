@@ -1260,6 +1260,28 @@ with the squared weights: T^T A T's diagonal without the cross terms, a Jacobi p
 the recorder gets the force object's u after an expand. Test: Newmark with Newton on the
 embedded pile equals the equalDOF pile within 1.8e-15 of the peak (40 steps). Next: the block
 masses for rigid links and diaphragms, the rotation tie's mass, then schema 1.2 (asked first).
+Step 3 done (2026-11-20): rigid links and diaphragms in explicit and implicit stages, with their
+exact masses. Each constraint row is exact (rigid links, diaphragms) or row-sum lumped (the
+embedded translations); an embedded row through a rigid one is refused for now. The compile step
+couples the equations of exact rows with two or more terms into mass blocks (union-find; at most
+12 equations, refused beyond), each with its dense T^T M T and alphaM M (the equations' own masses
+on the diagonal plus every exact slot's m w_i w_j); lumped_mass keeps the blocks' diagonals (the
+mass check). The explicit stages solve each block with the inverse of M (ExplicitDifference) or
+of c3 M + c2 C (CentralDifference), by Cholesky on the host once per stage (a block that is not
+positive definite stops the run, naming its node), one thread per block; the diagonal kernels
+skip the block equations; the ground motion is -M r ag per block. The nodal masses (and their
+alphaM) now keep their slots: the operator, its diagonal, the ground-motion term and the nodal
+damping force apply them before the contraction (T^T M T exactly in implicit stages, for every
+constraint type), and eq_dof spans the slots. Local time stepping with any of these constraints:
+refused for now. Tests: the explicit masses (blocks and diagonal) equal the columns of the
+implicit operator's mass within 1.9e-16 (`BeamKernels.RigidMassBlocksAreTheOperatorsExactMass`:
+a one-storey frame of four dispBeamColumn columns, a diaphragm with an off-centre master, an
+eccentric mass on a rigid link off a slave column top: a chain; one block of 6 equations); under
+base shaking CentralDifference and ExplicitDifference follow Newmark within 2.5e-6 of the peak,
+the floor twisting (`RigidDiaphragmFrameExplicitFollowsNewmark`); with the blocks' off-diagonal
+terms dropped the same test is off by 13.5 %. Next: the rotation tie's mass, the embedded nodes
+with H5DRM and with velocity / acceleration recorders, OpenSees comparisons (with the converter,
+after schema 1.2, asked first).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

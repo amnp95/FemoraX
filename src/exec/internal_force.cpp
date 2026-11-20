@@ -110,8 +110,10 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
       nslots_(std::max(c.dofs.num_slots, c.dofs.num_equations)),
       nnodes_(c.dofs.num_nodes()) {
   coords_ = upload("coords", c.coords);
-  eq_dof_ = upload("eq_dof", c.eq_dof.empty() ? std::vector<std::int8_t>(static_cast<std::size_t>(neq_), 0) : c.eq_dof);
-  nodal_mass_ = upload("nodal_mass", c.nodal_mass.empty() ? std::vector<double>(static_cast<std::size_t>(neq_), 0.0)
+  // eq_dof and the nodal masses span the slots (the constrained DOFs' own), applied before the
+  // contraction: T^T M T exactly.
+  eq_dof_ = upload("eq_dof", c.eq_dof.empty() ? std::vector<std::int8_t>(static_cast<std::size_t>(nslots_), 0) : c.eq_dof);
+  nodal_mass_ = upload("nodal_mass", c.nodal_mass.empty() ? std::vector<double>(static_cast<std::size_t>(nslots_), 0.0)
                                                           : c.nodal_mass);
   for (const double am : c.nodal_alpha_mass) nodal_damping_ |= am != 0.0;
   if (nodal_damping_) nodal_alpha_mass_ = upload("nodal_alpha_mass", c.nodal_alpha_mass);
@@ -341,7 +343,7 @@ void InternalForce::compute(const ForceSettings& settings) {
     // (OpenSees: Node::getUnbalancedLoadIncInertia).
     const Vec am = nodal_alpha_mass_, ff = f, vv = v;
     Kokkos::parallel_for(
-        "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_),
+        "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, static_cast<Index>(am.extent(0))),
         KOKKOS_LAMBDA(const Index q) { ff(q) += am(q) * vv(q); });
   }
   contract_slots(f);  // the constrained DOFs' forces onto their equations (embedded nodes)
@@ -378,7 +380,7 @@ void InternalForce::compute_subset(const ForceSettings& settings, int subset) {
   if (nodal_damping_) {
     const Vec am = nodal_alpha_mass_, ff = f, vv = v;
     Kokkos::parallel_for(
-        "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_),
+        "nodal_damping_force", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, static_cast<Index>(am.extent(0))),
         KOKKOS_LAMBDA(const Index q) { ff(q) += am(q) * vv(q); });
   }
   contract_slots(f);
@@ -584,7 +586,7 @@ void InternalForce::mass_times_ground(int direction, const OperatorSettings& set
   const Vec nm = nodal_mass_;
   const auto dof = eq_dof_;
   Kokkos::parallel_for(
-      "ground_nodal_mass", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq_),
+      "ground_nodal_mass", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, static_cast<Index>(nm.extent(0))),
       KOKKOS_LAMBDA(const Index q) { if (dof(q) == direction) y(q) += nm(q); });
 }
 

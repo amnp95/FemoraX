@@ -43,6 +43,7 @@ struct DofNumbering {
   std::vector<std::int64_t> con_start{0};
   std::vector<std::int32_t> con_eq;
   std::vector<double> con_weight;
+  std::vector<std::int8_t> con_exact;  // per slot: exact block mass (1) or row-sum lumped (0)
   std::int32_t num_constrained() const { return num_slots - num_equations; }
 
   std::int32_t num_nodes() const { return static_cast<std::int32_t>(node_tag.size()); }

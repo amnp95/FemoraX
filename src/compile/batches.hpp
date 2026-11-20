@@ -82,20 +82,32 @@ struct Compiled {
   Ordering ordering;
   Subdomain subdomain;
   std::vector<double> coords;       // [3 * N] structure of arrays: x[N] y[N] z[N]
-  std::vector<std::int8_t> eq_dof;  // [num_equations]: the nodal DOF (0-based) of each equation
+  std::vector<std::int8_t> eq_dof;  // [num_slots]: the nodal DOF (0-based) of each equation and slot
   std::vector<Batch> batches;
   std::vector<double> lumped_mass;  // [num_equations]: element lumped mass + nodal mass
   // [num_equations]: sum over elements of alphaM_e * lumped mass (mass-proportional
   // damping coefficient per equation, for CentralDifference's diagonal system).
   std::vector<double> lumped_alpha_mass;
-  std::vector<double> nodal_mass;  // [num_equations]: the nodal masses alone (matrix-free M)
+  // [num_slots]: the nodal masses alone (matrix-free M), the constrained DOFs' on their slots
+  // (the operator applies them there, before the contraction: T^T M T exactly).
+  std::vector<double> nodal_mass;
   // [num_equations]: each equation's nodal mass split equally among the element DOFs that touch
   // it (a partition of the assembled nodal mass): the share an element adds to its own mass in
   // its stable step (docs/todo.md item 22; elements that take it declare NODAL_MASS_IN_STEP).
   std::vector<double> nodal_mass_share;
-  // [num_equations]: alphaM times the nodal masses, alphaM of each node's Rayleigh region
+  // [num_slots]: alphaM times the nodal masses, alphaM of each node's Rayleigh region
   // (the nodal masses' damping C = alphaM M; zero without nodal masses in damped regions)
   std::vector<double> nodal_alpha_mass;
+  // The explicit mass blocks of exact constraints (rigid links, diaphragms; docs/design.md,
+  // "Exact constraints u = T q"): the equations coupled by T^T M T, block b's equations
+  // eq[start[b] .. start[b + 1]), its dense M and alphaM M (row major, nb x nb) from
+  // offset[b]. lumped_mass and lumped_alpha_mass hold the blocks' diagonals.
+  struct MassBlocks {
+    std::vector<std::int32_t> start{0}, eq;
+    std::vector<std::int64_t> offset{0};
+    std::vector<double> M, C;
+    std::size_t count() const { return start.size() - 1; }
+  } mass_blocks;
   std::vector<std::string> warnings;
 };
 

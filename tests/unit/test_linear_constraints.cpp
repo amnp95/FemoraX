@@ -178,6 +178,13 @@ TEST(LinearConstraints, ResolverSubstitutesChainsAndRefusesCyclesAndDoubles) {
   EXPECT_EQ(r.term_weight[0], 2.0);
   EXPECT_EQ(r.term_dof[1], 3);
   EXPECT_EQ(r.term_weight[1], 6.0);
+  // The rows keep their lumping; a row-sum (embedded) row through an exact (rigid) one is
+  // refused for now, the other way round is fine.
+  std::vector<LinearConstraint> mixed = {{0, {{1, 1.0}}, "embedded", false}, {1, {{2, 1.0}}, "rigid", true}};
+  EXPECT_THROW(femorax::compile::resolve_constraints(3, mixed), femorax::io::UnsupportedComponent);
+  std::vector<LinearConstraint> fine = {{0, {{1, 1.0}}, "rigid", true}, {1, {{2, 1.0}}, "embedded", false}};
+  const auto rf = femorax::compile::resolve_constraints(3, fine);
+  EXPECT_EQ(rf.exact, (std::vector<std::int8_t>{1, 0}));
   // A cycle.
   std::vector<LinearConstraint> cyc = {{0, {{1, 1.0}}, "first"}, {1, {{0, 1.0}}, "second"}};
   EXPECT_THROW(femorax::compile::resolve_constraints(2, cyc), femorax::io::ModelError);

@@ -7,7 +7,8 @@
 //     the generators below (rigidLink beam / bar, rigidDiaphragm, the embedded node).
 //   - resolve_constraints: chains resolved by substitution (a term that is itself constrained
 //     is replaced by its own terms), duplicate terms merged; a cycle or a DOF constrained twice
-//     refused (io::ModelError naming the constraints). The result expresses every constrained
+//     refused (io::ModelError naming the constraints); a row-sum (embedded) row that substitutes
+//     an exact one (an embedded node in a brick whose nodes are rigidly linked) is unsupported. The result expresses every constrained
 //     DOF in DOFs that are not constrained; DOF numbering then maps those to equations (and a
 //     fixed one drops out).
 //
@@ -26,6 +27,10 @@ struct LinearConstraint {
   std::int32_t dof = -1;                                  // the constrained DOF
   std::vector<std::pair<std::int32_t, double>> terms;     // (DOF, weight)
   std::string source;                                     // for messages: "rigidLink beam 3 7", ...
+  // How the explicit lumped mass treats the row (docs/design.md, "Exact constraints u = T q"):
+  // exact rows (rigid links, diaphragms) give their equations the exact block of T^T M T; the
+  // others (the embedded node's translations, weights summing to one) are row-sum lumped.
+  bool exact = true;
 };
 
 // Every constrained DOF in terms of unconstrained DOFs (CSR: row r is constrained DOF dof[r],
@@ -35,6 +40,7 @@ struct ResolvedConstraints {
   std::vector<std::int64_t> start{0};
   std::vector<std::int32_t> term_dof;
   std::vector<double> term_weight;
+  std::vector<std::int8_t> exact;  // per row: its constraint's `exact`
   std::size_t rows() const { return dof.size(); }
 };
 

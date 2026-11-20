@@ -1,6 +1,7 @@
 #include "compile/batches.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <tuple>
 #include <unordered_map>
@@ -53,18 +54,12 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   Compiled c;
   c.ordering = compute_ordering(m, opt.renumbering);
   c.dofs = number_dofs(m, c.ordering.node_order);
-  // Constraints step 2 (docs/design.md): the embedded node's translations run; rigid links,
-  // diaphragms and the rotation tie wait for their masses (block masses; the rot rows' weights
-  // sum to zero).
-  {
-    bool rot = false;
-    for (const auto& en : m.embedded_nodes) rot |= en.rot;
-    if (!m.rigid_links.empty() || !m.rigid_diaphragms.empty() || rot)
-      throw io::UnsupportedComponent("unsupported component: rigid links, rigid diaphragms and the embedded node's "
-                                     "rotation tie are numbered but not yet in the kernels (their masses: docs/"
-                                     "design.md, \"Exact constraints u = T q\", step 2); embedded nodes' "
-                                     "translations are");
-  }
+  // Constraints (docs/design.md, "Exact constraints u = T q"): the embedded node's rotation tie
+  // waits for its mass (the rot rows' weights sum to zero).
+  for (const auto& en : m.embedded_nodes)
+    if (en.rot)
+      throw io::UnsupportedComponent("unsupported component: embedded node " + std::to_string(en.node) +
+                                     " with -rot (the rotation tie's mass: not yet)");
   const auto& n = c.dofs;
   const std::int32_t N = n.num_nodes();
 
@@ -78,11 +73,11 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
     for (int k = 0; k < 3; ++k)
       c.coords[static_cast<std::size_t>(k) * N + i] =
           m.nodes.coords[static_cast<std::size_t>(n.node_model_index[i]) * 3 + k];
-  c.eq_dof.assign(static_cast<std::size_t>(n.num_equations), -1);
+  c.eq_dof.assign(static_cast<std::size_t>(n.num_slots), -1);
   for (std::int32_t i = 0; i < N; ++i)
     for (std::int32_t d = 0; d < n.ndf[i]; ++d) {
       const std::int32_t q = n.equation(i, d);
-      if (q >= 0 && q < n.num_equations) c.eq_dof[q] = static_cast<std::int8_t>(d);
+      if (q >= 0) c.eq_dof[q] = static_cast<std::int8_t>(d);
     }
 
   // Materials by (kind, tag): sections have a tag space of their own (io::is_section).
@@ -282,19 +277,107 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
     for (std::size_t q = 0; q < touching.size(); ++q)
       if (touching[q] > 0) c.nodal_mass_share[q] = c.nodal_mass[q] / touching[q];
   }
-  // The constrained DOFs' masses onto their equations (row-sum lumping of T^T M T: exact total
-  // mass and centre of mass for rows whose weights sum to one, the embedded translations), and
-  // the vectors back to equation length. The shares above keep the slots: an element on a
-  // constrained DOF sees only that DOF's own nodal mass in its stable step (conservative).
+  // The constrained DOFs' masses onto their equations, for the explicit stages: row-sum
+  // lumping of T^T M T for the embedded translations (weights summing to one: exact total mass
+  // and centre of mass), the exact T^T M T blocks for rigid links and diaphragms (their
+  // translation rows carry the master's rotations with lever arms). The nodal masses keep their
+  // slots (the operator applies them exactly); so do the shares above (an element on a
+  // constrained DOF sees only that DOF's own nodal mass in its stable step: conservative).
   if (n.num_constrained() > 0) {
-    for (auto* v : {&c.lumped_mass, &c.lumped_alpha_mass, &c.nodal_mass, &c.nodal_alpha_mass}) {
-      for (std::int32_t k = 0; k < n.num_constrained(); ++k) {
-        const double ms = (*v)[static_cast<std::size_t>(n.num_equations + k)];
-        for (auto t = n.con_start[static_cast<std::size_t>(k)]; t < n.con_start[static_cast<std::size_t>(k) + 1]; ++t)
-          (*v)[static_cast<std::size_t>(n.con_eq[static_cast<std::size_t>(t)])] += n.con_weight[static_cast<std::size_t>(t)] * ms;
+    const std::int32_t neq = n.num_equations;
+    auto row = [&](std::int32_t k) {
+      return std::pair{n.con_start[static_cast<std::size_t>(k)], n.con_start[static_cast<std::size_t>(k) + 1]};
+    };
+    // Equations coupled by exact rows: union-find.
+    std::vector<std::int32_t> parent(static_cast<std::size_t>(neq));
+    for (std::int32_t q = 0; q < neq; ++q) parent[static_cast<std::size_t>(q)] = q;
+    std::function<std::int32_t(std::int32_t)> find = [&](std::int32_t q) {
+      while (parent[static_cast<std::size_t>(q)] != q) q = parent[static_cast<std::size_t>(q)] = parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(q)])];
+      return q;
+    };
+    std::vector<std::int32_t> coupled;  // equations in an exact row with two or more terms
+    for (std::int32_t k = 0; k < n.num_constrained(); ++k) {
+      if (!n.con_exact[static_cast<std::size_t>(k)]) continue;
+      const auto [a, b] = row(k);
+      if (b - a > 1)
+        for (auto t = a; t < b; ++t) coupled.push_back(n.con_eq[static_cast<std::size_t>(t)]);
+      for (auto t = a + 1; t < b; ++t) {
+        const auto r1 = find(n.con_eq[static_cast<std::size_t>(a)]), r2 = find(n.con_eq[static_cast<std::size_t>(t)]);
+        if (r1 != r2) parent[static_cast<std::size_t>(std::max(r1, r2))] = std::min(r1, r2);
       }
-      v->resize(static_cast<std::size_t>(n.num_equations));
     }
+    std::map<std::int32_t, std::vector<std::int32_t>> members_of;  // root -> equations, ascending
+    std::sort(coupled.begin(), coupled.end());
+    coupled.erase(std::unique(coupled.begin(), coupled.end()), coupled.end());
+    for (const auto q : coupled) members_of[find(q)].push_back(q);
+    constexpr std::size_t kMaxBlock = 12;
+    auto& mb = c.mass_blocks;
+    std::vector<std::int32_t> block_of(static_cast<std::size_t>(neq), -1), pos(static_cast<std::size_t>(neq), -1);
+    for (const auto& [root, list] : members_of) {
+      if (list.size() > kMaxBlock)
+        throw io::UnsupportedComponent("unsupported component: rigid links or diaphragms couple " +
+                                       std::to_string(list.size()) + " equations into one mass block (at most " +
+                                       std::to_string(kMaxBlock) + " so far)");
+      const auto b = static_cast<std::int32_t>(mb.count());
+      for (std::size_t i = 0; i < list.size(); ++i) {
+        block_of[static_cast<std::size_t>(list[i])] = b;
+        pos[static_cast<std::size_t>(list[i])] = static_cast<std::int32_t>(i);
+        mb.eq.push_back(list[i]);
+      }
+      mb.start.push_back(static_cast<std::int32_t>(mb.eq.size()));
+      const auto nb = static_cast<std::int64_t>(list.size());
+      mb.offset.push_back(mb.offset.back() + nb * nb);
+    }
+    mb.M.assign(static_cast<std::size_t>(mb.offset.back()), 0.0);
+    mb.C.assign(mb.M.size(), 0.0);
+    // The equations' own masses on the blocks' diagonals.
+    for (std::size_t b = 0; b < mb.count(); ++b) {
+      const auto nb = mb.start[b + 1] - mb.start[b];
+      for (std::int32_t i = 0; i < nb; ++i) {
+        const auto q = static_cast<std::size_t>(mb.eq[static_cast<std::size_t>(mb.start[b] + i)]);
+        mb.M[static_cast<std::size_t>(mb.offset[b] + i * nb + i)] = c.lumped_mass[q];
+        mb.C[static_cast<std::size_t>(mb.offset[b] + i * nb + i)] = c.lumped_alpha_mass[q];
+      }
+    }
+    for (std::int32_t k = 0; k < n.num_constrained(); ++k) {
+      const auto s_ = static_cast<std::size_t>(neq + k);
+      const double ms = c.lumped_mass[s_], cs = c.lumped_alpha_mass[s_];
+      const auto [a, b] = row(k);
+      if (!n.con_exact[static_cast<std::size_t>(k)]) {
+        for (auto t = a; t < b; ++t) {
+          const auto q = static_cast<std::size_t>(n.con_eq[static_cast<std::size_t>(t)]);
+          const double w = n.con_weight[static_cast<std::size_t>(t)];
+          c.lumped_mass[q] += w * ms;
+          c.lumped_alpha_mass[q] += w * cs;
+          if (block_of[q] >= 0) {
+            const auto bb = static_cast<std::size_t>(block_of[q]);
+            const auto nb = mb.start[bb + 1] - mb.start[bb];
+            const auto ii = static_cast<std::size_t>(mb.offset[bb] + pos[q] * nb + pos[q]);
+            mb.M[ii] += w * ms;
+            mb.C[ii] += w * cs;
+          }
+        }
+        continue;
+      }
+      for (auto t1 = a; t1 < b; ++t1) {
+        const auto q1 = static_cast<std::size_t>(n.con_eq[static_cast<std::size_t>(t1)]);
+        const double w1 = n.con_weight[static_cast<std::size_t>(t1)];
+        c.lumped_mass[q1] += w1 * w1 * ms;  // the diagonal of T^T M T
+        c.lumped_alpha_mass[q1] += w1 * w1 * cs;
+        if (block_of[q1] < 0) continue;  // a single equation: the diagonal is exact
+        const auto bb = static_cast<std::size_t>(block_of[q1]);
+        const auto nb = mb.start[bb + 1] - mb.start[bb];
+        for (auto t2 = a; t2 < b; ++t2) {
+          const auto q2 = static_cast<std::size_t>(n.con_eq[static_cast<std::size_t>(t2)]);
+          const double w2 = n.con_weight[static_cast<std::size_t>(t2)];
+          const auto ii = static_cast<std::size_t>(mb.offset[bb] + pos[q1] * nb + pos[q2]);
+          mb.M[ii] += w1 * w2 * ms;
+          mb.C[ii] += w1 * w2 * cs;
+        }
+      }
+    }
+    c.lumped_mass.resize(static_cast<std::size_t>(neq));
+    c.lumped_alpha_mass.resize(static_cast<std::size_t>(neq));
   }
   return c;
 }

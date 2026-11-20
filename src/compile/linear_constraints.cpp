@@ -35,6 +35,10 @@ ResolvedConstraints resolve_constraints(std::int32_t num_dofs, const std::vector
       if (j < 0) {
         r[d] += w;
       } else {
+        if (!constraints[i].exact && constraints[static_cast<std::size_t>(j)].exact)
+          throw io::UnsupportedComponent("unsupported component: " + constraints[i].source + " depends on " +
+                                         constraints[static_cast<std::size_t>(j)].source +
+                                         " (an embedded node in rigidly constrained nodes): not yet");
         resolve(static_cast<std::size_t>(j));
         for (const auto& [dd, ww] : resolved[static_cast<std::size_t>(j)]) r[dd] += w * ww;
       }
@@ -48,6 +52,7 @@ ResolvedConstraints resolve_constraints(std::int32_t num_dofs, const std::vector
   for (const auto i : order) {
     resolve(i);
     out.dof.push_back(constraints[i].dof);
+    out.exact.push_back(constraints[i].exact ? 1 : 0);
     for (const auto& [d, w] : resolved[i]) {
       if (w == 0.0) continue;
       out.term_dof.push_back(d);
@@ -151,7 +156,7 @@ void embedded_in_hex8(const std::int32_t (&host)[8], const double (&xe)[8][3], s
   hex8_shape(xi, N, dN);
   jacobian(xe, dN, Jinv);
   for (int d = 0; d < 3; ++d) {
-    LinearConstraint lc{c + d, {}, source};
+    LinearConstraint lc{c + d, {}, source, false};
     for (int i = 0; i < 8; ++i) lc.terms.push_back({host[i] + d, N[i]});
     out.push_back(std::move(lc));
   }
@@ -161,7 +166,7 @@ void embedded_in_hex8(const std::int32_t (&host)[8], const double (&xe)[8][3], s
   for (int i = 0; i < 8; ++i)
     for (int j = 0; j < 3; ++j) g[i][j] = dN[i][0] * Jinv[0][j] + dN[i][1] * Jinv[1][j] + dN[i][2] * Jinv[2][j];
   // theta = 1/2 curl u: x: (du_z/dy - du_y/dz) / 2, y: (du_x/dz - du_z/dx) / 2, z: (du_y/dx - du_x/dy) / 2.
-  LinearConstraint tx{c + 3, {}, source}, ty{c + 4, {}, source}, tz{c + 5, {}, source};
+  LinearConstraint tx{c + 3, {}, source, false}, ty{c + 4, {}, source, false}, tz{c + 5, {}, source, false};
   for (int i = 0; i < 8; ++i) {
     tx.terms.push_back({host[i] + 2, 0.5 * g[i][1]});
     tx.terms.push_back({host[i] + 1, -0.5 * g[i][2]});

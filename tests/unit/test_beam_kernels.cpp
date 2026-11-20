@@ -769,4 +769,182 @@ TEST(BeamKernels, EmbeddedPileRunsAsTheEqualDofPile) {
   EXPECT_LE(ierr, 1e-9 * ipeak);
 }
 
+// Constraints step 3 (docs/design.md, "Exact constraints u = T q"): the block masses of rigid
+// links and diaphragms. A one-storey frame: four columns (two dispBeamColumn elements each,
+// bases fixed) whose tops are slaves of a rigid diaphragm (perp 3) with its master off the
+// centre (the floor's mass and rotary inertia on it; its uz, rx, ry fixed), and an eccentric
+// mass hung on a rigid link (beam) off one column top, itself a diaphragm slave (a chain).
+Model diaphragm_frame() {
+  Model m;
+  const double a = 2.0, b = 1.5, h = 3.0;
+  const double xy[4][2] = {{-a, -b}, {a, -b}, {a, b}, {-a, b}};
+  auto node = [&](std::int32_t tag, double x, double y, double z) {
+    m.nodes.tags.push_back(tag);
+    m.nodes.ndf.push_back(6);
+    m.nodes.coords.insert(m.nodes.coords.end(), {x, y, z});
+  };
+  m.materials.push_back({1, femorax::io::ElasticSection3dData{2.0e8, 0.05, 4.0e-4, 3.0e-4, 7.7e7, 6.0e-4}, {}});
+  femorax::io::ElementGroup g;
+  g.id = "columns";
+  g.type = femorax::io::ElementType::DispBeamColumn;
+  g.material = 1;
+  g.beam.vecxz = {1.0, 0.0, 0.0};
+  g.beam.points = 3;
+  g.beam.density = 7.8;
+  for (int c = 0; c < 4; ++c) {
+    for (int k = 0; k < 3; ++k) node(10 * (c + 1) + k, xy[c][0], xy[c][1], h * k / 2);
+    for (int d = 1; d <= 6; ++d) {
+      m.fix.node.push_back(10 * (c + 1));
+      m.fix.dof.push_back(d);
+    }
+    for (int e = 0; e < 2; ++e) {
+      g.tags.push_back(10 * (c + 1) + e);
+      g.connectivity.insert(g.connectivity.end(), {10 * (c + 1) + e, 10 * (c + 1) + e + 1});
+    }
+  }
+  m.elements.push_back(g);
+  node(100, 0.3, -0.2, h);  // the diaphragm's master, off the centre
+  femorax::io::RigidDiaphragm dg;
+  dg.perp = 3;
+  dg.master = 100;
+  dg.slaves = {12, 22, 32, 42};
+  m.rigid_diaphragms.push_back(dg);
+  for (int d : {3, 4, 5}) {
+    m.fix.node.push_back(100);
+    m.fix.dof.push_back(d);
+  }
+  auto mass = [&](std::int32_t n, int d, double v) {
+    m.mass.node.push_back(n);
+    m.mass.dof.push_back(d);
+    m.mass.value.push_back(v);
+  };
+  mass(100, 1, 40.0);
+  mass(100, 2, 40.0);
+  mass(100, 6, 40.0 * (4 * a * a + 4 * b * b) / 12.0);
+  node(200, a + 0.8, b, h + 0.5);  // the eccentric mass, rigidly linked to column top 32
+  m.rigid_links.push_back({"beam", 32, 200});
+  for (int d = 1; d <= 3; ++d) mass(200, d, 6.0);
+  for (int d = 4; d <= 6; ++d) mass(200, d, 0.5);
+  return m;
+}
+
+TEST(BeamKernels, RigidMassBlocksAreTheOperatorsExactMass) {
+  const Model m = diaphragm_frame();
+  const auto c = femorax::compile::compile_model(m, femorax::compile::CompileOptions{});
+  const auto& mb = c.mass_blocks;
+  ASSERT_GE(mb.count(), 1u);
+  femorax::exec::InternalForce force(c, femorax::exec::GeometryCache::Auto);
+  const auto n = static_cast<std::size_t>(c.dofs.num_equations);
+  femorax::exec::Vec x("x", n), y("y", n), u0("u0", n);
+  // Column j of the operator's mass (the elements' lumped mass and the nodal masses on the
+  // slots, contracted: T^T M T exactly) against the explicit stage's masses.
+  std::vector<std::int32_t> block_of(n, -1), pos(n, -1);
+  for (std::size_t k = 0; k < mb.count(); ++k)
+    for (auto i = mb.start[k]; i < mb.start[k + 1]; ++i) {
+      block_of[static_cast<std::size_t>(mb.eq[static_cast<std::size_t>(i)])] = static_cast<std::int32_t>(k);
+      pos[static_cast<std::size_t>(mb.eq[static_cast<std::size_t>(i)])] = i - mb.start[k];
+    }
+  double peak = 0.0, worst = 0.0;
+  for (std::size_t j = 0; j < n; ++j) {
+    Kokkos::deep_copy(x, 0.0);
+    Kokkos::deep_copy(Kokkos::subview(x, j), 1.0);
+    force.apply_operator({0.0, 0.0, 1.0}, femorax::exec::OperatorSettings{}, u0, x, y);
+    const auto col = host(y);
+    for (std::size_t i = 0; i < n; ++i) {
+      double expect = 0.0;
+      if (i == j) expect = c.lumped_mass[i];
+      if (block_of[i] >= 0 && block_of[i] == block_of[j]) {
+        const auto k = static_cast<std::size_t>(block_of[i]);
+        const auto nb = mb.start[k + 1] - mb.start[k];
+        expect = mb.M[static_cast<std::size_t>(mb.offset[k] + pos[i] * nb + pos[j])];
+      }
+      peak = std::max(peak, std::abs(expect));
+      worst = std::max(worst, std::abs(col[i] - expect));
+    }
+  }
+  std::printf("[ %zu mass blocks (%d equations); the explicit masses against T^T M T: %.2e of the largest ]\n",
+              mb.count(), mb.start.back(), worst / peak);
+  EXPECT_LE(worst, 1e-13 * peak);
+  // The coupling the lever arms give: the master's translations and its rotation.
+  double off = 0.0;
+  for (std::size_t k = 0; k < mb.count(); ++k) {
+    const auto nb = mb.start[k + 1] - mb.start[k];
+    for (int i = 0; i < nb; ++i)
+      for (int j = 0; j < nb; ++j)
+        if (i != j) off = std::max(off, std::abs(mb.M[static_cast<std::size_t>(mb.offset[k] + i * nb + j)]));
+  }
+  EXPECT_GT(off, 1.0);
+}
+
+TEST(BeamKernels, RigidDiaphragmFrameExplicitFollowsNewmark) {
+  auto run_it = [&](const std::string& file, femorax::io::Integrator integ, double dt, int n) {
+    Model mm = diaphragm_frame();
+    femorax::io::PathSeries ps;
+    ps.tag = 1;
+    ps.dt = 1e-3;
+    for (int k = 0; k <= 400; ++k) {
+      const double t = k * 1e-3;
+      ps.values.push_back(t < 0.1 ? 3.0 * std::pow(std::sin(M_PI * t / 0.1), 2) : 0.0);
+    }
+    mm.time_series.push_back(ps);
+    mm.patterns.push_back({2, 1, 1, 0.0, 1.0, {}});
+    femorax::io::NodeRecorder nr;
+    nr.file = temp_file(file);
+    nr.response = femorax::io::NodeResponse::Disp;
+    nr.time = true;
+    nr.precision = 17;
+    nr.nodes = {100, 200, 22};
+    nr.dofs = {1, 2, 6};
+    mm.recorders.push_back({"d", nr, {}});
+    mm.process.push_back({"0", "", femorax::io::RecorderStep{"d"}});
+    mm.process.push_back({"1", "", femorax::io::PatternStep{2}});
+    femorax::io::AnalysisStep a;
+    a.name = "shake";
+    a.dt = dt;
+    a.num_steps = n;
+    a.integrator = integ;
+    if (integ == femorax::io::Integrator::Newmark) {
+      a.type = femorax::io::AnalysisType::Transient;
+      a.gamma = 0.5;
+      a.beta = 0.25;
+      a.algorithm = femorax::io::Algorithm::Newton;
+      a.numberer = "Plain";
+      a.system = "BandGeneral";
+      a.test_type = femorax::io::TestType::NormDispIncr;
+      a.test_tol = 1e-14;
+      a.test_max_iter = 10;
+    }
+    mm.process.push_back({"2", "", a});
+    femorax::exec::RunOptions o;
+    o.verbose = false;
+    femorax::exec::run_model(mm, o);
+    return read_rows(nr.file);
+  };
+  double dt = 0.0;
+  {
+    const auto c = femorax::compile::compile_model(diaphragm_frame(), femorax::compile::CompileOptions{});
+    femorax::exec::InternalForce f(c, femorax::exec::GeometryCache::Auto);
+    dt = 0.5 * f.min_critical_dt(femorax::ExplicitScheme::CentralDifference);
+  }
+  const double T = 0.25;
+  const int steps = static_cast<int>(T / dt);
+  const auto ref = run_it("frame_newmark.txt", femorax::io::Integrator::Newmark, dt, steps);
+  for (const auto integ : {femorax::io::Integrator::CentralDifference, femorax::io::Integrator::ExplicitDifference}) {
+    const auto r = run_it("frame_explicit.txt", integ, dt, steps);
+    ASSERT_EQ(r.size(), ref.size());
+    double peak = 0.0, err = 0.0, rot = 0.0;
+    for (std::size_t k = 0; k < r.size(); ++k)
+      for (std::size_t col = 1; col < r[k].size(); ++col) {
+        peak = std::max(peak, std::abs(ref[k][col]));
+        err = std::max(err, std::abs(r[k][col] - ref[k][col]));
+      }
+    for (const auto& row : ref) rot = std::max(rot, std::abs(row[3]));  // the master's rotation
+    std::printf("[ diaphragm frame, %s against Newmark (%d steps of %.3e): %.2e of the peak %.3e; twist %.2e ]\n",
+                integ == femorax::io::Integrator::CentralDifference ? "CentralDifference" : "ExplicitDifference", steps,
+                dt, err / peak, peak, rot);
+    EXPECT_GT(rot, 1e-3 * peak);  // the eccentric mass twists the floor
+    EXPECT_LE(err, 2e-4 * peak);
+  }
+}
+
 }  // namespace

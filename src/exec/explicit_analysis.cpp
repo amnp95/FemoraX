@@ -69,10 +69,12 @@ void ed_predict(const Vec& u, const Vec& vh, const Vec& a, double dt, Index neq)
 
 // solve and update: a(n+1) = R / m; recorded v = vh + (dt/8) (3 a(n+1) + a(n)).
 void ed_correct(const Vec& f, const Vec& m, const CVec& eq_dof, const Vec& g_accel, const IVec& g_dof,
-                int npat, const Vec& vh, const Vec& a, const Vec& v_rec, double dt, Index neq) {
+                int npat, const Vec& vh, const Vec& a, const Vec& v_rec, double dt, Index neq, const CVec& skip) {
   const double halfT = dt * 0.125;
+  const bool has_skip = skip.extent(0) > 0;
   Kokkos::parallel_for(
       "ed_correct", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq), KOKKOS_LAMBDA(const Index q) {
+        if (has_skip && skip(q)) return;  // in a mass block (ed_block)
         const double R = -f(q) + ground_load(m(q), eq_dof(q), g_accel, g_dof, npat);
         const double a_new = R / m(q);
         const double t = 3.0 * a_new + a(q);  // Utdotdot1 = 3 Udotdot + Utdotdot
@@ -92,9 +94,11 @@ void cd_garbage_velocity(const Vec& v_elem, const Vec& um, double c2, Index neq)
 // Solve the diagonal system and update (CentralDifference::update, then Utm1 = Ut; Ut = U).
 void cd_solve(const Vec& f, const Vec& m, const Vec& cm, const CVec& eq_dof, const Vec& g_accel,
               const IVec& g_dof, int npat, const Vec& u, const Vec& um, const Vec& v_rec,
-              const Vec& a, double c2, double c3, double dt, Index neq) {
+              const Vec& a, double c2, double c3, double dt, Index neq, const CVec& skip) {
+  const bool has_skip = skip.extent(0) > 0;
   Kokkos::parallel_for(
       "cd_solve", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq), KOKKOS_LAMBDA(const Index q) {
+        if (has_skip && skip(q)) return;  // in a mass block (cd_block)
         // Utdotdot = -2 c3 Ut + c3 Utm1 (the garbage acceleration in the inertia term)
         const double ag = u(q) * (-2.0 * c3) + um(q) * c3;
         const double R = -f(q) - m(q) * ag + ground_load(m(q), eq_dof(q), g_accel, g_dof, npat);
@@ -109,6 +113,166 @@ void cd_solve(const Vec& f, const Vec& m, const Vec& cm, const CVec& eq_dof, con
         u(q) = U;
         v_rec(q) = Udot;
         a(q) = Udotdot;
+      });
+}
+
+// --- Mass blocks of exact constraints (rigid links, diaphragms; docs/design.md, "Exact
+// constraints u = T q"): the equations coupled by T^T M T are solved per block with the
+// inverse of the block's M (ExplicitDifference) or of c3 M + c2 C (CentralDifference),
+// computed on the host once per stage; the diagonal kernels skip these equations.
+constexpr int kMaxBlock = 12;
+
+struct MassBlocks {
+  int count = 0;
+  IVec start, eq;
+  Kokkos::View<std::int64_t*, Space> offset;
+  Vec M, inv;
+  CVec in_block;  // [neq]: 1 for the equations of a block
+};
+
+// The inverse of a symmetric positive definite matrix A (nb x nb, row major) by Cholesky;
+// false when A is not positive definite.
+bool invert_spd(int nb, const double* A, double* inv) {
+  double L[kMaxBlock][kMaxBlock] = {};
+  for (int j = 0; j < nb; ++j) {
+    double d = A[j * nb + j];
+    for (int k = 0; k < j; ++k) d -= L[j][k] * L[j][k];
+    if (!(d > 0.0)) return false;
+    L[j][j] = std::sqrt(d);
+    for (int i = j + 1; i < nb; ++i) {
+      double x = A[i * nb + j];
+      for (int k = 0; k < j; ++k) x -= L[i][k] * L[j][k];
+      L[i][j] = x / L[j][j];
+    }
+  }
+  for (int col = 0; col < nb; ++col) {  // solve L L^T x = e_col
+    double y[kMaxBlock], x[kMaxBlock];
+    for (int i = 0; i < nb; ++i) {
+      double r = i == col ? 1.0 : 0.0;
+      for (int k = 0; k < i; ++k) r -= L[i][k] * y[k];
+      y[i] = r / L[i][i];
+    }
+    for (int i = nb - 1; i >= 0; --i) {
+      double r = y[i];
+      for (int k = i + 1; k < nb; ++k) r -= L[k][i] * x[k];
+      x[i] = r / L[i][i];
+    }
+    for (int i = 0; i < nb; ++i) inv[i * nb + col] = x[i];
+  }
+  return true;
+}
+
+MassBlocks upload_mass_blocks(const compile::Compiled& c) {
+  MassBlocks b;
+  const auto& mb = c.mass_blocks;
+  b.count = static_cast<int>(mb.count());
+  if (b.count == 0) return b;
+  b.start = upload("block_start", std::vector<int>(mb.start.begin(), mb.start.end()));
+  b.eq = upload("block_eq", std::vector<int>(mb.eq.begin(), mb.eq.end()));
+  b.offset = upload("block_offset", mb.offset);
+  b.M = upload("block_M", mb.M);
+  b.inv = Vec("block_inverse", mb.M.size());
+  std::vector<std::int8_t> in(static_cast<std::size_t>(c.dofs.num_equations), 0);
+  for (const auto q : mb.eq) in[static_cast<std::size_t>(q)] = 1;
+  b.in_block = upload("in_block", in);
+  return b;
+}
+
+// The blocks' inverses for a stage: of M (c3 = 0) or of c3 M + c2 C.
+void prepare_mass_blocks(const compile::Compiled& c, MassBlocks& b, double c3, double c2, const std::string& stage) {
+  if (b.count == 0) return;
+  const auto& mb = c.mass_blocks;
+  std::vector<double> inv(mb.M.size());
+  for (std::size_t k = 0; k < mb.count(); ++k) {
+    const int nb = mb.start[k + 1] - mb.start[k];
+    double A[kMaxBlock * kMaxBlock];
+    for (int i = 0; i < nb * nb; ++i) {
+      const auto o = static_cast<std::size_t>(mb.offset[k] + i);
+      A[i] = c3 == 0.0 ? mb.M[o] : c3 * mb.M[o] + c2 * mb.C[o];
+    }
+    if (!invert_spd(nb, A, inv.data() + mb.offset[k])) {
+      const auto q = mb.eq[static_cast<std::size_t>(mb.start[k])];
+      std::string node = "?";
+      for (std::int32_t i = 0; i < c.dofs.num_nodes() && node == "?"; ++i)
+        for (int d = 0; d < c.dofs.ndf[static_cast<std::size_t>(i)]; ++d)
+          if (c.dofs.equation(i, d) == q) node = std::to_string(c.dofs.node_tag[static_cast<std::size_t>(i)]);
+      throw io::ModelError("stage \"" + stage + "\": the mass of the rigidly constrained group at node " + node +
+                           " is not positive definite: an explicit stage needs mass on every free DOF (give the "
+                           "master or its slaves mass, including rotary inertia where they rotate)");
+    }
+  }
+  auto h = Kokkos::create_mirror_view(b.inv);
+  for (std::size_t i = 0; i < inv.size(); ++i) h(i) = inv[i];
+  Kokkos::deep_copy(b.inv, h);
+}
+
+// ExplicitDifference on the blocks: a(n+1) = M^-1 (-f + loads), as ed_correct per equation.
+void ed_block(const MassBlocks& b, const Vec& f, const CVec& eq_dof, const Vec& g_accel, const IVec& g_dof, int npat,
+              const Vec& vh, const Vec& a, const Vec& v_rec, double dt) {
+  if (b.count == 0) return;
+  const double halfT = dt * 0.125;
+  const auto st = b.start, eq = b.eq;
+  const auto off = b.offset;
+  const auto M = b.M, inv = b.inv;
+  Kokkos::parallel_for(
+      "ed_block", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count), KOKKOS_LAMBDA(const Index k) {
+        const int s0 = st(k), nb = st(k + 1) - s0;
+        const auto o = off(k);
+        double R[kMaxBlock];
+        for (int i = 0; i < nb; ++i) {
+          double r = -f(eq(s0 + i));
+          for (int j = 0; j < nb; ++j) r += ground_load(M(o + i * nb + j), eq_dof(eq(s0 + j)), g_accel, g_dof, npat);
+          R[i] = r;
+        }
+        for (int i = 0; i < nb; ++i) {
+          double a_new = 0.0;
+          for (int j = 0; j < nb; ++j) a_new += inv(o + i * nb + j) * R[j];
+          const int q = eq(s0 + i);
+          v_rec(q) = vh(q) + (3.0 * a_new + a(q)) * halfT;
+          a(q) = a_new;
+        }
+      });
+}
+
+// CentralDifference on the blocks: U = (c3 M + c2 C)^-1 R, then cd_solve's updates.
+void cd_block(const MassBlocks& b, const Vec& f, const CVec& eq_dof, const Vec& g_accel, const IVec& g_dof, int npat,
+              const Vec& u, const Vec& um, const Vec& v_rec, const Vec& a, double c2, double c3, double dt) {
+  if (b.count == 0) return;
+  const auto st = b.start, eq = b.eq;
+  const auto off = b.offset;
+  const auto M = b.M, inv = b.inv;
+  Kokkos::parallel_for(
+      "cd_block", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, b.count), KOKKOS_LAMBDA(const Index k) {
+        const int s0 = st(k), nb = st(k + 1) - s0;
+        const auto o = off(k);
+        double R[kMaxBlock], U[kMaxBlock];
+        for (int i = 0; i < nb; ++i) {
+          double r = -f(eq(s0 + i));
+          for (int j = 0; j < nb; ++j) {
+            const int qj = eq(s0 + j);
+            const double ag = u(qj) * (-2.0 * c3) + um(qj) * c3;
+            const double mij = M(o + i * nb + j);
+            r += -mij * ag + ground_load(mij, eq_dof(qj), g_accel, g_dof, npat);
+          }
+          R[i] = r;
+        }
+        for (int i = 0; i < nb; ++i) {
+          double x = 0.0;
+          for (int j = 0; j < nb; ++j) x += inv(o + i * nb + j) * R[j];
+          U[i] = x;
+        }
+        for (int i = 0; i < nb; ++i) {
+          const int q = eq(s0 + i);
+          double Udot = U[i] * 3.0;
+          Udot += u(q) * -4.0;
+          Udot += um(q);
+          Udot *= c2;
+          const double Udotdot = (Udot - v_rec(q)) / dt;
+          um(q) = u(q);
+          u(q) = U[i];
+          v_rec(q) = Udot;
+          a(q) = Udotdot;
+        }
       });
 }
 
@@ -311,6 +475,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   const Vec m = upload("lumped_mass", c.lumped_mass);
   const Vec cm = upload("lumped_alpha_mass", c.lumped_alpha_mass);
   const CVec eq_dof = upload("eq_dof", c.eq_dof);
+  MassBlocks blocks = upload_mass_blocks(c);
   const Vec& u = force.u;       // displacement
   const Vec& v_elem = force.v;  // velocity the elements see (ED: v(n+1/2); CD: garbage)
   Vec v_rec("velocity", static_cast<std::size_t>(neq));     // committed (recorded) velocity
@@ -427,6 +592,9 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       Vec un, z, zp, ext;
       ForceSettings lts_settings = choice.settings;
       if (opt.local_time_stepping) {
+        if (force.has_constraints())
+          throw io::UnsupportedComponent("unsupported component: local time stepping with rigid links, diaphragms "
+                                         "or embedded nodes (not yet)");
         if (force.has_state())
           throw io::ModelError("stage \"" + an->name + "\": local time stepping does not support materials with state "
                                "or Uniform damping yet");
@@ -494,6 +662,8 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       if (ed) Kokkos::deep_copy(Kokkos::subview(v_elem, eqs), v_rec);  // Utdot = committed velocity
       else Kokkos::deep_copy(um, Kokkos::subview(u, eqs));             // Utm1 = Ut ("assuming Ut-1 = Ut")
       const double c2 = 0.5 / dt, c3 = 1.0 / (dt * dt);
+      if (ed) prepare_mass_blocks(c, blocks, 0.0, 0.0, an->name);
+      else prepare_mass_blocks(c, blocks, c3, c2, an->name);
       const double t0 = now();
       std::int64_t k = 0;
       const double final_time = an->final_time ? as_tcl_time(*an->final_time) : 0.0;
@@ -537,15 +707,19 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
           force.compute(choice.settings);
           motions.apply_drm(time, force.f);
           ed_correct(force.f, m, eq_dof, motions.accel(), motions.dof(), motions.num_active(), v_elem, a,
-                     v_rec, dt, n);
+                     v_rec, dt, n, blocks.in_block);
+          ed_block(blocks, force.f, eq_dof, motions.accel(), motions.dof(), motions.num_active(), v_elem, a, v_rec,
+                   dt);
         } else {
           motions.evaluate(time);  // loads at t(n)
           cd_garbage_velocity(v_elem, um, c2, n);
           force.step = StepContext{time, dt, 1};
           force.compute(choice.settings);
           motions.apply_drm(time, force.f);
+          cd_block(blocks, force.f, eq_dof, motions.accel(), motions.dof(), motions.num_active(), u, um, v_rec, a,
+                   c2, c3, dt);  // before cd_solve: it reads u and um of the block's equations only
           cd_solve(force.f, m, cm, eq_dof, motions.accel(), motions.dof(), motions.num_active(), u, um, v_rec,
-                   a, c2, c3, dt, n);
+                   a, c2, c3, dt, n, blocks.in_block);
           time += dt;  // CentralDifference::commit
         }
         ++k;

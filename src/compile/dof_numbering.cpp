@@ -459,6 +459,7 @@ DofNumbering number_dofs(const io::Model& model, const std::vector<std::int32_t>
       out.con_weight.push_back(w);
     }
     out.con_start.push_back(static_cast<std::int64_t>(out.con_eq.size()));
+    out.con_exact.push_back(rc.exact[r]);
   }
 
   if (check_opensees) check_against_transformation_handler(model, out);
