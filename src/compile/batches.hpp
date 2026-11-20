@@ -108,6 +108,10 @@ struct Compiled {
     std::vector<double> M, C;
     std::size_t count() const { return start.size() - 1; }
   } mass_blocks;
+  // [num_equations] with exact constraints (else empty: lumped_mass serves): the mass the
+  // explicit stages' ground motion acts on, (T^T M R)_q, without the rotary inertia that the
+  // embedded rotation tie lumps onto translations.
+  std::vector<double> ground_mass;
   std::vector<std::string> warnings;
 };
 

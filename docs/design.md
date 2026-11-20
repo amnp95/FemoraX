@@ -1290,6 +1290,18 @@ VTKHDF record constrained nodes. Test (`DrmFreeField.AnEmbeddedNodeInsideTheBoxF
 a node embedded at the centre of a brick inside the DRM box (no mass, no element): the box still
 follows the free field (2.2e-14 explicit, 2.7e-14 Newmark), and the node's recorded displacement,
 velocity and acceleration equal the mean of its host's corners exactly.
+Step 4 done (2026-11-20): the rotation tie's mass. Every row that is not exact is lumped with
+the dominant lumping `m |w_i| sum_j |w_j|`, never below the exact `m w w^T` (Cauchy-Schwarz), so
+the element stable step stays an upper bound: for the embedded translations (weights >= 0 summing
+to one) it is the row-sum lumping, for the rotation tie (weights summing to zero) it keeps the
+rotary inertia. The explicit ground motion acts on `Compiled::ground_mass`, (T^T M R)_q: each
+equation's own mass plus `w m` of the slots in its translational direction, so the rotary inertia
+takes no ground load. Test (`BeamKernels.EmbeddedRotationTieLumpsADominantMass`, the pile with
+`-rot`): lumped minus the operator's exact T^T M T is positive semidefinite (smallest eigenvalue
+-1.8e-18 of masses ~1), the ground mass equals the translational mass, CentralDifference at half
+the stable step follows Newmark within 5.9e-4 of the peak (rotations 6.5e-4). docs/deviations.md
+records the exact tie against OpenSees' penalty. Next: schema 1.2 (asked first), the converter
+and the OpenSees comparisons (rigid links and diaphragms; embedded nodes against growing K).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

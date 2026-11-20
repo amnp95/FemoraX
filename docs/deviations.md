@@ -544,3 +544,27 @@ its peak (tolerance 5e-4). CPU and CUDA builds reproduced the event sequence exa
   laminar bounds; the refused patterns, each checked for its specific message). The
   emulation reproduces OpenSees in all 9 cases it applies to, including the 3 where
   OpenSees is wrong.
+
+### ASDEmbeddedNodeElement — an exact tie to the host brick instead of a penalty (decided with the user, 2026-11-20)
+- OpenSees: `SRC/element/HUelements/ASDEmbeddedNodeElement.cpp`, commit 955ceb0: the embedded
+  node is tied to a tetrahedron (or triangle) by a penalty stiffness `K` (`-K`, `-KP`), its
+  rotations (`-rot`) to the tetrahedron's rotation; Femora splits brick meshes into tetrahedra for
+  it.
+- Difference: FemoraX eliminates the tie (u = T q, docs/design.md "Exact constraints u = T q"):
+  the node's translations are its host brick's shape functions at the node (natural coordinates
+  by Newton), with `-rot` its rotations are half the curl of the brick's displacement at the node;
+  `-K` and `-KP` are ignored. Explicit stages lump the constrained masses onto the host's
+  equations with the dominant lumping `m |w_i| sum_j |w_j|` (the row sum for the translations:
+  exact total mass and centre of mass; for the rotation tie it keeps the rotary inertia, which a
+  row sum would drop, and the ground motion does not act on it); implicit stages use the exact
+  T^T M T.
+- Why: a penalty adds a stiffness that cuts the explicit step (or ruins the conditioning of CG)
+  and leaves an error of order 1 / K; the exact tie has neither, and the brick host needs no
+  tetrahedra. The dominant lumping is never below the exact mass (Cauchy-Schwarz), so the
+  element stable step stays an upper bound.
+- Effect on results: against OpenSees, the penalty's error (converging to the exact tie as K
+  grows; the comparison waits for schema 1.2 and the converter); explicit against implicit, the
+  lumping of the rotary inertia (5.9e-4 of the peak for a pile in a soil column).
+- Test: `BeamKernels.EmbeddedPileRunsAsTheEqualDofPile`, `BeamKernels.EmbeddedRotationTieLumpsADominantMass`,
+  `LinearConstraints.EmbeddedNodeInABrickReproducesLinearFields`,
+  `DrmFreeField.AnEmbeddedNodeInsideTheBoxFollowsItsHost`.

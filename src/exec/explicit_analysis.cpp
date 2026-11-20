@@ -68,14 +68,14 @@ void ed_predict(const Vec& u, const Vec& vh, const Vec& a, double dt, Index neq)
 }
 
 // solve and update: a(n+1) = R / m; recorded v = vh + (dt/8) (3 a(n+1) + a(n)).
-void ed_correct(const Vec& f, const Vec& m, const CVec& eq_dof, const Vec& g_accel, const IVec& g_dof,
+void ed_correct(const Vec& f, const Vec& m, const Vec& mg, const CVec& eq_dof, const Vec& g_accel, const IVec& g_dof,
                 int npat, const Vec& vh, const Vec& a, const Vec& v_rec, double dt, Index neq, const CVec& skip) {
   const double halfT = dt * 0.125;
   const bool has_skip = skip.extent(0) > 0;
   Kokkos::parallel_for(
       "ed_correct", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, neq), KOKKOS_LAMBDA(const Index q) {
         if (has_skip && skip(q)) return;  // in a mass block (ed_block)
-        const double R = -f(q) + ground_load(m(q), eq_dof(q), g_accel, g_dof, npat);
+        const double R = -f(q) + ground_load(mg(q), eq_dof(q), g_accel, g_dof, npat);
         const double a_new = R / m(q);
         const double t = 3.0 * a_new + a(q);  // Utdotdot1 = 3 Udotdot + Utdotdot
         v_rec(q) = vh(q) + t * halfT;         // Utdot1 = Utdot + halfT * Utdotdot1
@@ -92,7 +92,7 @@ void cd_garbage_velocity(const Vec& v_elem, const Vec& um, double c2, Index neq)
 }
 
 // Solve the diagonal system and update (CentralDifference::update, then Utm1 = Ut; Ut = U).
-void cd_solve(const Vec& f, const Vec& m, const Vec& cm, const CVec& eq_dof, const Vec& g_accel,
+void cd_solve(const Vec& f, const Vec& m, const Vec& mg, const Vec& cm, const CVec& eq_dof, const Vec& g_accel,
               const IVec& g_dof, int npat, const Vec& u, const Vec& um, const Vec& v_rec,
               const Vec& a, double c2, double c3, double dt, Index neq, const CVec& skip) {
   const bool has_skip = skip.extent(0) > 0;
@@ -101,7 +101,7 @@ void cd_solve(const Vec& f, const Vec& m, const Vec& cm, const CVec& eq_dof, con
         if (has_skip && skip(q)) return;  // in a mass block (cd_block)
         // Utdotdot = -2 c3 Ut + c3 Utm1 (the garbage acceleration in the inertia term)
         const double ag = u(q) * (-2.0 * c3) + um(q) * c3;
-        const double R = -f(q) - m(q) * ag + ground_load(m(q), eq_dof(q), g_accel, g_dof, npat);
+        const double R = -f(q) - m(q) * ag + ground_load(mg(q), eq_dof(q), g_accel, g_dof, npat);
         const double A = m(q) * c3 + cm(q) * c2;  // tangent c3 M + c2 C, diagonal
         const double U = R / A;
         double Udot = U * 3.0;  // Udot = 3U - 4Ut + Utm1, then * c2
@@ -462,6 +462,9 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
 
   const Vec m = upload("lumped_mass", c.lumped_mass);
   const Vec cm = upload("lumped_alpha_mass", c.lumped_alpha_mass);
+  // The ground motion's mass: without the rotary inertia the embedded rotation tie lumps onto
+  // translations (exact constraints); the lumped mass otherwise.
+  const Vec mg = c.ground_mass.empty() ? m : upload("ground_mass", c.ground_mass);
   const CVec eq_dof = upload("eq_dof", c.eq_dof);
   MassBlocks blocks = upload_mass_blocks(c);
   const Vec& u = force.u;       // displacement
@@ -701,7 +704,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
           force.step = StepContext{time, dt, 1};
           force.compute(choice.settings);
           motions.apply_drm(time, force.f);
-          ed_correct(force.f, m, eq_dof, motions.accel(), motions.dof(), motions.num_active(), v_elem, a,
+          ed_correct(force.f, m, mg, eq_dof, motions.accel(), motions.dof(), motions.num_active(), v_elem, a,
                      v_rec, dt, n, blocks.in_block);
           ed_block(blocks, force.f, eq_dof, motions.accel(), motions.dof(), motions.num_active(), v_elem, a, v_rec,
                    dt);
@@ -713,7 +716,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
           motions.apply_drm(time, force.f);
           cd_block(blocks, force.f, eq_dof, motions.accel(), motions.dof(), motions.num_active(), u, um, v_rec, a,
                    c2, c3, dt);  // before cd_solve: it reads u and um of the block's equations only
-          cd_solve(force.f, m, cm, eq_dof, motions.accel(), motions.dof(), motions.num_active(), u, um, v_rec,
+          cd_solve(force.f, m, mg, cm, eq_dof, motions.accel(), motions.dof(), motions.num_active(), u, um, v_rec,
                    a, c2, c3, dt, n, blocks.in_block);
           time += dt;  // CentralDifference::commit
         }

@@ -11,6 +11,7 @@
 //     and consistent mass, all four Rayleigh terms, the initial-stiffness variant); a Newmark run
 //     with Newton under base shaking (run_model) equals host Newmark on the reference matrices.
 
+#include <Eigen/Dense>
 #include <Eigen/SparseCholesky>
 #include <Kokkos_Core.hpp>
 #include <gtest/gtest.h>
@@ -630,63 +631,68 @@ TEST(BeamKernels, LocalTimeSteppingWithAPileInSoil) {
   EXPECT_LE(err, 1e-2 * peak);  // measured 3.05e-3 (the coarse step's time discretization)
 }
 
+// The pile of the constraints tests: a steel pile on the centre line of an undamped 4 x 4 x 8
+// soil column, its nodes tied to the soil nodes by equalDOF (x, y, z) or embedded in a brick of
+// which the soil node is a corner (with rot: the rotations tied to the soil's too).
+Model pile_in_column(bool embedded, bool rot = false) {
+  femorax::testing::ColumnSpec cs;
+  cs.nx = cs.ny = 4;
+  cs.nz = 8;
+  cs.damping = false;
+  Model m = femorax::testing::soil_column(cs);
+  m.equal_dof = {};
+  for (auto& g : m.elements) g.body_force = {0.0, 0.0, 0.0};
+  const int NX = cs.nx + 1, NY = cs.ny + 1;
+  auto soil_tag = [&](int i, int j, int k) { return 1 + i + NX * (j + NY * k); };
+  m.materials.push_back({1, femorax::io::ElasticSection3dData{2.0e8, 0.05, 4.0e-4, 4.0e-4, 7.7e7, 8.0e-4}, {}});
+  femorax::io::ElementGroup pile;
+  pile.id = "pile";
+  pile.type = femorax::io::ElementType::DispBeamColumn;
+  pile.material = 1;
+  pile.beam.vecxz = {1.0, 0.0, 0.0};
+  pile.beam.points = 3;
+  pile.beam.density = 7.8;
+  for (int k = 1; k <= cs.nz; ++k) {
+    const int ts = soil_tag(2, 2, k);
+    std::size_t idx = 0;
+    while (m.nodes.tags[idx] != ts) ++idx;
+    m.nodes.tags.push_back(10000 + k);
+    m.nodes.ndf.push_back(6);
+    m.nodes.coords.insert(m.nodes.coords.end(), {m.nodes.coords[3 * idx], m.nodes.coords[3 * idx + 1],
+                                                 m.nodes.coords[3 * idx + 2]});
+    if (embedded) {
+      // A brick that has the soil node as a corner.
+      int host = -1;
+      for (const auto& g : m.elements) {
+        if (g.type != femorax::io::ElementType::StdBrick) continue;
+        for (std::size_t e = 0; e < g.size() && host < 0; ++e)
+          for (int a = 0; a < 8; ++a)
+            if (g.connectivity[8 * e + static_cast<std::size_t>(a)] == ts) host = g.tags[e];
+        if (host >= 0) break;
+      }
+      m.embedded_nodes.push_back({10000 + k, host, rot});
+    } else {
+      for (int d = 1; d <= 3; ++d) {
+        m.equal_dof.retained.push_back(ts);
+        m.equal_dof.constrained.push_back(10000 + k);
+        m.equal_dof.dof.push_back(d);
+      }
+    }
+    if (k < cs.nz) {
+      pile.tags.push_back(50000 + k);
+      pile.connectivity.insert(pile.connectivity.end(), {10000 + k, 10001 + k});
+    }
+  }
+  m.elements.push_back(pile);
+  return m;
+}
+
 // Constraints step 2 (docs/design.md, "Exact constraints u = T q"): the pile tied into the soil
 // column by embedded nodes (each pile node in a brick of which its soil node is a corner, so the
 // weights are one at that corner and zero elsewhere) runs as the same pile tied by equalDOF, to
 // rounding: an explicit CentralDifference run under base shaking, the pile's x displacements.
 TEST(BeamKernels, EmbeddedPileRunsAsTheEqualDofPile) {
-  auto pile_model = [](bool embedded) {
-    femorax::testing::ColumnSpec cs;
-    cs.nx = cs.ny = 4;
-    cs.nz = 8;
-    cs.damping = false;
-    Model m = femorax::testing::soil_column(cs);
-    m.equal_dof = {};
-    for (auto& g : m.elements) g.body_force = {0.0, 0.0, 0.0};
-    const int NX = cs.nx + 1, NY = cs.ny + 1;
-    auto soil_tag = [&](int i, int j, int k) { return 1 + i + NX * (j + NY * k); };
-    m.materials.push_back({1, femorax::io::ElasticSection3dData{2.0e8, 0.05, 4.0e-4, 4.0e-4, 7.7e7, 8.0e-4}, {}});
-    femorax::io::ElementGroup pile;
-    pile.id = "pile";
-    pile.type = femorax::io::ElementType::DispBeamColumn;
-    pile.material = 1;
-    pile.beam.vecxz = {1.0, 0.0, 0.0};
-    pile.beam.points = 3;
-    pile.beam.density = 7.8;
-    for (int k = 1; k <= cs.nz; ++k) {
-      const int ts = soil_tag(2, 2, k);
-      std::size_t idx = 0;
-      while (m.nodes.tags[idx] != ts) ++idx;
-      m.nodes.tags.push_back(10000 + k);
-      m.nodes.ndf.push_back(6);
-      m.nodes.coords.insert(m.nodes.coords.end(), {m.nodes.coords[3 * idx], m.nodes.coords[3 * idx + 1],
-                                                   m.nodes.coords[3 * idx + 2]});
-      if (embedded) {
-        // A brick that has the soil node as a corner.
-        int host = -1;
-        for (const auto& g : m.elements) {
-          if (g.type != femorax::io::ElementType::StdBrick) continue;
-          for (std::size_t e = 0; e < g.size() && host < 0; ++e)
-            for (int a = 0; a < 8; ++a)
-              if (g.connectivity[8 * e + static_cast<std::size_t>(a)] == ts) host = g.tags[e];
-          if (host >= 0) break;
-        }
-        m.embedded_nodes.push_back({10000 + k, host, false});
-      } else {
-        for (int d = 1; d <= 3; ++d) {
-          m.equal_dof.retained.push_back(ts);
-          m.equal_dof.constrained.push_back(10000 + k);
-          m.equal_dof.dof.push_back(d);
-        }
-      }
-      if (k < cs.nz) {
-        pile.tags.push_back(50000 + k);
-        pile.connectivity.insert(pile.connectivity.end(), {10000 + k, 10001 + k});
-      }
-    }
-    m.elements.push_back(pile);
-    return m;
-  };
+  auto pile_model = [](bool embedded) { return pile_in_column(embedded); };
   auto run_it = [&](Model mm, const std::string& file, double dt, int n, bool implicit = false) {
     femorax::io::PathSeries ps;
     ps.tag = 1;
@@ -945,6 +951,116 @@ TEST(BeamKernels, RigidDiaphragmFrameExplicitFollowsNewmark) {
     EXPECT_GT(rot, 1e-3 * peak);  // the eccentric mass twists the floor
     EXPECT_LE(err, 2e-4 * peak);
   }
+}
+
+// The embedded pile with its rotations tied to the soil's (-rot: half the curl of the host
+// brick's displacement), constraints step 4 (docs/design.md, "Exact constraints u = T q"):
+//   - the explicit lumped mass dominates the exact T^T M T of the implicit operator (their
+//     difference is positive semidefinite), so the explicit stable step stays an upper bound;
+//   - the ground mass is the translational mass alone (the pile's rotary inertia takes no
+//     ground load);
+//   - CentralDifference at half the stable step follows Newmark (whose mass is exact).
+std::vector<std::vector<double>> run_pile(Model mm, const std::string& file, double dt, int n, femorax::io::Integrator integ) {
+  femorax::io::PathSeries ps;
+  ps.tag = 1;
+  ps.dt = 1e-3;
+  for (int k = 0; k <= 400; ++k) {
+    const double t = k * 1e-3;
+    ps.values.push_back(t < 0.05 ? std::pow(std::sin(M_PI * t / 0.05), 2) : 0.0);
+  }
+  mm.time_series.push_back(ps);
+  mm.patterns.push_back({2, 1, 1, 0.0, 1.0, {}});
+  femorax::io::NodeRecorder nr;
+  nr.file = temp_file(file);
+  nr.response = femorax::io::NodeResponse::Disp;
+  nr.time = true;
+  nr.precision = 17;
+  for (int k = 1; k <= 8; ++k) nr.nodes.push_back(10000 + k);
+  nr.dofs = {1, 5};
+  mm.recorders.push_back({"d", nr, {}});
+  mm.process.push_back({"0", "", femorax::io::RecorderStep{"d"}});
+  mm.process.push_back({"1", "", femorax::io::PatternStep{2}});
+  femorax::io::AnalysisStep a;
+  a.name = "shake";
+  a.dt = dt;
+  a.num_steps = n;
+  a.integrator = integ;
+  if (integ == femorax::io::Integrator::Newmark) {
+    a.type = femorax::io::AnalysisType::Transient;
+    a.gamma = 0.5;
+    a.beta = 0.25;
+    a.algorithm = femorax::io::Algorithm::Newton;
+    a.numberer = "Plain";
+    a.system = "BandGeneral";
+    a.test_type = femorax::io::TestType::NormDispIncr;
+    a.test_tol = 1e-14;
+    a.test_max_iter = 10;
+  }
+  mm.process.push_back({"2", "", a});
+  femorax::exec::RunOptions o;
+  o.verbose = false;
+  femorax::exec::run_model(mm, o);
+  return read_rows(nr.file);
+}
+
+TEST(BeamKernels, EmbeddedRotationTieLumpsADominantMass) {
+  const Model m = pile_in_column(true, true);
+  const auto c = femorax::compile::compile_model(m, femorax::compile::CompileOptions{});
+  const auto n = static_cast<std::size_t>(c.dofs.num_equations);
+  EXPECT_EQ(c.mass_blocks.count(), 0u);
+  femorax::exec::InternalForce force(c, femorax::exec::GeometryCache::Auto);
+  femorax::exec::Vec x("x", n), y("y", n), u0("u0", n);
+  Eigen::MatrixXd D = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(n), static_cast<Eigen::Index>(n));
+  double mmax = 0.0;
+  for (std::size_t j = 0; j < n; ++j) {
+    Kokkos::deep_copy(x, 0.0);
+    Kokkos::deep_copy(Kokkos::subview(x, j), 1.0);
+    force.apply_operator({0.0, 0.0, 1.0}, femorax::exec::OperatorSettings{}, u0, x, y);
+    const auto col = host(y);
+    for (std::size_t i = 0; i < n; ++i) D(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = -col[i];
+    D(static_cast<Eigen::Index>(j), static_cast<Eigen::Index>(j)) += c.lumped_mass[j];
+    mmax = std::max(mmax, c.lumped_mass[j]);
+  }
+  const Eigen::MatrixXd Ds = 0.5 * (D + D.transpose());
+  const double lmin = Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd>(Ds, Eigen::EigenvaluesOnly).eigenvalues().minCoeff();
+  // The rotary inertia the lumping puts on translations, and the ground mass without it.
+  double lumped = 0.0, ground = 0.0, translational = 0.0;
+  for (std::size_t q = 0; q < n; ++q) {
+    if (c.eq_dof[q] != 0) continue;
+    lumped += c.lumped_mass[q];
+    ground += c.ground_mass[q];
+  }
+  {
+    const auto cr = femorax::compile::compile_model(pile_in_column(true, false), femorax::compile::CompileOptions{});
+    for (std::size_t q = 0; q < n; ++q)
+      if (cr.eq_dof[q] == 0) translational += cr.lumped_mass[q];
+  }
+  std::printf("[ rotation tie: smallest eigenvalue of lumped - exact %.2e (largest mass %.3e); x mass %.6e lumped, "
+              "%.6e ground, %.6e without the tie ]\n",
+              lmin, mmax, lumped, ground, translational);
+  EXPECT_GE(lmin, -1e-12 * mmax);
+  EXPECT_GT(lumped, translational);                    // the rotary inertia is kept
+  EXPECT_NEAR(ground, translational, 1e-12 * ground);  // and takes no ground load
+
+  const double dt = 0.5 * force.min_critical_dt(femorax::ExplicitScheme::CentralDifference);
+  const int steps = static_cast<int>(0.04 / dt);
+  const auto ref = run_pile(m, "rot_newmark.txt", dt, steps, femorax::io::Integrator::Newmark);
+  const auto r = run_pile(m, "rot_cd.txt", dt, steps, femorax::io::Integrator::CentralDifference);
+  ASSERT_EQ(r.size(), ref.size());
+  double peak = 0.0, err = 0.0, rpeak = 0.0, rerr = 0.0;
+  for (std::size_t k = 0; k < r.size(); ++k)
+    for (std::size_t col = 1; col < r[k].size(); col += 2) {
+      peak = std::max(peak, std::abs(ref[k][col]));
+      err = std::max(err, std::abs(r[k][col] - ref[k][col]));
+      rpeak = std::max(rpeak, std::abs(ref[k][col + 1]));
+      rerr = std::max(rerr, std::abs(r[k][col + 1] - ref[k][col + 1]));
+    }
+  std::printf("[ pile with the rotation tie, CentralDifference against Newmark (%d steps): displacement %.2e of %.3e, "
+              "rotation %.2e of %.3e ]\n",
+              steps, err / peak, peak, rerr / rpeak, rpeak);
+  EXPECT_GT(rpeak, 0.0);
+  EXPECT_LE(err, 1e-3 * peak);
+  EXPECT_LE(rerr, 1e-2 * rpeak);
 }
 
 }  // namespace

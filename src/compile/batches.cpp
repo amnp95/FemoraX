@@ -1,6 +1,7 @@
 #include "compile/batches.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <tuple>
@@ -54,12 +55,6 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
   Compiled c;
   c.ordering = compute_ordering(m, opt.renumbering);
   c.dofs = number_dofs(m, c.ordering.node_order);
-  // Constraints (docs/design.md, "Exact constraints u = T q"): the embedded node's rotation tie
-  // waits for its mass (the rot rows' weights sum to zero).
-  for (const auto& en : m.embedded_nodes)
-    if (en.rot)
-      throw io::UnsupportedComponent("unsupported component: embedded node " + std::to_string(en.node) +
-                                     " with -rot (the rotation tie's mass: not yet)");
   const auto& n = c.dofs;
   const std::int32_t N = n.num_nodes();
 
@@ -339,14 +334,29 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
         mb.C[static_cast<std::size_t>(mb.offset[b] + i * nb + i)] = c.lumped_alpha_mass[q];
       }
     }
+    // The ground-motion mass (T^T M R)_q of each equation: its own mass plus w m of the slots
+    // in its translational direction (a rotation's inertia takes no ground load).
+    c.ground_mass.assign(c.lumped_mass.begin(), c.lumped_mass.begin() + neq);
     for (std::int32_t k = 0; k < n.num_constrained(); ++k) {
       const auto s_ = static_cast<std::size_t>(neq + k);
       const double ms = c.lumped_mass[s_], cs = c.lumped_alpha_mass[s_];
       const auto [a, b] = row(k);
+      const int dir = c.eq_dof[s_];
+      for (auto t = a; t < b; ++t) {
+        const auto q = static_cast<std::size_t>(n.con_eq[static_cast<std::size_t>(t)]);
+        if (dir < 3 && c.eq_dof[q] == dir) c.ground_mass[q] += n.con_weight[static_cast<std::size_t>(t)] * ms;
+      }
       if (!n.con_exact[static_cast<std::size_t>(k)]) {
+        // Dominant lumping: m |w_i| sum_j |w_j| on each equation, never below the exact
+        // m w w^T (Cauchy-Schwarz), so the explicit stable step stays an upper bound. For the
+        // embedded translations (weights >= 0 summing to one) it is the row-sum lumping (exact
+        // total mass and centre of mass); for the rotation tie (weights summing to zero) it
+        // keeps the rotary inertia that a row sum would drop.
+        double S = 0.0;
+        for (auto t = a; t < b; ++t) S += std::abs(n.con_weight[static_cast<std::size_t>(t)]);
         for (auto t = a; t < b; ++t) {
           const auto q = static_cast<std::size_t>(n.con_eq[static_cast<std::size_t>(t)]);
-          const double w = n.con_weight[static_cast<std::size_t>(t)];
+          const double w = std::abs(n.con_weight[static_cast<std::size_t>(t)]) * S;
           c.lumped_mass[q] += w * ms;
           c.lumped_alpha_mass[q] += w * cs;
           if (block_of[q] >= 0) {
