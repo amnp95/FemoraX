@@ -42,9 +42,9 @@ struct CrdTransf3dParams {
 
 // The transformation of one element: computed from its nodes once (initialize()).
 struct CrdTransf3dGeometry {
-  double R[3][3];
-  double L;
-  bool hasI, hasJ;  // offsets in use
+  double R[3][3] = {};
+  double L = 0.0;
+  bool hasI = false, hasJ = false;  // offsets in use
 };
 
 // initialize(): 0 on success, -2 for a zero length, -3 when vecxz is parallel to the axis

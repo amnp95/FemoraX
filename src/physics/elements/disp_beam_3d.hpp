@@ -1,0 +1,291 @@
+#pragma once
+
+// DispBeam3d<Section, NIP>: the displacement-based 3D beam-column (docs/design.md, "Beams").
+//
+// Port of OpenSees SRC/element/dispBeamColumn/DispBeamColumn3d.cpp (update, getTangentStiff,
+// getResistingForce), OpenSees commit 955ceb0a55f7b5764856ea82fc9a9cc7f07a1eea, with
+// LegendreBeamIntegration (the integration rule of `element dispBeamColumn tag i j nIP secTag
+// transfTag`, the form Femora writes) and the transformations of
+// physics/transformations/crd_transf_3d.hpp. Names follow OpenSees (v, e, xi6, kb, q, ka, wt).
+//
+// Two nodes x 6 DOFs (ux uy uz rx ry rz each). The section deformations at point i of
+// natural coordinate xi (on [0, 1]) are, by the section's codes:
+//   P: v0 / L;  MZ: ((6 xi - 4) v1 + (6 xi - 2) v2) / L;  MY: the same with v3, v4;  T: v5 / L;
+// q = sum_i wt_i B_i^T s_i, kb = sum_i (wt_i / L) B'_i^T ks_i B'_i, then the transformation.
+// No element loads (q0 = 0, p0 = 0) yet.
+//
+// Mass (deliberately not OpenSees', docs/design.md "Structures"): lumped, from the masses per
+// length the adapter gives (rhoA for translation; rotary inertia per length about the local
+// x, y and z axes: rho (Iy + Iz), rho Iy, rho Iz), half the length per node. OpenSees'
+// lumped mass has no rotational part. The rotary inertia is a tensor R^T diag(ix, iy, iz) R in
+// global axes; the lumped (diagonal) mass keeps its diagonal, exact for members along the
+// global axes. The consistent mass (-cMass) comes with the implicit stages.
+//
+// Rayleigh damping: not in this header yet (the kernels' step); compute gives the internal
+// force and tangent.
+
+#include <array>
+#include <cmath>
+
+#include "physics/common/strided.hpp"
+#include "physics/common/sym_eigen.hpp"
+#include "physics/contracts.hpp"
+#include "physics/explicit_stability.hpp"
+#include "physics/macros.hpp"
+#include "physics/transformations/crd_transf_3d.hpp"
+
+namespace femorax {
+
+// LegendreBeamIntegration::getSectionLocations / getSectionWeights (OpenSees' constants, on
+// [0, 1], weights summing to 1).
+template <int NIP>
+struct LegendreBeamIntegration {
+  static_assert(NIP >= 2 && NIP <= 5, "DispBeam3d: 2 to 5 integration points");
+  FEMORAX_HD static void points(double xi[NIP], double wt[NIP]) {
+    if constexpr (NIP == 2) {
+      xi[0] = -0.577350269189626;
+      xi[1] = 0.577350269189626;
+      wt[0] = 1.0;
+      wt[1] = 1.0;
+    } else if constexpr (NIP == 3) {
+      xi[0] = -0.774596669241483;
+      xi[1] = 0.0;
+      xi[2] = 0.774596669241483;
+      wt[0] = 0.555555555555556;
+      wt[1] = 0.888888888888889;
+      wt[2] = 0.555555555555556;
+    } else if constexpr (NIP == 4) {
+      xi[0] = -0.861136311594053;
+      xi[1] = -0.339981043584856;
+      xi[2] = 0.339981043584856;
+      xi[3] = 0.861136311594053;
+      wt[0] = 0.347854845137454;
+      wt[1] = 0.652145154862546;
+      wt[2] = 0.652145154862546;
+      wt[3] = 0.347854845137454;
+    } else {
+      xi[0] = -0.906179845938664;
+      xi[1] = -0.538469310105683;
+      xi[2] = 0.0;
+      xi[3] = 0.538469310105683;
+      xi[4] = 0.906179845938664;
+      wt[0] = 0.236926885056189;
+      wt[1] = 0.478628670499366;
+      wt[2] = 0.568888888888889;
+      wt[3] = 0.478628670499366;
+      wt[4] = 0.236926885056189;
+    }
+    for (int i = 0; i < NIP; i++) {
+      xi[i] = 0.5 * (xi[i] + 1.0);
+      wt[i] *= 0.5;
+    }
+  }
+};
+
+template <class Sec, int NIP_>
+  requires Section<Sec>
+struct DispBeam3d {
+  using Material = Sec;
+  static constexpr int NDM = 3, NNODE = 2, NEXTRA = 0, NGP = NIP_, NDOF = 12;
+  static constexpr std::array<int, NNODE> NODE_NDF = {6, 6};
+  static constexpr int NSTATE = NGP * Sec::NSTATE;
+  static constexpr int ORDER = Sec::NSTRAIN;
+
+  struct Params {
+    typename Sec::Params sec;
+    CrdTransf3dParams transf;
+    double rhoA = 0.0;                     // translational mass per length
+    double rot[3] = {0.0, 0.0, 0.0};      // rotary inertia per length about local x, y, z
+  };
+
+  // The section deformations of the basic deformations v at natural coordinate xi
+  // (DispBeamColumn3d::update).
+  FEMORAX_HD static void section_deformation(const double v[6], double oneOverL, double xi, double e[ORDER]) {
+    const double xi6 = 6.0 * xi;
+    for (int j = 0; j < ORDER; j++) {
+      switch (Sec::CODE[j]) {
+        case SectionResponse::P: e[j] = oneOverL * v[0]; break;
+        case SectionResponse::MZ: e[j] = oneOverL * ((xi6 - 4.0) * v[1] + (xi6 - 2.0) * v[2]); break;
+        case SectionResponse::MY: e[j] = oneOverL * ((xi6 - 4.0) * v[3] + (xi6 - 2.0) * v[4]); break;
+        case SectionResponse::T: e[j] = oneOverL * v[5]; break;
+        default: e[j] = 0.0; break;
+      }
+    }
+  }
+
+  // The basic forces q (and the basic stiffness kb when kb != nullptr) of the trial basic
+  // deformations v: the section updates at every point, then the integrals of getTangentStiff.
+  template <class SectionUpdate>
+  FEMORAX_HD static void basic_response(double L, const double v[6], const SectionUpdate& section_at, double q[6],
+                                        double (*kb)[6]) {
+    double xi[NGP], wt[NGP];
+    LegendreBeamIntegration<NGP>::points(xi, wt);
+    const double oneOverL = 1.0 / L;
+    for (int k = 0; k < 6; ++k) q[k] = 0.0;
+    if (kb)
+      for (int a = 0; a < 6; ++a)
+        for (int b = 0; b < 6; ++b) kb[a][b] = 0.0;
+    for (int i = 0; i < NGP; i++) {
+      double e[ORDER], s[ORDER], ks[ORDER][ORDER];
+      section_deformation(v, oneOverL, xi[i], e);
+      section_at(i, e, s, ks);
+      const double xi6 = 6.0 * xi[i];
+      if (kb) {
+        double ka[ORDER][6];
+        for (int j = 0; j < ORDER; j++)
+          for (int k = 0; k < 6; k++) ka[j][k] = 0.0;
+        const double wti = wt[i] * oneOverL;
+        double tmp;
+        for (int j = 0; j < ORDER; j++) {
+          switch (Sec::CODE[j]) {
+            case SectionResponse::P:
+              for (int k = 0; k < ORDER; k++) ka[k][0] += ks[k][j] * wti;
+              break;
+            case SectionResponse::MZ:
+              for (int k = 0; k < ORDER; k++) {
+                tmp = ks[k][j] * wti;
+                ka[k][1] += (xi6 - 4.0) * tmp;
+                ka[k][2] += (xi6 - 2.0) * tmp;
+              }
+              break;
+            case SectionResponse::MY:
+              for (int k = 0; k < ORDER; k++) {
+                tmp = ks[k][j] * wti;
+                ka[k][3] += (xi6 - 4.0) * tmp;
+                ka[k][4] += (xi6 - 2.0) * tmp;
+              }
+              break;
+            case SectionResponse::T:
+              for (int k = 0; k < ORDER; k++) ka[k][5] += ks[k][j] * wti;
+              break;
+            default: break;
+          }
+        }
+        for (int j = 0; j < ORDER; j++) {
+          switch (Sec::CODE[j]) {
+            case SectionResponse::P:
+              for (int k = 0; k < 6; k++) kb[0][k] += ka[j][k];
+              break;
+            case SectionResponse::MZ:
+              for (int k = 0; k < 6; k++) {
+                tmp = ka[j][k];
+                kb[1][k] += (xi6 - 4.0) * tmp;
+                kb[2][k] += (xi6 - 2.0) * tmp;
+              }
+              break;
+            case SectionResponse::MY:
+              for (int k = 0; k < 6; k++) {
+                tmp = ka[j][k];
+                kb[3][k] += (xi6 - 4.0) * tmp;
+                kb[4][k] += (xi6 - 2.0) * tmp;
+              }
+              break;
+            case SectionResponse::T:
+              for (int k = 0; k < 6; k++) kb[5][k] += ka[j][k];
+              break;
+            default: break;
+          }
+        }
+      }
+      double si;
+      for (int j = 0; j < ORDER; j++) {
+        si = s[j] * wt[i];
+        switch (Sec::CODE[j]) {
+          case SectionResponse::P: q[0] += si; break;
+          case SectionResponse::MZ:
+            q[1] += (xi6 - 4.0) * si;
+            q[2] += (xi6 - 2.0) * si;
+            break;
+          case SectionResponse::MY:
+            q[3] += (xi6 - 4.0) * si;
+            q[4] += (xi6 - 2.0) * si;
+            break;
+          case SectionResponse::T: q[5] += si; break;
+          default: break;
+        }
+      }
+    }
+  }
+
+  FEMORAX_HD static int geometry(const Params& p, const double (*xe)[NDM], CrdTransf3dGeometry& g) {
+    return crd_transf_3d_geometry(p.transf, xe[0], xe[1], g);
+  }
+
+  // Internal force fe (getResistingForce) and, with WantK, the tangent Ke (getTangentStiff),
+  // the section states updated from committed into trial.
+  template <bool WantK>
+  FEMORAX_HD static void compute(const Params& p, const double (*xe)[NDM], const double* ue,
+                                 PointArray<const double> committed, PointArray<double> trial, double* fe,
+                                 double (*Ke)[NDOF]) {
+    CrdTransf3dGeometry g;
+    geometry(p, xe, g);
+    double v[6];
+    crd_transf_3d_basic_disp(p.transf, g, ue, v);
+    double q[6], kb[6][6];
+    basic_response(
+        g.L, v,
+        [&](int i, const double* e, double* s, double (*ks)[ORDER]) {
+          Sec::update(p.sec, committed.point(i), trial.point(i), e, s, ks);
+        },
+        q, WantK ? kb : nullptr);
+    const double p0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    crd_transf_3d_global_force(p.transf, g, ue, q, p0, fe);
+    if constexpr (WantK) crd_transf_3d_global_stiff(p.transf, g, kb, q, true, Ke);
+  }
+
+  // The lumped mass per DOF (12 values, node I then node J).
+  FEMORAX_HD static void lumped_mass(const Params& p, const double (*xe)[NDM], double m[NDOF]) {
+    CrdTransf3dGeometry g;
+    geometry(p, xe, g);
+    const double half = 0.5 * g.L;
+    for (int n = 0; n < 2; ++n) {
+      for (int d = 0; d < 3; ++d) m[6 * n + d] = half * p.rhoA;
+      // diag(R^T diag(rot) R): global axis d's rotary inertia.
+      for (int d = 0; d < 3; ++d) {
+        double s = 0.0;
+        for (int a = 0; a < 3; ++a) s += g.R[a][d] * g.R[a][d] * p.rot[a];
+        m[6 * n + 3 + d] = half * s;
+      }
+    }
+  }
+
+  // Largest omega^2 of K phi = omega^2 M phi with the lumped mass and the tangent at the
+  // committed state (the element eigenvalue bound). DOFs without mass are left out (their
+  // stiffness gives no inertia-driven mode); extra_mass adds the element's share of nodal
+  // masses (12 values, may be null).
+  FEMORAX_HD static double max_omega_sq(const Params& p, const double (*xe)[NDM], PointArray<const double> committed,
+                                        const double* extra_mass = nullptr) {
+    CrdTransf3dGeometry g;
+    geometry(p, xe, g);
+    double kb[6][6], q[6];
+    const double v[6] = {0, 0, 0, 0, 0, 0};
+    basic_response(
+        g.L, v,
+        [&](int i, const double*, double* s, double (*ks)[ORDER]) {
+          Sec::committed_tangent(p.sec, committed.point(i), ks);
+          for (int j = 0; j < ORDER; ++j) s[j] = 0.0;
+        },
+        q, kb);
+    double K[12][12];
+    crd_transf_3d_global_stiff(p.transf, g, kb, q, false, K);
+    double m[12];
+    lumped_mass(p, xe, m);
+    if (extra_mass)
+      for (int k = 0; k < 12; ++k) m[k] += extra_mass[k];
+    double A[12][12];
+    for (int a = 0; a < 12; ++a)
+      for (int b = 0; b < 12; ++b) {
+        const bool massive = m[a] > 0.0 && m[b] > 0.0;
+        A[a][b] = massive ? K[a][b] / std::sqrt(m[a] * m[b]) : 0.0;
+      }
+    return max_eigenvalue_symmetric(A);
+  }
+
+  FEMORAX_HD static double critical_dt(const Params& p, const Rayleigh& damp, ExplicitScheme scheme,
+                                       const double (*xe)[NDM], PointArray<const double> committed,
+                                       const double* extra_mass = nullptr) {
+    return stable_dt(scheme, damp, max_omega_sq(p, xe, committed, extra_mass));
+  }
+};
+
+}  // namespace femorax

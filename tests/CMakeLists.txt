@@ -42,7 +42,8 @@ add_executable(femorax_unit_tests
   unit/test_lts_levels.cpp
   unit/test_lts_3d.cpp
   unit/test_elastic_section_3d.cpp
-  unit/test_crd_transf_3d.cpp)
+  unit/test_crd_transf_3d.cpp
+  unit/test_disp_beam_3d.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest
                       Eigen3::Eigen HDF5::HDF5)
 # test_contracts.cpp declares mock elements and materials whose traits only the concepts

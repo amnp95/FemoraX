@@ -997,8 +997,8 @@ default nIP = 5), `section Elastic tag E A Iz Iy G J`, `geomTransf Linear|PDelta
 
 **Decisions with the user (2026-11-19):**
 - *Mass:* the beam computes its own lumped mass from its density and the section (rho A L / 2
-  per translation, physical rotary inertia rho J L / 2 in torsion and rho Iz L / 2, rho Iy L / 2
-  in bending; "Structures"); no scaling option: a model that wants Femora's scaled rotary
+  per translation, physical rotary inertia rho (Iy + Iz) L / 2 in torsion (the polar moment) and rho Iz L / 2, rho Iy L / 2
+  in bending, the polar moment rho (Iy + Iz) in torsion; "Structures"); no scaling option: a model that wants Femora's scaled rotary
   inertia gives the beam density 0 and writes all its masses as nodal masses. With physical
   rotary inertia a rotation's stable step is about L / (sqrt(2) c), close to the axial L / c,
   so scaling would gain at most 1.4x. The consistent mass (`-cMass`) for implicit stages only.
@@ -1043,6 +1043,22 @@ through a new reference driver (`tests/reference/drivers/crd_transf.cpp`, data i
 motion gives no basic deformation, force and stiffness are the transpose of the kinematics,
 PDelta's geometric stiffness is the derivative of its force. Not ported: nodal displacements
 present when an element is created (OpenSees' `nodeIInitialDisp`, staged construction).
+Step 3, first part done (2026-11-19): `physics/elements/disp_beam_3d.hpp`,
+`DispBeam3d<Section, NIP>` (OpenSees' update / getTangentStiff / getResistingForce with
+LegendreBeamIntegration's constants, 2 to 5 points; the lumped mass from the masses per length
+the adapter gives: rhoA, and the rotary inertia rho (Iy + Iz) in torsion (the polar moment, not
+the torsion constant J, which for a rectangle is much smaller), rho Iy and rho Iz in bending, the
+diagonal of the rotated tensor in global axes, exact for members along the global axes; the
+stable step from the exact 12 x 12 element eigenvalue, massless DOFs held fixed, which is
+conservative). Tests (`test_disp_beam_3d`): a one-element cantilever reproduces the
+Euler-Bernoulli tip deflections and rotations for end forces and moments in every direction to
+1e-12, for 2-5 points; force = tangent x displacement; rotating the member rotates its forces;
+the lumped mass; omega^2 against closed forms (axial 4 E / (rho L^2), torsion
+4 G J / (rho Ip L^2)). Measured: with physical rotary inertia the largest mode of a typical
+section (A 0.05, Iz 4e-4, L 3) is 3.0 times the axial omega^2, a step of 0.58 L / c (the
+estimate above said 0.71); scaling the rotations could gain at most about 1.7x. Next: the
+OpenSees reference driver for DispBeamColumn3d (force, tangent; OpenSees' own lumped mass for
+the translations), the Rayleigh damping terms and the consistent mass.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
