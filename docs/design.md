@@ -1134,6 +1134,14 @@ pile's motion under LTS at 0.9 of the soil's step equals a global run at dt / 32
 of the peak (the coarse step's time discretization). So the substepping works for beams tied
 into soil (the user's question, 2026-11-19); the multilevel scheme (3c) would gain more here,
 since every fine equation now takes the finest level's 32 substeps.
+The pile in soil against OpenSees done (2026-11-20, `system.pile_in_soil_vs_stored_opensees`,
+`tests/system/pile_in_soil/`): a Femora-style Tcl model (a 4 x 4 x 8 stdBrick column, two elastic
+layers; an elastic steel pile of seven dispBeamColumn elements on its centre line, its nodes tied
+to the soil in x, y, z; nodal masses with the pile's rotary inertia; a base pulse; Newmark with
+Newton) run by OpenSees 955ceb0 and, through the converter and schema 1.1, by FemoraX: the pile's
+displacements within 1.9e-15 of the peak over 200 steps (stored OpenSees output). Found on the
+way: without rotational mass the pile's twist about its axis is a massless rigid mode (the ties
+hold only translations), and OpenSees' implicit solve is singular there, as it should be.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

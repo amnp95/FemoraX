@@ -246,4 +246,15 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
   add_test(NAME system.beam_cantilever_conversion
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/beam_cantilever/beam_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_beam_cantilever)
+  # A pile tied into a soil column against stored OpenSees output (beams, bricks, equalDOF,
+  # Newmark; tests/system/pile_in_soil/pile_check.sh). GPUs: rounding of the solves.
+  if(femorax_device_build)
+    set(femorax_pile_tol 1e-8)
+  else()
+    set(femorax_pile_tol 1e-12)
+  endif()
+  add_test(NAME system.pile_in_soil_vs_stored_opensees
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/pile_in_soil/pile_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_pile_in_soil
+                   ${femorax_pile_tol})
 endif()
