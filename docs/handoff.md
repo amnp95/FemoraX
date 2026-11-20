@@ -118,8 +118,15 @@ transformations with joint offsets, bit for bit against OpenSees through a new d
 (tests/reference/drivers/crd_transf.cpp, fb4776e); DispBeam3d<Section, NIP> physics with the
 lumped mass (physical rotary inertia) and the stable step, verified against Euler-Bernoulli
 cantilevers (53dea5b), and bit for bit against OpenSees DispBeamColumn3d through a new driver
-(tests/reference/drivers/disp_beam_column.cpp, 03c269b). Next: step 3's Rayleigh damping terms
-and the consistent mass; then step 4 (registry, batches with 6-DOF nodes,
+(tests/reference/drivers/disp_beam_column.cpp, 03c269b). 2026-11-20: step 3 finished (Rayleigh
+damping in the basic system, the consistent mass with torsional and rotary inertia, c1464a0);
+step 4a, beams in explicit stages through the real kernels (583e640; found: cached geometry gave
+a beam no force at all); 4b, the implicit operator (91d11e2); 4c = todo 22, nodal masses in the
+element's stable step (30752ab); step 5, schema 1.1 approved by the user with option (a) for
+mass_per_length (b2bed66). Next: step 6, the Tcl converter for beams (6-DOF nodes, section
+Elastic, geomTransf, element dispBeamColumn, nodal `mass` commands) with the pile-in-soil system
+test against OpenSees and the LTS checkpoint; then step 7, TACC benchmarks. Earlier plan text:
+step 3's Rayleigh damping terms and the consistent mass; then step 4 (registry, batches with 6-DOF nodes,
 kernels), step 5 (schema 1.1, ask the user with the exact text), step 6 (system tests and the
 LTS checkpoint: an undamped pile in soil). The OpenSees reference build on Stampede3 is
 build/reference-s3-intel (scripts/stampede3_opensees.sh; a driver alone:
