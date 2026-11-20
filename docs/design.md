@@ -1061,7 +1061,13 @@ OpenSees (2026-11-19): a reference driver calls DispBeamColumn3d with ElasticSec
 Domain (`tests/reference/drivers/disp_beam_column.cpp`, data in `tests/reference/data/element/`):
 force, tangent, initial stiffness and the lumped mass (no rotary inertia, as OpenSees) bit for
 bit for four geometries (offsets included) x 2, 3, 5 points x two states, Linear and PDelta.
-Next: the Rayleigh damping terms and the consistent mass, then step 4.
+Step 3 done (2026-11-19): the Rayleigh damping terms in `compute` (the brick's signature: the
+damping and the nodal velocities), formed in the basic system, and the consistent mass
+(OpenSees' plus the torsional mass and the rotary inertia of bending), both against the same
+driver (each Rayleigh factor alone, a second element with `-cMass`): the consistent mass and
+alphaM bit for bit, betaK / betaK0 / betaKc within 4.3e-14; betaKc with PDelta leaves out the
+geometric term (2.2e-2, docs/deviations.md); the consistent mass gives the exact kinetic energy
+of rigid translations and rotations. Next: step 4.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

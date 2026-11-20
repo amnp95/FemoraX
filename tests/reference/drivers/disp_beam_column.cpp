@@ -11,6 +11,9 @@
 //   K   getTangentStiff()
 //   K0  getInitialStiff()
 //   M   getMass()             (lumped: rhoA L / 2 on the translations only)
+//   Mc  getMass() of a second element with -cMass (consistent)
+//   dA, dK, dK0, dKc  getRayleighDampingForces() with trial nodal velocities vg and one factor
+//       at a time (alphaM, betaK, betaK0, betaKc; Kc is the tangent at commitState())
 // Output: <out_dir>/DispBeamColumn3d_<type>.txt, one row per case, the inputs as columns
 // (format: driver_common.hpp; matrices row-major).
 
@@ -32,6 +35,13 @@
 #include <vector>
 
 namespace {
+
+// getRayleighDampingForces is protected in OpenSees; nothing else changes.
+class BeamProbe : public DispBeamColumn3d {
+ public:
+  using DispBeamColumn3d::DispBeamColumn3d;
+  using Element::getRayleighDampingForces;
+};
 
 struct Geometry {
   std::string name;
@@ -71,6 +81,12 @@ std::vector<std::string> columns() {
   add("K", 144);
   add("K0", 144);
   add("M", 144);
+  add("vg", 12);
+  add("dA", 12);
+  add("dK", 12);
+  add("dK0", 12);
+  add("dKc", 12);
+  add("Mc", 144);
   return c;
 }
 
@@ -101,15 +117,22 @@ int main(int argc, char** argv) {
         ElasticSection3d sec(tag, E, A, Iz, Iy, G, J);
         std::vector<SectionForceDeformation*> secs(static_cast<std::size_t>(nip), &sec);
         LegendreBeamIntegration bi;
-        auto* ele = new DispBeamColumn3d(tag, tag, tag + 1, nip, secs.data(), bi, *t, rhoA, 0);
+        auto* ele = new BeamProbe(tag, tag, tag + 1, nip, secs.data(), bi, *t, rhoA, 0);
         domain.addElement(ele);
+        auto* ele_c = new DispBeamColumn3d(tag + 1, tag, tag + 1, nip, secs.data(), bi, *t, rhoA, 1);
+        domain.addElement(ele_c);
         refdrv::Lcg rng(static_cast<std::uint64_t>(500 + tag));
         for (int s = 0; s < 2; ++s) {
           Vector di(6), dj(6);
           for (int k = 0; k < 6; ++k) di(k) = 1e-2 * rng.symmetric();
           for (int k = 0; k < 6; ++k) dj(k) = 1e-2 * rng.symmetric();
+          Vector vi(6), vj(6);
+          for (int k = 0; k < 6; ++k) vi(k) = 1e-1 * rng.symmetric();
+          for (int k = 0; k < 6; ++k) vj(k) = 1e-1 * rng.symmetric();
           ni->setTrialDisp(di);
           nj->setTrialDisp(dj);
+          ni->setTrialVel(vi);
+          nj->setTrialVel(vj);
           ele->update();
           std::vector<double> row = {static_cast<double>(nip)};
           for (const auto& a : {g.xi, g.xj, g.vecxz, g.offI, g.offJ})
@@ -125,6 +148,20 @@ int main(int argc, char** argv) {
             for (int a = 0; a < 12; ++a)
               for (int b = 0; b < 12; ++b) row.push_back(copy(a, b));
           }
+          for (int k = 0; k < 6; ++k) row.push_back(vi(k));
+          for (int k = 0; k < 6; ++k) row.push_back(vj(k));
+          // One Rayleigh factor at a time; betaKc's Kc is the tangent at commitState().
+          const double factors[4][4] = {{0.7, 0, 0, 0}, {0, 2e-3, 0, 0}, {0, 0, 1e-3, 0}, {0, 0, 0, 1.5e-3}};
+          for (const auto& fct : factors) {
+            ele->setRayleighDampingFactors(fct[0], fct[1], fct[2], fct[3]);
+            if (fct[3] != 0.0) ele->commitState();
+            const Vector d = ele->getRayleighDampingForces();
+            for (int k = 0; k < 12; ++k) row.push_back(d(k));
+          }
+          ele->setRayleighDampingFactors(0, 0, 0, 0);
+          const Matrix mc = ele_c->getMass();
+          for (int a = 0; a < 12; ++a)
+            for (int b = 0; b < 12; ++b) row.push_back(mc(a, b));
           w.row(row);
         }
         tag += 2;

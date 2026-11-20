@@ -333,4 +333,26 @@ FEMORAX_HD inline void crd_transf_3d_global_stiff(const CrdTransf3dParams& p, co
   }
 }
 
+// getGlobalMatrixFromLocal(ml): Tlg^T ml Tlg with Tlg = diag(R, R, R, R); joint offsets are
+// not applied (as OpenSees, which uses it for the consistent mass).
+FEMORAX_HD inline void crd_transf_3d_global_from_local(const CrdTransf3dGeometry& g, const double (*ml)[12],
+                                                       double (*kg)[12]) {
+  const auto& R = g.R;
+  double tmp[12][12];  // ml Tlg
+  for (int a = 0; a < 12; ++a)
+    for (int nb = 0; nb < 4; ++nb)
+      for (int j = 0; j < 3; ++j) {
+        double t = 0.0;
+        for (int k = 0; k < 3; ++k) t += ml[a][3 * nb + k] * R[k][j];
+        tmp[a][3 * nb + j] = t;
+      }
+  for (int na = 0; na < 4; ++na)
+    for (int i = 0; i < 3; ++i)
+      for (int b = 0; b < 12; ++b) {
+        double t = 0.0;
+        for (int k = 0; k < 3; ++k) t += R[k][i] * tmp[3 * na + k][b];
+        kg[3 * na + i][b] = t;
+      }
+}
+
 }  // namespace femorax

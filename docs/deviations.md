@@ -118,6 +118,50 @@ Default tolerances (until a component states otherwise):
 
 ## Entries
 
+### DispBeamColumn3d — the beam's own rotary inertia, lumped and consistent (decided with the user, 2026-11-19)
+- OpenSees: `SRC/element/dispBeamColumn/DispBeamColumn3d.cpp` (`getMass`), commit 955ceb0: the
+  lumped mass is `0.5 rho L` on the three translations of each node and nothing on the
+  rotations; the consistent mass (`-cMass`) is the cubic Hermite / linear axial matrix with no
+  torsional mass (the lines are commented out: "CURRENTLY NO TORSIONAL MASS") and no rotary
+  inertia of bending.
+- Difference: FemoraX's beam computes its rotary inertia from the density and the section
+  (docs/design.md, "Structures" and "Beams"): lumped, `rho (Iy + Iz) L / 2` about the member
+  axis (the polar moment, not the torsion constant J) and `rho Iy L / 2`, `rho Iz L / 2` about the
+  transverse axes, in global axes the diagonal of the rotated tensor (exact for members along
+  the global axes); consistent, OpenSees' matrix plus the torsional mass
+  `rho Ip L / 6 [2 1; 1 2]` and the Rayleigh-beam rotary inertia `rho I / (30 L) [36 3L -36 3L;
+  ...]`. A model that wants OpenSees' behaviour (or Femora's scaled rotary inertia) gives the
+  beam density 0 and its masses as nodal masses.
+- Why: a rotation without mass has no inertia, and OpenSees' explicit integrators refuse a
+  massless DOF (`DiagonalDirectSolver`: "aii = 0"); Femora works around it with scaled nodal
+  masses. The physical rotary inertia keeps the stable step of the order of the axial one
+  (measured: 0.58 L / c for a typical section).
+- Effect on results: the translational mass equals OpenSees' bit for bit (and the whole
+  matrix when the rotary inertia is zero); the rotations gain their physical inertia, which is
+  small for slender members (its effect on bending frequencies is of order (r / L)^2).
+- Test: `DispBeam3dReference.MatchesOpenSees` (lumped and consistent mass with zero rotary
+  inertia: bit for bit), `DispBeam3d.LumpedMassHasTheRotaryInertia`,
+  `DispBeam3d.ConsistentMassGivesTheRigidKineticEnergy` (translation, torsion and both
+  bending rotations: exact).
+
+### DispBeamColumn3d — Rayleigh damping formed in the basic system; betaKcomm without PDelta's geometric term (2026-11-19)
+- OpenSees: `SRC/element/Element.cpp` (`getRayleighDampingForces`), commit 955ceb0:
+  `(alphaM M + betaK Kt + betaK0 K0 + betaKc Kc) v` with 12 x 12 matrices; `Kc` is
+  `getTangentStiff()` at the last `commitState`, which for PDelta includes the geometric
+  stiffness of the committed axial force.
+- Difference: FemoraX forms the stiffness terms in the basic system (`(betaK kb_t + betaK0 kb_0
+  + betaKc kb_c) T v` through the transformation, plus `betaK` times PDelta's geometric stiffness
+  of the current axial force), so no 12 x 12 matrix is held in a thread (performance rule 3a).
+  `kb_c` is the sections' committed tangent: the geometric term is left out of `betaKc`,
+  because it needs the committed axial force, which the element does not store.
+- Why: the kernels' register and memory budget; `betaKc` with PDelta is rare, and Rayleigh
+  stiffness damping is refused on beams in explicit stages (docs/design.md, "Structures").
+- Effect on results: alphaM bit for bit; betaK, betaK0 and betaKc (Linear) within 4.3e-14 of
+  the largest damping force; betaKc with PDelta differs by the geometric term, 2.2e-2 of the
+  damping force in the test cases (axial forces of the order of 1e3 with these sections).
+- Test: `DispBeam3dReference.MatchesOpenSees` (each Rayleigh factor alone, 24 cases per
+  transformation).
+
 ### H5DRM — the DRM file is read in its own frame; a transformation turns its motions too (decided with the user, 2026-11-19; schema 1.0)
 - OpenSees: `SRC/domain/pattern/drm/H5DRMLoadPattern.cpp`, commit 955ceb0: every z
   displacement and acceleration read from the file is negated (lines 1122-1125,

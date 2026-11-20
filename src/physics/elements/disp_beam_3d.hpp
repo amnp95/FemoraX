@@ -19,10 +19,19 @@
 // x, y and z axes: rho (Iy + Iz), rho Iy, rho Iz), half the length per node. OpenSees'
 // lumped mass has no rotational part. The rotary inertia is a tensor R^T diag(ix, iy, iz) R in
 // global axes; the lumped (diagonal) mass keeps its diagonal, exact for members along the
-// global axes. The consistent mass (-cMass) comes with the implicit stages.
+// global axes. The consistent mass (-cMass, implicit stages only): OpenSees' getMass (cubic
+// Hermite translation, linear axial) plus what OpenSees leaves out: the torsional mass
+// rho Ip L / 6 [2 1; 1 2] (OpenSees: "CURRENTLY NO TORSIONAL MASS") and the rotary inertia of
+// bending, rho I / (30 L) [36 3L -36 3L; 3L 4L^2 -3L -L^2; ...] (the Rayleigh beam); both in
+// local axes, turned by getGlobalMatrixFromLocal (which ignores joint offsets, as OpenSees).
 //
-// Rayleigh damping: not in this header yet (the kernels' step); compute gives the internal
-// force and tangent.
+// Rayleigh damping (Element::getRayleighDampingForces: (alphaM M + betaK Kt + betaK0 K0 +
+// betaKc Kc) v), formed in the basic system so no 12 x 12 matrix is held (performance rule 3a):
+// the damping basic force (betaK kb_t + betaK0 kb_0 + betaKc kb_c) T v through the transformation,
+// plus betaK times PDelta's geometric stiffness (current axial force) times v, plus alphaM M v.
+// Deliberate difference: kb_c is the sections' committed tangent, without PDelta's geometric
+// term (OpenSees' Kc, the tangent at the last commit, has it with the committed axial force,
+// which the element does not store); identical for Linear (docs/deviations.md).
 
 #include <array>
 #include <cmath>
@@ -96,6 +105,7 @@ struct DispBeam3d {
     CrdTransf3dParams transf;
     double rhoA = 0.0;                     // translational mass per length
     double rot[3] = {0.0, 0.0, 0.0};      // rotary inertia per length about local x, y, z
+    int cMass = 0;                         // 1: the consistent mass (implicit stages only)
   };
 
   // The section deformations of the basic deformations v at natural coordinate xi
@@ -211,26 +221,164 @@ struct DispBeam3d {
     return crd_transf_3d_geometry(p.transf, xe[0], xe[1], g);
   }
 
-  // Internal force fe (getResistingForce) and, with WantK, the tangent Ke (getTangentStiff),
-  // the section states updated from committed into trial.
+  // Internal force plus Rayleigh damping force fe (getResistingForce +
+  // getRayleighDampingForces) and, with WantK, the tangent Ke (getTangentStiff), the section
+  // states updated from committed into trial. ve: the nodal velocities the damping uses.
   template <bool WantK>
-  FEMORAX_HD static void compute(const Params& p, const double (*xe)[NDM], const double* ue,
-                                 PointArray<const double> committed, PointArray<double> trial, double* fe,
-                                 double (*Ke)[NDOF]) {
+  FEMORAX_HD static void compute(const Params& p, const Rayleigh& damp, const double (*xe)[NDM], const double* ue,
+                                 const double* ve, PointArray<const double> committed, PointArray<double> trial,
+                                 double* fe, double (*Ke)[NDOF]) {
     CrdTransf3dGeometry g;
     geometry(p, xe, g);
     double v[6];
     crd_transf_3d_basic_disp(p.transf, g, ue, v);
+    const bool stiff_damping = damp.betaK != 0.0 || damp.betaKinit != 0.0 || damp.betaKcomm != 0.0;
     double q[6], kb[6][6];
     basic_response(
         g.L, v,
         [&](int i, const double* e, double* s, double (*ks)[ORDER]) {
           Sec::update(p.sec, committed.point(i), trial.point(i), e, s, ks);
         },
-        q, WantK ? kb : nullptr);
+        q, (WantK || stiff_damping) ? kb : nullptr);
     const double p0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
     crd_transf_3d_global_force(p.transf, g, ue, q, p0, fe);
+    if (stiff_damping || damp.alphaM != 0.0) add_damping_force(p, damp, g, xe, ve, committed, q, kb, fe);
     if constexpr (WantK) crd_transf_3d_global_stiff(p.transf, g, kb, q, true, Ke);
+  }
+
+  // The undamped force and tangent (no velocities).
+  template <bool WantK>
+  FEMORAX_HD static void compute(const Params& p, const double (*xe)[NDM], const double* ue,
+                                 PointArray<const double> committed, PointArray<double> trial, double* fe,
+                                 double (*Ke)[NDOF]) {
+    const double ve[12] = {};
+    compute<WantK>(p, Rayleigh{}, xe, ue, ve, committed, trial, fe, Ke);
+  }
+
+  // fd += (alphaM M + betaK Kt + betaK0 K0 + betaKc Kc) ve, in the basic system (see the top).
+  // kb_t: the current basic tangent; q: the current basic forces (PDelta's geometric term).
+  FEMORAX_HD static void add_damping_force(const Params& p, const Rayleigh& damp, const CrdTransf3dGeometry& g,
+                                           const double (*xe)[NDM], const double* ve,
+                                           PointArray<const double> committed, const double q[6],
+                                           const double (*kb_t)[6], double* fe) {
+    const double zero_q[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    const double p0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    if (damp.betaK != 0.0 || damp.betaKinit != 0.0 || damp.betaKcomm != 0.0) {
+      double vb[6];
+      crd_transf_3d_basic_disp(p.transf, g, ve, vb);
+      double kb0[6][6], kbc[6][6], qq[6];
+      const bool need0 = damp.betaKinit != 0.0, needc = damp.betaKcomm != 0.0;
+      if (need0)
+        basic_response(
+            g.L, zero_q,
+            [&](int, const double*, double* s, double (*ks)[ORDER]) {
+              Sec::initial_tangent(p.sec, ks);
+              for (int j = 0; j < ORDER; ++j) s[j] = 0.0;
+            },
+            qq, kb0);
+      if (needc)
+        basic_response(
+            g.L, zero_q,
+            [&](int i, const double*, double* s, double (*ks)[ORDER]) {
+              Sec::committed_tangent(p.sec, committed.point(i), ks);
+              for (int j = 0; j < ORDER; ++j) s[j] = 0.0;
+            },
+            qq, kbc);
+      double qd[6];
+      for (int a = 0; a < 6; ++a) {
+        double t = 0.0, t0 = 0.0, tc = 0.0;
+        for (int b = 0; b < 6; ++b) {
+          t += kb_t[a][b] * vb[b];
+          if (need0) t0 += kb0[a][b] * vb[b];
+          if (needc) tc += kbc[a][b] * vb[b];
+        }
+        qd[a] = damp.betaK * t + damp.betaKinit * t0 + damp.betaKcomm * tc;
+      }
+      // T^T qd (the transformation's linear part: no geometric term with qd).
+      CrdTransf3dParams lin = p.transf;
+      lin.type = CrdTransfType::Linear;
+      double fd[12];
+      crd_transf_3d_global_force(lin, g, ve, qd, p0, fd);
+      for (int k = 0; k < 12; ++k) fe[k] += fd[k];
+      if (damp.betaK != 0.0 && p.transf.type == CrdTransfType::PDelta) {
+        // betaK Kgeo ve: PDelta's leaning-column force of ve with the current axial force q0,
+        // minus its linear part.
+        const double qa[6] = {q[0], 0.0, 0.0, 0.0, 0.0, 0.0};
+        double fg[12], fl[12];
+        crd_transf_3d_global_force(p.transf, g, ve, qa, p0, fg);
+        crd_transf_3d_global_force(lin, g, ve, qa, p0, fl);
+        for (int k = 0; k < 12; ++k) fe[k] += damp.betaK * (fg[k] - fl[k]);
+      }
+    }
+    if (damp.alphaM != 0.0) {
+      if (p.cMass) {
+        double M[12][12];
+        consistent_mass(p, g, M);
+        for (int a = 0; a < 12; ++a) {
+          double t = 0.0;
+          for (int b = 0; b < 12; ++b) t += M[a][b] * ve[b];
+          fe[a] += damp.alphaM * t;
+        }
+      } else {
+        double m[12];
+        lumped_mass(p, xe, m);
+        for (int k = 0; k < 12; ++k) fe[k] += damp.alphaM * m[k] * ve[k];
+      }
+    }
+  }
+
+  // The consistent mass in global axes (getMass with cMass; see the top for what FemoraX adds).
+  FEMORAX_HD static void consistent_mass(const Params& p, const CrdTransf3dGeometry& g, double (*M)[12]) {
+    const double L = g.L;
+    double ml[12][12];
+    for (int a = 0; a < 12; ++a)
+      for (int b = 0; b < 12; ++b) ml[a][b] = 0.0;
+    const double m = p.rhoA * L / 420.0;
+    ml[0][0] = ml[6][6] = m * 140.0;
+    ml[0][6] = ml[6][0] = m * 70.0;
+
+    ml[2][2] = ml[8][8] = m * 156.0;
+    ml[2][8] = ml[8][2] = m * 54.0;
+    ml[4][4] = ml[10][10] = m * 4.0 * L * L;
+    ml[4][10] = ml[10][4] = -m * 3.0 * L * L;
+    ml[2][4] = ml[4][2] = -m * 22.0 * L;
+    ml[8][10] = ml[10][8] = -ml[2][4];
+    ml[2][10] = ml[10][2] = m * 13.0 * L;
+    ml[4][8] = ml[8][4] = -ml[2][10];
+
+    ml[1][1] = ml[7][7] = m * 156.0;
+    ml[1][7] = ml[7][1] = m * 54.0;
+    ml[5][5] = ml[11][11] = m * 4.0 * L * L;
+    ml[5][11] = ml[11][5] = -m * 3.0 * L * L;
+    ml[1][5] = ml[5][1] = m * 22.0 * L;
+    ml[7][11] = ml[11][7] = -ml[1][5];
+    ml[1][11] = ml[11][1] = -m * 13.0 * L;
+    ml[5][7] = ml[7][5] = -ml[1][11];
+
+    // FemoraX: torsional mass, linear twist.
+    if (p.rot[0] != 0.0) {
+      const double t = p.rot[0] * L / 6.0;
+      ml[3][3] += 2.0 * t;
+      ml[9][9] += 2.0 * t;
+      ml[3][9] += t;
+      ml[9][3] += t;
+    }
+    // FemoraX: rotary inertia of bending (DOFs w, theta of each plane; theta_y = -dw/dx flips
+    // the coupling signs in the xz plane).
+    const double R4[4][4] = {{36.0, 3.0 * L, -36.0, 3.0 * L},
+                             {3.0 * L, 4.0 * L * L, -3.0 * L, -L * L},
+                             {-36.0, -3.0 * L, 36.0, -3.0 * L},
+                             {3.0 * L, -L * L, -3.0 * L, 4.0 * L * L}};
+    const int xy[4] = {1, 5, 7, 11}, xz[4] = {2, 4, 8, 10};
+    const double sxz[4] = {1.0, -1.0, 1.0, -1.0};
+    const double cz = p.rot[2] / (30.0 * L), cy = p.rot[1] / (30.0 * L);
+    if (cz != 0.0 || cy != 0.0)
+      for (int a = 0; a < 4; ++a)
+        for (int b = 0; b < 4; ++b) {
+          ml[xy[a]][xy[b]] += cz * R4[a][b];
+          ml[xz[a]][xz[b]] += cy * sxz[a] * sxz[b] * R4[a][b];
+        }
+    crd_transf_3d_global_from_local(g, ml, M);
   }
 
   // The lumped mass per DOF (12 values, node I then node J).

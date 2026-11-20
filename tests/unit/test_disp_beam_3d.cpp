@@ -234,6 +234,60 @@ TEST(DispBeam3d, StableStepMatchesClosedForms) {
   }
 }
 
+// The consistent mass gives the exact kinetic energy of rigid motions: a translation
+// (rhoA L), and rotations about the member axis (rho Ip L, the torsional mass) and about each
+// transverse axis through node I (rhoA L^3 / 3 from the translations plus rho I L from the
+// rotary inertia), for a member along x and the same member skewed in space.
+TEST(DispBeam3d, ConsistentMassGivesTheRigidKineticEnergy) {
+  const double rho = 2.4;
+  for (const bool skew : {false, true}) {
+    auto p = params<2>();
+    p.cMass = 1;
+    p.rhoA = rho * A;
+    p.rot[0] = rho * (Iy + Iz), p.rot[1] = rho * Iy, p.rot[2] = rho * Iz;
+    double xe[2][3] = {{0, 0, 0}, {L, 0, 0}};
+    if (skew) {
+      const double d[3] = {2.0, -1.0, 2.0};  // length 3 = L
+      for (int i = 0; i < 3; ++i) xe[0][i] = 0.4 * (i + 1), xe[1][i] = xe[0][i] + d[i];
+      p.transf.vecxz[0] = 0.3, p.transf.vecxz[1] = 0.5, p.transf.vecxz[2] = 0.8;
+    }
+    femorax::CrdTransf3dGeometry g;
+    ASSERT_EQ(Beam<2>::geometry(p, xe, g), 0);
+    double M[12][12];
+    Beam<2>::consistent_mass(p, g, M);
+    auto energy = [&](const double v[12]) {
+      double e = 0.0;
+      for (int a = 0; a < 12; ++a)
+        for (int b = 0; b < 12; ++b) e += 0.5 * v[a] * M[a][b] * v[b];
+      return e;
+    };
+    // Rigid velocity field: translation t plus rotation w about node I.
+    auto rigid = [&](const double t[3], const double w[3], double v[12]) {
+      for (int n = 0; n < 2; ++n) {
+        const double r[3] = {xe[n][0] - xe[0][0], xe[n][1] - xe[0][1], xe[n][2] - xe[0][2]};
+        v[6 * n + 0] = t[0] + w[1] * r[2] - w[2] * r[1];
+        v[6 * n + 1] = t[1] + w[2] * r[0] - w[0] * r[2];
+        v[6 * n + 2] = t[2] + w[0] * r[1] - w[1] * r[0];
+        for (int d = 0; d < 3; ++d) v[6 * n + 3 + d] = w[d];
+      }
+    };
+    const double zero[3] = {0, 0, 0};
+    double v[12];
+    const double t[3] = {0.3, -0.2, 0.5};
+    rigid(t, zero, v);
+    const double tt = t[0] * t[0] + t[1] * t[1] + t[2] * t[2];
+    EXPECT_NEAR(energy(v), 0.5 * rho * A * L * tt, 1e-13);
+    // Rotations about the local axes (rows of R), unit rate.
+    const double I_local[3] = {Iy + Iz, Iy, Iz};
+    for (int a = 0; a < 3; ++a) {
+      const double w[3] = {g.R[a][0], g.R[a][1], g.R[a][2]};
+      rigid(zero, w, v);
+      const double want = 0.5 * rho * (I_local[a] * L + (a == 0 ? 0.0 : A * L * L * L / 3.0));
+      EXPECT_NEAR(energy(v), want, 1e-12 * want) << "skew " << skew << " axis " << a;
+    }
+  }
+}
+
 // --- Against OpenSees ----------------------------------------------------------------
 
 double rel_diff(const double* a, const double* b, int n) {
@@ -245,10 +299,11 @@ double rel_diff(const double* a, const double* b, int n) {
   return m > 0.0 ? d / m : d;
 }
 
-// worst[0..3]: force, tangent, initial stiffness, mass.
+// worst: force, tangent, initial stiffness, lumped mass, consistent mass, then the Rayleigh
+// damping forces alphaM, betaK, betaK0, betaKc.
 template <int NIP>
 void compare_row(const femorax::test::ReferenceFile& ref, const std::vector<double>& r, femorax::CrdTransfType type,
-                 double worst[4]) {
+                 double worst[9]) {
   auto at = [&](const std::string& col) { return r[static_cast<std::size_t>(ref.column(col))]; };
   auto atk = [&](const std::string& col, int k) { return at(col + std::to_string(k)); };
   typename Beam<NIP>::Params p;
@@ -277,6 +332,41 @@ void compare_row(const femorax::test::ReferenceFile& ref, const std::vector<doub
   worst[1] = std::max(worst[1], rel_diff(&K[0][0], os_K, 144));
   worst[2] = std::max(worst[2], rel_diff(&K0[0][0], os_K0, 144));
   worst[3] = std::max(worst[3], rel_diff(M, os_M, 144));
+  // The consistent mass (OpenSees': no rotary or torsional inertia).
+  {
+    auto pc = p;
+    pc.cMass = 1;
+    femorax::CrdTransf3dGeometry g;
+    ASSERT_EQ(Beam<NIP>::geometry(pc, xe, g), 0);
+    double Mc[12][12], os_Mc[144];
+    Beam<NIP>::consistent_mass(pc, g, Mc);
+    for (int k = 0; k < 144; ++k) os_Mc[k] = atk("Mc", k);
+    worst[4] = std::max(worst[4], rel_diff(&Mc[0][0], os_Mc, 144));
+  }
+  // Rayleigh damping, one factor at a time (the lumped mass for alphaM).
+  double vg[12];
+  for (int k = 0; k < 12; ++k) vg[k] = atk("vg", k);
+  const char* cols[4] = {"dA", "dK", "dK0", "dKc"};
+  const double factors[4][4] = {{0.7, 0, 0, 0}, {0, 2e-3, 0, 0}, {0, 0, 1e-3, 0}, {0, 0, 0, 1.5e-3}};
+  for (int c = 0; c < 4; ++c) {
+    femorax::Rayleigh d;
+    d.alphaM = factors[c][0], d.betaK = factors[c][1], d.betaKinit = factors[c][2], d.betaKcomm = factors[c][3];
+    // The damping force is the difference of two force evaluations; alphaM's is about 1e-6 of
+    // the internal force, so it is taken at zero displacement (its value does not depend on
+    // it), where the internal force is exactly zero.
+    const double zero_u[12] = {};
+    const double* u_used = c == 0 ? zero_u : ug;
+    double fd[12], fu[12], os_d[12];
+    Beam<NIP>::template compute<false>(p, d, xe, u_used, vg, no_state(), no_trial(), fd, nullptr);
+    Beam<NIP>::template compute<false>(p, femorax::Rayleigh{}, xe, u_used, vg, no_state(), no_trial(), fu, nullptr);
+    for (int k = 0; k < 12; ++k) fd[k] -= fu[k], os_d[k] = atk(cols[c], k);
+    const double e = rel_diff(fd, os_d, 12);
+    if (c == 3 && type == femorax::CrdTransfType::PDelta) {
+      worst[8] = std::max(worst[8], e);  // the documented difference: no geometric term in Kc
+    } else {
+      worst[5 + c] = std::max(worst[5 + c], e);
+    }
+  }
 }
 
 class DispBeam3dReference : public ::testing::TestWithParam<femorax::CrdTransfType> {};
@@ -287,16 +377,22 @@ TEST_P(DispBeam3dReference, MatchesOpenSees) {
   const auto ref = femorax::test::read_reference(std::string(FEMORAX_REFERENCE_DATA) + "/element/DispBeamColumn3d_" +
                                                  name + ".txt");
   ASSERT_EQ(ref.rows.size(), 24u);
-  double worst[4] = {0, 0, 0, 0};
+  double worst[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
   for (const auto& r : ref.rows) {
     const int nip = static_cast<int>(r[static_cast<std::size_t>(ref.column("nip"))]);
     if (nip == 2) compare_row<2>(ref, r, type, worst);
     else if (nip == 3) compare_row<3>(ref, r, type, worst);
     else compare_row<5>(ref, r, type, worst);
   }
-  std::printf("[ DispBeamColumn3d %s against OpenSees: f %.2e, K %.2e, K0 %.2e, M %.2e ]\n", name.c_str(), worst[0],
-              worst[1], worst[2], worst[3]);
-  for (const double w : worst) EXPECT_LE(w, 1e-14);
+  std::printf("[ DispBeamColumn3d %s against OpenSees: f %.2e, K %.2e, K0 %.2e, M %.2e, Mc %.2e; damping alphaM %.2e, "
+              "betaK %.2e, betaK0 %.2e, betaKc %.2e ]\n",
+              name.c_str(), worst[0], worst[1], worst[2], worst[3], worst[4], worst[5], worst[6], worst[7], worst[8]);
+  for (int k = 0; k < 5; ++k) EXPECT_LE(worst[k], 1e-14) << k;
+  // The damping forces are formed in the basic system, OpenSees' as a 12 x 12 matrix times v.
+  for (int k = 5; k < 8; ++k) EXPECT_LE(worst[k], 1e-13) << k;
+  if (type == femorax::CrdTransfType::Linear) {
+    EXPECT_LE(worst[8], 1e-13);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(Types, DispBeam3dReference,
