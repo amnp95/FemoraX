@@ -149,6 +149,15 @@ ASDPlasticMaterial3D (yield function + flow + elasticity + hardening as template
 candidate design for "more soil materials" (a FemoraX rewrite: closed-form returns where they
 exist, the compacted corrector, small state), to decide with the user then.
 
+**2026-11-20, pvc node:** the Intel GPU (Max 1550) passes all 268 tests run one at a time; the
+s3-sycl-pvc test preset now does that (283a49c: 8 tests at once ran 80-200x slower and the Intel
+runtime's free-memory report fell to 0). The constraints plan (u = T q: rigid links,
+diaphragms, the embedded node in any supported solid host with its own shape functions) approved
+and in design.md (3175786); step 1's first part, the resolver and the generators, committed
+(a43ad59; check.sh: debug 271/271, release 274/274, UBSan 271/271; the commit message's counts
+are wrong). Next: step 1's wiring into the DOF numbering with step 2's expand / contract kernels;
+then the pile in soil with embedded nodes.
+
 **Embedded piles (2026-11-19):** literature review in docs/research/embedded_and_constraints/.
 The user's own element, `EmbeddedBeamContact3D` (OpenSees C++, with a theory document, tests
 and studies), is in /work2/08189/amnp95/uploads/embedded_beam/ (not in the repository): surface
