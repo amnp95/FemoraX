@@ -333,6 +333,9 @@
       "configurePreset": "s3-sycl-pvc",
       "output": {
         "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 1
       }
     }
   ]

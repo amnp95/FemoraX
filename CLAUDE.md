@@ -152,7 +152,10 @@ ctest --preset cpu-debug
   scripts/stampede3_sycl_env.sh` (oneAPI 2026.0), then the preset `s3-sycl-pvc` (Kokkos'
   SYCL backend). Intel's compilers default to fast floating-point math: every Intel build
   (FemoraX or OpenSees) uses `-fp-model=precise`. Tolerances that differ from the GCC builds
-  are in `docs/deviations.md` ("Tolerances of other compilers and GPUs").
+  are in `docs/deviations.md` ("Tolerances of other compilers and GPUs"). The Intel GPU shares
+  badly between processes: with 8 tests at once some ran 80-200x slower than alone, and its
+  free-memory report fell to 0 (the memory check then stops a run). The preset's tests run
+  one at a time (`"jobs": 1`); all 268 pass that way (2026-11-20).
 - Determinism is per backend: every layout, scatter and geometry mode gives the same bits
   run after run on one backend. CPU and GPU results agree to rounding only, because nvcc
   fuses multiply-adds (`--fmad=true`); GPU tests compare with host references at a
