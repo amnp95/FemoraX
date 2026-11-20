@@ -10,17 +10,23 @@
 //   - the lumped mass: rhoA L / 2 per translation and the rotary inertia per length times L / 2;
 //   - the stable step's omega^2 against closed forms (axial only: 4 E / (rho L^2); torsion only:
 //     4 G J / (rho Ip L^2)).
-// The OpenSees element comparison (a reference driver for DispBeamColumn3d) is the next step.
+// And against OpenSees' DispBeamColumn3d with ElasticSection3d (tests/reference/drivers/
+// disp_beam_column.cpp, commit 955ceb0): force, tangent and initial stiffness for four
+// geometries (joint offsets included), 2, 3 and 5 points, Linear and PDelta; the lumped mass
+// equals OpenSees' (translations only) when the rotary inertia is zero.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "physics/elements/disp_beam_3d.hpp"
 #include "physics/sections/elastic_section_3d.hpp"
+#include "reference_data.hpp"
 
 namespace {
 
@@ -227,5 +233,74 @@ TEST(DispBeam3d, StableStepMatchesClosedForms) {
     EXPECT_LE(w2, 8.0 * axial);
   }
 }
+
+// --- Against OpenSees ----------------------------------------------------------------
+
+double rel_diff(const double* a, const double* b, int n) {
+  double d = 0.0, m = 0.0;
+  for (int i = 0; i < n; ++i) {
+    d = std::max(d, std::abs(a[i] - b[i]));
+    m = std::max(m, std::abs(b[i]));
+  }
+  return m > 0.0 ? d / m : d;
+}
+
+// worst[0..3]: force, tangent, initial stiffness, mass.
+template <int NIP>
+void compare_row(const femorax::test::ReferenceFile& ref, const std::vector<double>& r, femorax::CrdTransfType type,
+                 double worst[4]) {
+  auto at = [&](const std::string& col) { return r[static_cast<std::size_t>(ref.column(col))]; };
+  auto atk = [&](const std::string& col, int k) { return at(col + std::to_string(k)); };
+  typename Beam<NIP>::Params p;
+  p.sec = {at("E"), at("A"), at("Iz"), at("Iy"), at("G"), at("J")};
+  p.transf.type = type;
+  p.rhoA = at("rhoA");
+  double xe[2][3];
+  for (int i = 0; i < 3; ++i) {
+    xe[0][i] = atk("xi", i);
+    xe[1][i] = atk("xj", i);
+    p.transf.vecxz[i] = atk("vecxz", i);
+    p.transf.nodeIOffset[i] = atk("offi", i);
+    p.transf.nodeJOffset[i] = atk("offj", i);
+  }
+  double ug[12], os_f[12], os_K[144], os_K0[144], os_M[144];
+  for (int k = 0; k < 12; ++k) ug[k] = atk("ug", k), os_f[k] = atk("f", k);
+  for (int k = 0; k < 144; ++k) os_K[k] = atk("K", k), os_K0[k] = atk("K0", k), os_M[k] = atk("M", k);
+  double f[12], K[12][12], f0[12], K0[12][12];
+  Beam<NIP>::template compute<true>(p, xe, ug, no_state(), no_trial(), f, K);
+  const double zero[12] = {};
+  Beam<NIP>::template compute<true>(p, xe, zero, no_state(), no_trial(), f0, K0);  // the initial stiffness
+  double m[12], M[144] = {};
+  Beam<NIP>::lumped_mass(p, xe, m);
+  for (int k = 0; k < 12; ++k) M[13 * k] = m[k];
+  worst[0] = std::max(worst[0], rel_diff(f, os_f, 12));
+  worst[1] = std::max(worst[1], rel_diff(&K[0][0], os_K, 144));
+  worst[2] = std::max(worst[2], rel_diff(&K0[0][0], os_K0, 144));
+  worst[3] = std::max(worst[3], rel_diff(M, os_M, 144));
+}
+
+class DispBeam3dReference : public ::testing::TestWithParam<femorax::CrdTransfType> {};
+
+TEST_P(DispBeam3dReference, MatchesOpenSees) {
+  const auto type = GetParam();
+  const std::string name = type == femorax::CrdTransfType::Linear ? "Linear" : "PDelta";
+  const auto ref = femorax::test::read_reference(std::string(FEMORAX_REFERENCE_DATA) + "/element/DispBeamColumn3d_" +
+                                                 name + ".txt");
+  ASSERT_EQ(ref.rows.size(), 24u);
+  double worst[4] = {0, 0, 0, 0};
+  for (const auto& r : ref.rows) {
+    const int nip = static_cast<int>(r[static_cast<std::size_t>(ref.column("nip"))]);
+    if (nip == 2) compare_row<2>(ref, r, type, worst);
+    else if (nip == 3) compare_row<3>(ref, r, type, worst);
+    else compare_row<5>(ref, r, type, worst);
+  }
+  std::printf("[ DispBeamColumn3d %s against OpenSees: f %.2e, K %.2e, K0 %.2e, M %.2e ]\n", name.c_str(), worst[0],
+              worst[1], worst[2], worst[3]);
+  for (const double w : worst) EXPECT_LE(w, 1e-14);
+}
+
+INSTANTIATE_TEST_SUITE_P(Types, DispBeam3dReference,
+                         ::testing::Values(femorax::CrdTransfType::Linear, femorax::CrdTransfType::PDelta),
+                         [](const auto& tp) { return tp.param == femorax::CrdTransfType::Linear ? "Linear" : "PDelta"; });
 
 }  // namespace

@@ -1056,9 +1056,12 @@ Euler-Bernoulli tip deflections and rotations for end forces and moments in ever
 the lumped mass; omega^2 against closed forms (axial 4 E / (rho L^2), torsion
 4 G J / (rho Ip L^2)). Measured: with physical rotary inertia the largest mode of a typical
 section (A 0.05, Iz 4e-4, L 3) is 3.0 times the axial omega^2, a step of 0.58 L / c (the
-estimate above said 0.71); scaling the rotations could gain at most about 1.7x. Next: the
-OpenSees reference driver for DispBeamColumn3d (force, tangent; OpenSees' own lumped mass for
-the translations), the Rayleigh damping terms and the consistent mass.
+estimate above said 0.71); scaling the rotations could gain at most about 1.7x. Against
+OpenSees (2026-11-19): a reference driver calls DispBeamColumn3d with ElasticSection3d in a real
+Domain (`tests/reference/drivers/disp_beam_column.cpp`, data in `tests/reference/data/element/`):
+force, tangent, initial stiffness and the lumped mass (no rotary inertia, as OpenSees) bit for
+bit for four geometries (offsets included) x 2, 3, 5 points x two states, Linear and PDelta.
+Next: the Rayleigh damping terms and the consistent mass, then step 4.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
