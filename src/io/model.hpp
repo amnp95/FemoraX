@@ -22,7 +22,7 @@ struct SchemaVersion {
 // with a minor version up to this one, and the 0.x files (up to 0.7) except their H5DRM
 // patterns: 1.0 changed what an H5DRM pattern means (the DRM file is read in its own frame,
 // with no flip of z; schema/v0/README.md).
-inline constexpr SchemaVersion reader_schema_version{1, 1};
+inline constexpr SchemaVersion reader_schema_version{1, 2};
 inline constexpr int last_v0_minor = 7;
 
 // Femora's own identifiers, kept for messages only (never used to resolve references).
@@ -131,8 +131,7 @@ struct Fix {
   std::vector<std::int32_t> node, dof;
 };
 
-// Exact linear constraints (docs/design.md, "Exact constraints u = T q"; in memory until schema
-// 1.2): `rigidLink beam|bar master slave`, `rigidDiaphragm perp master slave...`, and the
+// Exact linear constraints (docs/design.md, "Exact constraints u = T q"; schema 1.2): `rigidLink beam|bar master slave`, `rigidDiaphragm perp master slave...`, and the
 // embedded node (the node, its host element's tag, whether its rotations are tied too).
 struct RigidLink {
   std::string type = "beam";  // "beam" or "bar"
@@ -144,8 +143,11 @@ struct RigidDiaphragm {
   std::vector<std::int32_t> slaves;
 };
 struct EmbeddedNode {
-  std::int32_t node = 0, host = 0;  // host: an element tag (an 8-node brick so far)
+  std::int32_t node = 0, host = 0;  // host: an element tag (an 8-node brick so far), or -1
   bool rot = false;
+  // With host = -1: four nodes spanning a tetrahedron around the node (OpenSees'
+  // ASDEmbeddedNodeElement corners), whose barycentric coordinates are the weights.
+  std::array<std::int32_t, 4> corners{0, 0, 0, 0};
 };
 
 struct EqualDof {

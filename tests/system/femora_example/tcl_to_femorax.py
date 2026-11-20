@@ -22,6 +22,11 @@ several partitions are kept once (their coordinates must agree). Recognised:
   element dispBeamColumn tag i j nIP secTag transfTag [-mass m] [-cMass]
   mass node m1 .. m_ndf                                              (nodal masses)
   equalDOF retained constrained dofs...
+  rigidLink beam|bar master slave                                    (schema 1.2)
+  rigidDiaphragm perp master slaves...                               (schema 1.2)
+  element ASDEmbeddedNodeElement tag C R1 R2 R3 R4 [-rot] [-K K] [-KP KP]   (schema 1.2: the
+      node embedded in the tetrahedron of its four corners, an exact tie; -K and -KP are
+      OpenSees' penalty and have no counterpart; -p and the triangle form are refused)
   fixX / fixY / fixZ coordinate dofs... -tol tol
   region tag -ele ... -rayleigh alphaM betaK betaKinit betaKcomm    (inside eval "...")
   damping Uniform tag ratio freq1 freq2 [-activateTime Ta] [-deactivateTime Td] [-fact ts]
@@ -152,6 +157,9 @@ def convert(tcl: Path) -> dict:
     masses: list[tuple[int, int, float]] = []       # (node, dof 1-based, value)
     elements: list[tuple[int, list[int], int, tuple[float, float, float]]] = []
     ties: list[tuple[int, int, list[int]]] = []
+    rigid_links: list[tuple[int, int, int]] = []        # (master, slave, 1 beam / 2 bar)
+    diaphragms: list[tuple[int, int, list[int]]] = []   # (perp, master, slaves)
+    embedded: list[tuple[int, list[int], int]] = []     # (node, four corners, rot)
     fixes: list[tuple[int, float, list[int], float]] = []  # (axis, coordinate, dofs, tol)
     regions: list[tuple[list[int], list[float]]] = []
     uniform_defs: dict[int, dict] = {}
@@ -229,6 +237,33 @@ def convert(tcl: Path) -> dict:
                 else:
                     raise Unsupported(s)
             beams.append((int(tok[2]), [int(tok[3]), int(tok[4])], (int(tok[5]), int(tok[6]), int(tok[7]), mass, cmass)))
+        elif head == "element" and tok[1] == "ASDEmbeddedNodeElement":
+            rest = tok[3:]
+            nodes_ = []
+            while rest and not rest[0].startswith("-"):
+                nodes_.append(int(rest[0]))
+                rest = rest[1:]
+            rot = 0
+            while rest:
+                if rest[0] == "-rot":
+                    rot, rest = 1, rest[1:]
+                elif rest[0] in ("-K", "-KP") and len(rest) >= 2:
+                    print(f"warning: {s}: {rest[0]} {rest[1]} ignored (FemoraX ties the node exactly; "
+                          "docs/deviations.md)", file=sys.stderr)
+                    rest = rest[2:]
+                else:
+                    raise Unsupported(s)
+            if len(nodes_) != 5:
+                raise Unsupported(s + " (FemoraX: a node and four corners)")
+            embedded.append((nodes_[0], nodes_[1:], rot))
+        elif head == "rigidLink":
+            if tok[1] not in ("beam", "bar") or len(tok) != 4:
+                raise Unsupported(s)
+            rigid_links.append((int(tok[2]), int(tok[3]), 1 if tok[1] == "beam" else 2))
+        elif head == "rigidDiaphragm":
+            if len(tok) < 4:
+                raise Unsupported(s)
+            diaphragms.append((int(tok[1]), int(tok[2]), [int(x) for x in tok[3:]]))
         elif head == "mass":
             for d, v in enumerate(tok[2:], start=1):
                 if float(v) != 0.0:
@@ -321,8 +356,28 @@ def convert(tcl: Path) -> dict:
         i += 1
     return dict(materials=materials, nodes=[(t, *x) for t, x in nodes.items()], node_ndf=node_ndf, sections=sections,
                 transfs=transfs, beams=beams, masses=masses, elements=elements, ties=ties,
+                rigid_links=rigid_links, diaphragms=diaphragms, embedded=embedded,
                 fixes=fixes, regions=regions, uniform_defs=uniform_defs, uniform_regions=uniform_regions, series=series, pattern=pattern, drm=drm, recorder=recorder,
                 node_recorders=node_recorders, process=process)
+
+
+def mp_constraints(m: dict) -> dict:
+    """Schema 1.2's rigid links, rigid diaphragms and embedded nodes (those present)."""
+    g = {}
+    if m["rigid_links"]:
+        g["rigid_link"] = w.node(data={"master": w.i32([x[0] for x in m["rigid_links"]]),
+                                       "slave": w.i32([x[1] for x in m["rigid_links"]]),
+                                       "type": w.i32([x[2] for x in m["rigid_links"]])})
+    if m["diaphragms"]:
+        g["rigid_diaphragm"] = w.node(groups={f"{k:06d}": w.node(attrs={"perp": w.i32(p), "master": w.i32(mm)},
+                                                                 data={"slaves": w.i32(sl)})
+                                              for k, (p, mm, sl) in enumerate(m["diaphragms"])})
+    if m["embedded"]:
+        g["embedded_node"] = w.node(data={"node": w.i32([x[0] for x in m["embedded"]]),
+                                          "host": w.i32([-1] * len(m["embedded"])),
+                                          "rot": w.i32([x[2] for x in m["embedded"]]),
+                                          "corners": w.i32([x[1] for x in m["embedded"]])})
+    return g
 
 
 def uniform_group(m: dict) -> dict:
@@ -455,7 +510,8 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", exp
         "constraints": w.node(groups={
             "sp": w.node(groups={"fix": w.node(data={"node": w.i32(fix_node), "dof": w.i32(fix_dof)})}),
             "mp": w.node(groups={"equal_dof": w.node(data={"retained": w.i32(ret), "constrained": w.i32(con),
-                                                           "dof": w.i32(dof)})})}),
+                                                           "dof": w.i32(dof)}),
+                                 **mp_constraints(m)})}),
         "damping": w.node(groups={"rayleigh": w.node(groups={f"{k:06d}": w.node(
             attrs={"alphaM": w.f64(ray[0]), "betaK": w.f64(ray[1]), "betaKinit": w.f64(ray[2]),
                    "betaKcomm": w.f64(ray[3])}, data={"elements": w.i32(els)})

@@ -73,4 +73,12 @@ void embedded_in_hex8(const std::int32_t (&host)[8], const double (&xe)[8][3], s
                       const std::array<double, 3>& xc, bool rot, std::vector<LinearConstraint>& out,
                       const std::string& source);
 
+// --- The embedded node in a tetrahedron of four nodes (OpenSees' ASDEmbeddedNodeElement corners,
+// schema 1.2 with host = -1): the barycentric coordinates are the weights (refused when the node
+// is outside or the corners are flat), with rot the rotations half the curl of the linear field.
+// corner[a]: the DOF offset of corner a (its first 3 DOFs are its translations).
+void embedded_in_tet4(const std::int32_t (&corner)[4], const double (&xe)[4][3], std::int32_t c,
+                      const std::array<double, 3>& xc, bool rot, std::vector<LinearConstraint>& out,
+                      const std::string& source);
+
 }  // namespace femorax::compile

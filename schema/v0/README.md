@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 1.1
+# FemoraX model file, schema version 1.2
 
-Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 and 0.6 approved 2026-11-09; 1.1 approved 2026-11-20**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 and 0.6 approved 2026-11-09; 1.1 and 1.2 approved 2026-11-20**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -58,6 +58,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.7 | optional `/damping/uniform` (Uniform damping per element region, section 3.7.1) |
 | 1.0 | H5DRM: the DRM file is read as it is, its stations and motions in one frame (no flip of the z motion, which OpenSees and FemoraX 0.x applied), and a coordinate transformation turns the motions with the stations; the box description `drmbox_*` is optional. Breaking: an H5DRM pattern in a 0.x file is refused (section 3.9) |
 | 1.1 | beams: optional `/sections/<tag>` (Elastic, section 3.3.1) and `/transformations/<tag>` (Linear, PDelta, Corotational; section 3.3.2), element type `"dispBeamColumn"` (section 3.4.1). Sections have their own tag space (a section and an nD material may share a tag) |
+| 1.2 | constraints: optional `/constraints/mp/rigid_link`, `/constraints/mp/rigid_diaphragm/<index>` and `/constraints/mp/embedded_node` (section 3.6) |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
 ## 2. Conventions
@@ -103,6 +104,9 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 /mass/                             (optional) nodal masses
 /constraints/sp/fix/               (optional) one row per fixed DOF
 /constraints/mp/equal_dof/         (optional) one row per tied DOF pair
+/constraints/mp/rigid_link/        (optional, 1.2) one row per rigidLink
+/constraints/mp/rigid_diaphragm/<index>/  (optional, 1.2) one group per rigidDiaphragm
+/constraints/mp/embedded_node/     (optional, 1.2) one row per embedded node
 /damping/rayleigh/<index>/         (optional) per element region, in file order
 /time_series/<tag>/                (optional)
 /patterns/<tag>/                   (optional)
@@ -522,6 +526,49 @@ Rules for explicit stages (decided for milestone 1a):
 
 ---
 
+`/constraints/mp/rigid_link` *(optional, 1.2)*: `rigidLink beam|bar <master> <slave>`, one row
+per command. `beam` (OpenSees RigidBeam): the slave follows the master rigidly,
+`u_s = u_m + theta_m x (x_s - x_m)`, `theta_s = theta_m`; both nodes 6 DOFs. `bar` (RigidRod):
+equal translations; both nodes 3 DOFs or more.
+
+| Dataset | Shape, type | Meaning |
+|---|---|---|
+| `master` | `[K]` int32 | retained node |
+| `slave` | `[K]` int32 | constrained node |
+| `type` | `[K]` int32 | 1 = beam, 2 = bar |
+
+`/constraints/mp/rigid_diaphragm/<index>` *(optional, 1.2)*: `rigidDiaphragm <perp> <master>
+<slaves...>`, one group per command (`<index>` zero-padded, file order). The two in-plane
+translations and the rotation about `perp` of each slave follow the master rigidly; all nodes
+6 DOFs.
+
+| Item | Kind, type | Meaning |
+|---|---|---|
+| `perp` | attr int32 | 1, 2 or 3: the axis normal to the diaphragm's plane |
+| `master` | attr int32 | retained node |
+| `slaves` | dataset `[S]` int32 | constrained nodes, at least one |
+
+`/constraints/mp/embedded_node` *(optional, 1.2)*: a node tied exactly to the solid it sits in
+(Femora's embedded node; OpenSees' `ASDEmbeddedNodeElement` ties it with a penalty instead,
+docs/deviations.md). Its translations are the host's shape functions at the node; with `rot`
+its rotations are half the curl of the host's displacement there.
+
+| Dataset | Shape, type | Meaning |
+|---|---|---|
+| `node` | `[K]` int32 | the embedded node (3 DOFs or more; 6 with `rot`) |
+| `host` | `[K]` int32 | the element it sits in (an 8-node brick so far), or -1 for `corners` |
+| `rot` | `[K]` int32 | 0 or 1: tie the rotations too |
+| `corners` | `[K, 4]` int32 *(optional)* | used where `host` is -1: four nodes spanning a tetrahedron around the node (OpenSees' corners), whose barycentric coordinates are the weights |
+
+Rules checked by the reader: every node and host element exists; a `beam` link's and a
+diaphragm's nodes have 6 DOFs; `perp` is 1, 2 or 3; no node is tied to itself; a diaphragm
+has slaves; `rot` needs 6 DOFs; a node is embedded once; `host` is -1 only with `corners`.
+Checked by `check_supported`: the host is a stdBrick or SSPbrick. Checked when the model is
+compiled: the node lies inside its host (or its tetrahedron); a DOF constrained twice, or also
+fixed or tied by equalDOF, and a cycle of constraints are refused with a message naming the
+constraints; `-K`, `-KP` (OpenSees' penalty) have no counterpart, and `-p` (the pressure tie) is
+not part of the schema.
+
 ## 4. Unsupported components
 
 The reader stops on these, naming the component and suggesting the OpenSees backend:
@@ -532,7 +579,7 @@ The reader stops on these, naming the component and suggesting the OpenSees back
 - `ndm != 3`;
 - other time series (`Linear`, `Constant`, `Trig`, ...), patterns (`Plain`, `MultipleSupport`),
   loads (`load`, `eleLoad`, `sp` in patterns);
-- MP constraints other than equalDOF (`rigidDiaphragm`, `rigidLink`, ...), node regions,
+- MP constraints other than equalDOF, rigidLink, rigidDiaphragm and the embedded node, node regions,
   global `rayleigh`, other damping types;
 - recorders other than Node and VTKHDF, Node recorder output other than `-file`
   (`-xml`, `-binary`, `-tcp`), VTKHDF responses other than `disp vel accel stress3D6 strain3D6`;

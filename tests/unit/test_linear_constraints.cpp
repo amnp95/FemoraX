@@ -167,6 +167,53 @@ TEST(LinearConstraints, EmbeddedNodeInABrickReproducesLinearFields) {
   }
 }
 
+// The embedded node in OpenSees' four corners (schema 1.2, host = -1): the barycentric weights
+// reproduce any linear field and, with rot, a rigid rotation; a node outside and flat corners are
+// refused.
+TEST(LinearConstraints, EmbeddedNodeInATetrahedronReproducesLinearFields) {
+  const double xe[4][3] = {{0.1, -0.2, 0.0}, {1.3, 0.1, 0.2}, {0.2, 1.1, -0.1}, {0.3, 0.2, 1.4}};
+  const double lam[4] = {0.15, 0.3, 0.25, 0.3};
+  std::array<double, 3> x{0, 0, 0};
+  for (int i = 0; i < 4; ++i)
+    for (int j = 0; j < 3; ++j) x[static_cast<std::size_t>(j)] += lam[i] * xe[i][j];
+  const std::int32_t corner[4] = {0, 3, 6, 9};
+  std::vector<LinearConstraint> c;
+  femorax::compile::embedded_in_tet4(corner, xe, 12, x, true, c, "embedded 100 in the corners 1 2 3 4");
+  const auto r = femorax::compile::resolve_constraints(18, c);
+  ASSERT_EQ(r.rows(), 6u);
+  for (int d = 0; d < 3; ++d)
+    for (int i = 0; i < 4; ++i)
+      EXPECT_NEAR(r.term_weight[static_cast<std::size_t>(r.start[static_cast<std::size_t>(d)] + i)], lam[i], 1e-15);
+  auto field = [&](const double G[3][3], const double a[3]) {
+    std::vector<double> u(18, 0.0);
+    for (int i = 0; i < 4; ++i)
+      for (int d = 0; d < 3; ++d)
+        u[static_cast<std::size_t>(3 * i + d)] = a[d] + G[d][0] * xe[i][0] + G[d][1] * xe[i][1] + G[d][2] * xe[i][2];
+    return apply(r, u);
+  };
+  const double a[3] = {0.01, -0.02, 0.03};
+  {
+    const double G[3][3] = {{1e-3, 2e-3, -1e-3}, {0.5e-3, -2e-3, 3e-3}, {-1e-3, 1e-3, 2e-3}};
+    const auto v = field(G, a);
+    for (int d = 0; d < 3; ++d)
+      EXPECT_NEAR(v[static_cast<std::size_t>(12 + d)], a[d] + G[d][0] * x[0] + G[d][1] * x[1] + G[d][2] * x[2], 1e-15);
+    const double th[3] = {0.5 * (G[2][1] - G[1][2]), 0.5 * (G[0][2] - G[2][0]), 0.5 * (G[1][0] - G[0][1])};
+    for (int d = 0; d < 3; ++d) EXPECT_NEAR(v[static_cast<std::size_t>(15 + d)], th[d], 1e-15);
+  }
+  {
+    const double w[3] = {2e-3, -1e-3, 3e-3};
+    const double G[3][3] = {{0, -w[2], w[1]}, {w[2], 0, -w[0]}, {-w[1], w[0], 0}};
+    const auto v = field(G, a);
+    for (int d = 0; d < 3; ++d) EXPECT_NEAR(v[static_cast<std::size_t>(15 + d)], w[d], 1e-15);
+  }
+  std::vector<LinearConstraint> c2;
+  EXPECT_THROW(femorax::compile::embedded_in_tet4(corner, xe, 12, {3.0, 3.0, 3.0}, false, c2, "outside"),
+               femorax::io::ModelError);
+  const double flat[4][3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 0}};
+  EXPECT_THROW(femorax::compile::embedded_in_tet4(corner, flat, 12, {0.3, 0.3, 0.0}, false, c2, "flat"),
+               femorax::io::ModelError);
+}
+
 TEST(LinearConstraints, ResolverSubstitutesChainsAndRefusesCyclesAndDoubles) {
   // dof 0 = 2 * dof 1, dof 1 = dof 2 + 3 * dof 3: dof 0 = 2 dof 2 + 6 dof 3.
   std::vector<LinearConstraint> c = {{0, {{1, 2.0}}, "a"}, {1, {{2, 1.0}, {3, 3.0}}, "b"}};

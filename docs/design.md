@@ -1302,6 +1302,16 @@ takes no ground load. Test (`BeamKernels.EmbeddedRotationTieLumpsADominantMass`,
 the stable step follows Newmark within 5.9e-4 of the peak (rotations 6.5e-4). docs/deviations.md
 records the exact tie against OpenSees' penalty. Next: schema 1.2 (asked first), the converter
 and the OpenSees comparisons (rigid links and diaphragms; embedded nodes against growing K).
+Step 5, first part done (2026-11-20, approved by the user with the text as proposed, `corners`
+included): schema 1.2 (`schema/v0/README.md` 3.6): `/constraints/mp/rigid_link` (master, slave,
+type 1 beam / 2 bar), `/constraints/mp/rigid_diaphragm/<index>` (attrs perp, master; slaves),
+`/constraints/mp/embedded_node` (node, host, rot; optional corners where host = -1). The reader
+(1.2; 1.0 and 1.1 still read), its rules and 27 fixtures; `check_supported` (a host that is not an
+8-node brick); the four-corner mode (`embedded_in_tet4`: the tetrahedron's barycentric weights, with
+rot half the curl of the linear field; a node outside or flat corners refused), so OpenSees'
+`ASDEmbeddedNodeElement C R1 R2 R3 R4` converts one to one without tetrahedron elements; the Tcl
+converter reads `rigidLink`, `rigidDiaphragm` and `ASDEmbeddedNodeElement` (`-K`, `-KP` ignored with a
+warning; `-p` and the triangle form refused). Next: the OpenSees comparisons.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

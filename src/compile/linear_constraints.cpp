@@ -180,4 +180,70 @@ void embedded_in_hex8(const std::int32_t (&host)[8], const double (&xe)[8][3], s
   out.push_back(std::move(tz));
 }
 
+namespace {
+
+// The tie of node c given the weights N and their gradients g (dN_i/dx_j) at the node, from n
+// host DOF offsets.
+void add_embedded_rows(int n, const std::int32_t* host, const double* N, const double (*g)[3], std::int32_t c,
+                       bool rot, std::vector<LinearConstraint>& out, const std::string& source) {
+  for (int d = 0; d < 3; ++d) {
+    LinearConstraint lc{c + d, {}, source, false};
+    for (int i = 0; i < n; ++i) lc.terms.push_back({host[i] + d, N[i]});
+    out.push_back(std::move(lc));
+  }
+  if (!rot) return;
+  LinearConstraint tx{c + 3, {}, source, false}, ty{c + 4, {}, source, false}, tz{c + 5, {}, source, false};
+  for (int i = 0; i < n; ++i) {
+    tx.terms.push_back({host[i] + 2, 0.5 * g[i][1]});
+    tx.terms.push_back({host[i] + 1, -0.5 * g[i][2]});
+    ty.terms.push_back({host[i] + 0, 0.5 * g[i][2]});
+    ty.terms.push_back({host[i] + 2, -0.5 * g[i][0]});
+    tz.terms.push_back({host[i] + 1, 0.5 * g[i][0]});
+    tz.terms.push_back({host[i] + 0, -0.5 * g[i][1]});
+  }
+  out.push_back(std::move(tx));
+  out.push_back(std::move(ty));
+  out.push_back(std::move(tz));
+}
+
+}  // namespace
+
+void embedded_in_tet4(const std::int32_t (&corner)[4], const double (&xe)[4][3], std::int32_t c,
+                      const std::array<double, 3>& xc, bool rot, std::vector<LinearConstraint>& out,
+                      const std::string& source) {
+  // J's columns are the edges from corner 0; lambda = J^-1 (x - x0); grad lambda_k = row k of J^-1.
+  double J[3][3];
+  for (int j = 0; j < 3; ++j)
+    for (int k = 0; k < 3; ++k) J[j][k] = xe[k + 1][j] - xe[0][j];
+  const double det = J[0][0] * (J[1][1] * J[2][2] - J[1][2] * J[2][1]) - J[0][1] * (J[1][0] * J[2][2] - J[1][2] * J[2][0]) +
+                     J[0][2] * (J[1][0] * J[2][1] - J[1][1] * J[2][0]);
+  double scale = 0.0;
+  for (int j = 0; j < 3; ++j)
+    for (int k = 0; k < 3; ++k) scale = std::max(scale, std::abs(J[j][k]));
+  if (!(std::abs(det) > 1e-12 * scale * scale * scale))
+    throw io::ModelError(source + ": the four corners are flat (no tetrahedron)");
+  double Ji[3][3];
+  Ji[0][0] = (J[1][1] * J[2][2] - J[1][2] * J[2][1]) / det;
+  Ji[0][1] = (J[0][2] * J[2][1] - J[0][1] * J[2][2]) / det;
+  Ji[0][2] = (J[0][1] * J[1][2] - J[0][2] * J[1][1]) / det;
+  Ji[1][0] = (J[1][2] * J[2][0] - J[1][0] * J[2][2]) / det;
+  Ji[1][1] = (J[0][0] * J[2][2] - J[0][2] * J[2][0]) / det;
+  Ji[1][2] = (J[0][2] * J[1][0] - J[0][0] * J[1][2]) / det;
+  Ji[2][0] = (J[1][0] * J[2][1] - J[1][1] * J[2][0]) / det;
+  Ji[2][1] = (J[0][1] * J[2][0] - J[0][0] * J[2][1]) / det;
+  Ji[2][2] = (J[0][0] * J[1][1] - J[0][1] * J[1][0]) / det;
+  const double r[3] = {xc[0] - xe[0][0], xc[1] - xe[0][1], xc[2] - xe[0][2]};
+  double N[4], g[4][3];
+  N[0] = 1.0;
+  for (int k = 0; k < 3; ++k) {
+    N[k + 1] = Ji[k][0] * r[0] + Ji[k][1] * r[1] + Ji[k][2] * r[2];
+    N[0] -= N[k + 1];
+    for (int j = 0; j < 3; ++j) g[k + 1][j] = Ji[k][j];
+  }
+  for (int j = 0; j < 3; ++j) g[0][j] = -(g[1][j] + g[2][j] + g[3][j]);
+  for (const double w : N)
+    if (w < -1e-10) throw io::ModelError(source + ": the embedded node is not inside the tetrahedron of its corners");
+  add_embedded_rows(4, corner, N, g, c, rot, out, source);
+}
+
 }  // namespace femorax::compile

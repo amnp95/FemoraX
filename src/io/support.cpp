@@ -1,10 +1,10 @@
 #include "io/support.hpp"
 
 #include <algorithm>
-#include <cstdlib>
-#include <unordered_map>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -23,6 +23,19 @@ constexpr const char* kOpenSeesHint = " Run this model with the OpenSees backend
 }  // namespace
 
 void check_supported(const Model& m, const Capabilities& caps) {
+  // Embedded nodes (schema 1.2): the host is an 8-node brick so far (or four corners).
+  if (!m.embedded_nodes.empty()) {
+    std::unordered_map<std::int32_t, ElementType> type_of;
+    for (const auto& g : m.elements)
+      for (const auto t : g.tags) type_of[t] = g.type;
+    for (const auto& e : m.embedded_nodes) {
+      if (e.host == -1) continue;
+      const auto it = type_of.find(e.host);
+      if (it != type_of.end() && it->second != ElementType::StdBrick && it->second != ElementType::SSPbrick)
+        unsupported("embedded node " + std::to_string(e.node) + " in element " + std::to_string(e.host) + " (" +
+                    to_string(it->second) + "): the host must be an 8-node brick (stdBrick, SSPbrick) so far");
+    }
+  }
   for (const auto& s : m.time_series) {
     if (!s.dt && (s.use_last || s.prepend_zero)) {
       unsupported("Path time series " + std::to_string(s.tag) + " with a time array and " +

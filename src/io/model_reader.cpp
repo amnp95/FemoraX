@@ -116,6 +116,14 @@ void require_minor(const Model& m, int minor, const std::string& what) {
   }
 }
 
+// An item schema 1.2 added (rigid links, rigid diaphragms, embedded nodes).
+void require_1_2(const Model& m, const std::string& what) {
+  if (m.version.major < 1 || (m.version.major == 1 && m.version.minor < 2)) {
+    invalid(what + " was added in schema 1.2, but the file declares " + std::to_string(m.version.major) + "." +
+            std::to_string(m.version.minor));
+  }
+}
+
 // An item schema 1.1 added (beams: /sections, /transformations, dispBeamColumn).
 void require_1_1(const Model& m, const std::string& what) {
   if (m.version.major < 1 || (m.version.major == 1 && m.version.minor < 1)) {
@@ -528,9 +536,70 @@ void read_constraints(Group& root, Model& m) {
   }
   if (auto mp = c->optional_group("mp")) {
     for (const auto& t : mp->children()) {
-      if (t != "equal_dof") {
+      if (t != "equal_dof" && t != "rigid_link" && t != "rigid_diaphragm" && t != "embedded_node") {
         unsupported("MP constraint " + quoted(t) + " (" + mp->item(t) + ")",
-                    "equal_dof (equalDOF and the laminar boundary)");
+                    "equal_dof (equalDOF and the laminar boundary), rigid_link, rigid_diaphragm, embedded_node");
+      }
+    }
+    if (auto rl = mp->optional_group("rigid_link")) {
+      require_1_2(m, rl->path());
+      auto master = rl->dataset_int("master");
+      auto slave = rl->dataset_int("slave");
+      auto type = rl->dataset_int("type");
+      rl->finish();
+      if (slave.rows() != master.rows() || type.rows() != master.rows())
+        invalid("/constraints/mp/rigid_link: master, slave and type differ in length");
+      for (std::size_t i = 0; i < master.data.size(); ++i) {
+        const auto t = type.data[i];
+        if (t != 1 && t != 2)
+          invalid("/constraints/mp/rigid_link/type: " + std::to_string(t) + " must be 1 (beam) or 2 (bar)");
+        m.rigid_links.push_back({t == 1 ? "beam" : "bar", master.data[i], slave.data[i]});
+      }
+    }
+    if (auto rd = mp->optional_group("rigid_diaphragm")) {
+      require_1_2(m, rd->path());
+      for (const auto& name : rd->children()) {
+        auto g = rd->group(name);
+        RigidDiaphragm dg;
+        dg.perp = g.attr_int("perp");
+        dg.master = g.attr_int("master");
+        dg.slaves = g.dataset_int("slaves").data;
+        g.finish();
+        if (dg.perp < 1 || dg.perp > 3)
+          invalid(g.path() + ": perp must be 1, 2 or 3 (the axis normal to the plane), not " + std::to_string(dg.perp));
+        if (dg.slaves.empty()) invalid(g.path() + ": the diaphragm has no slaves");
+        m.rigid_diaphragms.push_back(std::move(dg));
+      }
+      rd->finish();
+    }
+    if (auto en = mp->optional_group("embedded_node")) {
+      require_1_2(m, en->path());
+      auto node = en->dataset_int("node");
+      auto host = en->dataset_int("host");
+      auto rot = en->dataset_int("rot");
+      std::vector<std::int32_t> corners;
+      if (en->has_child("corners")) corners = en->dataset_int("corners", 4).data;
+      en->finish();
+      if (host.rows() != node.rows() || rot.rows() != node.rows() ||
+          (!corners.empty() && static_cast<std::int64_t>(corners.size()) != 4 * node.rows()))
+        invalid("/constraints/mp/embedded_node: node, host, rot and corners differ in length");
+      for (std::size_t i = 0; i < node.data.size(); ++i) {
+        EmbeddedNode e;
+        e.node = node.data[i];
+        e.host = host.data[i];
+        if (rot.data[i] != 0 && rot.data[i] != 1)
+          invalid("/constraints/mp/embedded_node/rot: " + std::to_string(rot.data[i]) + " must be 0 or 1");
+        e.rot = rot.data[i] == 1;
+        if (e.host == -1) {
+          if (corners.empty())
+            invalid("/constraints/mp/embedded_node: node " + std::to_string(e.node) +
+                    " has host -1 and needs its four corners (dataset corners)");
+          for (int k = 0; k < 4; ++k) e.corners[static_cast<std::size_t>(k)] = corners[4 * i + static_cast<std::size_t>(k)];
+        } else if (e.host <= 0) {
+          invalid("/constraints/mp/embedded_node/host: " + std::to_string(e.host) +
+                  " must be an element tag or -1 (with corners)");
+        }
+        m.embedded_nodes.push_back(e);
       }
     }
     if (auto eq = mp->optional_group("equal_dof")) {
@@ -1114,6 +1183,54 @@ void validate(Model& m) {
       if (!constrained.emplace(c, d).second) {
         invalid(where + ": node " + std::to_string(c) + " DOF " + std::to_string(d) +
                 " is constrained more than once");
+      }
+    }
+  }
+
+  // Rigid links, diaphragms, embedded nodes (schema 1.2): nodes exist with the DOFs the
+  // constraint ties; the host element exists. Conflicts (a DOF constrained twice, also fixed or
+  // tied by equalDOF) and the position inside the host are checked when the model is compiled.
+  for (const auto& l : m.rigid_links) {
+    const std::string where = "/constraints/mp/rigid_link (" + l.type + " " + std::to_string(l.master) + " " +
+                              std::to_string(l.slave) + ")";
+    const int need = l.type == "beam" ? 6 : 3;
+    for (const auto n : {l.master, l.slave}) {
+      const int ndf = ndf_of(n, where);
+      if (l.type == "beam" ? ndf != 6 : ndf < 3)
+        invalid(where + ": node " + std::to_string(n) + " needs " + std::to_string(need) + " DOFs" +
+                (l.type == "beam" ? "" : " or more") + " (ndf " + std::to_string(ndf) + ")");
+    }
+    if (l.master == l.slave) invalid(where + ": node " + std::to_string(l.master) + " is tied to itself");
+  }
+  for (std::size_t k = 0; k < m.rigid_diaphragms.size(); ++k) {
+    const auto& dg = m.rigid_diaphragms[k];
+    const std::string where = "/constraints/mp/rigid_diaphragm (master " + std::to_string(dg.master) + ")";
+    std::vector<std::int32_t> all = dg.slaves;
+    all.push_back(dg.master);
+    for (const auto n : all)
+      if (ndf_of(n, where) != 6)
+        invalid(where + ": node " + std::to_string(n) + " needs 6 DOFs (ndf " + std::to_string(ndf_of(n, where)) + ")");
+    std::set<std::int32_t> seen;
+    for (const auto n : dg.slaves) {
+      if (n == dg.master) invalid(where + ": node " + std::to_string(n) + " is tied to itself");
+      if (!seen.insert(n).second) invalid(where + ": slave " + std::to_string(n) + " appears more than once");
+    }
+  }
+  {
+    std::set<std::int32_t> seen;
+    for (const auto& e : m.embedded_nodes) {
+      const std::string where = "/constraints/mp/embedded_node (node " + std::to_string(e.node) + ")";
+      const int ndf = ndf_of(e.node, where);
+      if (ndf < 3) invalid(where + ": the node needs 3 DOFs or more (ndf " + std::to_string(ndf) + ")");
+      if (e.rot && ndf != 6) invalid(where + ": rot needs a node with 6 DOFs (ndf " + std::to_string(ndf) + ")");
+      if (!seen.insert(e.node).second) invalid(where + ": the node is embedded more than once");
+      if (e.host == -1) {
+        for (const auto c : e.corners) {
+          if (ndf_of(c, where) < 3) invalid(where + ": corner " + std::to_string(c) + " needs 3 DOFs or more");
+          if (c == e.node) invalid(where + ": the node is one of its own corners");
+        }
+      } else if (!element_tags.count(e.host)) {
+        invalid(where + ": host element " + std::to_string(e.host) + " does not exist");
       }
     }
   }

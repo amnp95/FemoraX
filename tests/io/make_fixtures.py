@@ -376,8 +376,46 @@ def m_commands(kind):
     return m
 
 
-def m_rigid_link(f):
-    f["constraints"]["mp"].create_group("rigid_link")
+def m_unknown_mp(f):
+    f["constraints"]["mp"].create_group("contact")
+
+
+def m_constraint(kind, ndf=6, version=None, **kw):
+    """Add new nodes 9101-9104 (`ndf` DOFs; 9101 at the centre of brick 1, the others beside the
+    column) and one schema 1.2 constraint: kind "link" (rigid_link), "diaphragm"
+    (rigid_diaphragm/000000) or "embedded" (embedded_node); kw overrides its datasets / attrs."""
+    def m(f):
+        nodes = f["nodes"]
+        new = np.array([9101, 9102, 9103, 9104], dtype=np.int32)
+        xyz = np.array([[0.5, 0.5, -17.35], [5.0, 0.0, 0.0], [6.0, 0.0, 0.0], [5.0, 1.0, 0.0]])
+        replace(nodes, "tags", np.concatenate([nodes["tags"][...], new]))
+        replace(nodes, "coords", np.concatenate([nodes["coords"][...], xyz]))
+        replace(nodes, "ndf", np.concatenate([nodes["ndf"][...], np.full(4, ndf, dtype=np.int32)]))
+        mp = f["constraints"]["mp"]
+        if kind == "link":
+            g = mp.create_group("rigid_link")
+            data = {"master": [9102], "slave": [9103], "type": [1]}
+            data.update(kw)
+            for k, v in data.items():
+                if v is not None:
+                    g.create_dataset(k, data=np.array(v, dtype=np.int32))
+        elif kind == "diaphragm":
+            g = mp.create_group("rigid_diaphragm").create_group("000000")
+            attrs = {"perp": 3, "master": 9102}
+            attrs.update({k: v for k, v in kw.items() if k != "slaves"})
+            for k, v in attrs.items():
+                g.attrs[k] = np.int32(v)
+            g.create_dataset("slaves", data=np.array(kw.get("slaves", [9103, 9104]), dtype=np.int32))
+        else:
+            g = mp.create_group("embedded_node")
+            data = {"node": [9101], "host": [1], "rot": [0]}
+            data.update(kw)
+            for k, v in data.items():
+                if v is not None:
+                    g.create_dataset(k, data=np.array(v, dtype=np.int32))
+        if version is not None:
+            f.attrs["schema_version"] = np.array(version, dtype=np.int32)
+    return m
 
 
 def m_uniaxial(f):
@@ -705,7 +743,7 @@ CASES = [
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 1.x files", m_version(2, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(1, 2)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(1, 3)),
     # schema 1.1: beams (/sections, /transformations, dispBeamColumn)
     ("beam", "explicit", "valid", "", m_beam()),
     ("beam_section_tag_shared_with_a_material", "explicit", "valid", "", m_beam()),
@@ -822,7 +860,46 @@ CASES = [
     # a root group no schema defines yet (/sections is schema 1.1's)
     ("unknown_root_group", "explicit", "unsupported", "unsupported component: /interfaces",
      m_new_root_group("interfaces")),
-    ("rigid_link", "explicit", "unsupported", 'MP constraint "rigid_link"', m_rigid_link),
+    ("unknown_mp_constraint", "explicit", "unsupported", 'MP constraint "contact"', m_unknown_mp),
+    # schema 1.2: rigid links, rigid diaphragms, embedded nodes
+    ("rigid_link_beam", "explicit", "valid", "", m_constraint("link")),
+    ("rigid_link_bar", "explicit", "valid", "", m_constraint("link", ndf=3, type=[2])),
+    ("rigid_link_in_1_1_file", "explicit", "invalid", "was added in schema 1.2", m_constraint("link", version=[1, 1])),
+    ("rigid_link_type", "explicit", "invalid", "must be 1 (beam) or 2 (bar)", m_constraint("link", type=[3])),
+    ("rigid_link_lengths", "explicit", "invalid", "master, slave and type differ in length",
+     m_constraint("link", slave=[9103, 9104])),
+    ("rigid_link_missing_node", "explicit", "invalid", "node 777 does not exist", m_constraint("link", slave=[777])),
+    ("rigid_link_beam_ndf_3", "explicit", "invalid", "needs 6 DOFs", m_constraint("link", ndf=3)),
+    ("rigid_link_self", "explicit", "invalid", "is tied to itself", m_constraint("link", slave=[9102])),
+    ("rigid_link_missing_type", "explicit", "invalid", "type", m_constraint("link", type=None)),
+    ("rigid_diaphragm", "explicit", "valid", "", m_constraint("diaphragm")),
+    ("rigid_diaphragm_perp", "explicit", "invalid", "perp must be 1, 2 or 3", m_constraint("diaphragm", perp=4)),
+    ("rigid_diaphragm_no_slaves", "explicit", "invalid", "has no slaves", m_constraint("diaphragm", slaves=[])),
+    ("rigid_diaphragm_ndf_3", "explicit", "invalid", "needs 6 DOFs", m_constraint("diaphragm", ndf=3)),
+    ("rigid_diaphragm_repeated_slave", "explicit", "invalid", "appears more than once",
+     m_constraint("diaphragm", slaves=[9103, 9103])),
+    ("rigid_diaphragm_master_as_slave", "explicit", "invalid", "is tied to itself",
+     m_constraint("diaphragm", slaves=[9102])),
+    ("embedded_node", "explicit", "valid", "", m_constraint("embedded", ndf=3)),
+    ("embedded_node_rot", "explicit", "valid", "", m_constraint("embedded", rot=[1])),
+    ("embedded_node_corners", "explicit", "valid", "",
+     m_constraint("embedded", ndf=3, host=[-1], corners=[[1, 2, 4, 5]])),
+    ("embedded_node_rot_ndf_3", "explicit", "invalid", "rot needs a node with 6 DOFs",
+     m_constraint("embedded", ndf=3, rot=[1])),
+    ("embedded_node_rot_value", "explicit", "invalid", "must be 0 or 1", m_constraint("embedded", rot=[2])),
+    ("embedded_node_missing_host", "explicit", "invalid", "host element 77 does not exist",
+     m_constraint("embedded", host=[77])),
+    ("embedded_node_host_without_corners", "explicit", "invalid", "needs its four corners",
+     m_constraint("embedded", host=[-1])),
+    ("embedded_node_missing_corner", "explicit", "invalid", "node 778 does not exist",
+     m_constraint("embedded", host=[-1], corners=[[1, 2, 4, 778]])),
+    ("embedded_node_twice", "explicit", "invalid", "embedded more than once",
+     m_constraint("embedded", node=[9101, 9101], host=[1, 1], rot=[0, 0])),
+    ("embedded_node_lengths", "explicit", "invalid", "differ in length", m_constraint("embedded", rot=[0, 0])),
+    ("embedded_node_in_1_1_file", "explicit", "invalid", "was added in schema 1.2",
+     m_constraint("embedded", version=[1, 1])),
+    ("embedded_node_beam_host", "explicit", "unsupported", "the host must be an 8-node brick",
+     lambda f: (m_beam()(f), m_constraint("embedded", host=[9001])(f))),
     ("modal_damping", "explicit", "unsupported", 'damping type "modal"', m_modal),
     ("linear_series", "explicit", "unsupported", 'time series type "Linear"',
      m_set_attr("time_series/1", "type", "Linear")),

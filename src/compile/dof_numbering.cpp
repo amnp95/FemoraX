@@ -391,6 +391,22 @@ DofNumbering number_dofs(const io::Model& model, const std::vector<std::int32_t>
       for (std::size_t g = 0; g < model.elements.size(); ++g)
         for (std::size_t e = 0; e < model.elements[g].size(); ++e) element_at[model.elements[g].tags[e]] = {g, e};
       for (const auto& en : model.embedded_nodes) {
+        if (en.host == -1) {  // four corners (schema 1.2): the tetrahedron's barycentric weights
+          const std::string what = "embedded node " + std::to_string(en.node) + " in the corners " +
+                                   std::to_string(en.corners[0]) + " " + std::to_string(en.corners[1]) + " " +
+                                   std::to_string(en.corners[2]) + " " + std::to_string(en.corners[3]);
+          std::int32_t corner[4];
+          double xe[4][3];
+          for (int a = 0; a < 4; ++a) {
+            const auto t = en.corners[static_cast<std::size_t>(a)];
+            corner[a] = out.dof_offset[node_of(t, what)];
+            const auto xa = coords(t);
+            for (int k = 0; k < 3; ++k) xe[a][k] = xa[static_cast<std::size_t>(k)];
+          }
+          if (en.rot) need_ndf(en.node, 6, what);
+          embedded_in_tet4(corner, xe, out.dof_offset[node_of(en.node, what)], coords(en.node), en.rot, lin, what);
+          continue;
+        }
         const std::string what = "embedded node " + std::to_string(en.node) + " in element " + std::to_string(en.host);
         const auto it = element_at.find(en.host);
         if (it == element_at.end()) invalid(what + ": the host element does not exist");
