@@ -11,7 +11,7 @@
 //   - the DOF numbering: constrained DOFs get slots after the equations, their rows in equations
 //     (through equalDOF groups, fixed DOFs dropped); a constrained DOF that is also fixed or tied
 //     by equalDOF is refused; an embedded node in a brick element of the model; the compile step
-//     takes the embedded translations and refuses the rotation tie (its masses, step 2).
+//     takes the embedded translations and the rotation tie.
 
 #include <gtest/gtest.h>
 
@@ -293,14 +293,20 @@ TEST(LinearConstraints, EmbeddedNodeInABrickElementOfTheModel) {
   auto bad = m;
   bad.embedded_nodes[0].host = 8;
   EXPECT_THROW(femorax::compile::number_dofs(bad, femorax::compile::file_order(bad)), femorax::io::ModelError);
-  // The compile step takes the embedded node's translations (step 2) and refuses its rotation
-  // tie until the kernels have the masses for it.
+  // The compile step takes the translations (step 2) and the rotation tie (step 4: six
+  // constrained DOFs, the rotation rows' weights summing to zero).
   EXPECT_NO_THROW(femorax::compile::compile_model(m, femorax::compile::CompileOptions{}));
   auto with_rot = m;
   with_rot.nodes.ndf.back() = 6;
   with_rot.embedded_nodes[0].rot = true;
-  EXPECT_THROW(femorax::compile::compile_model(with_rot, femorax::compile::CompileOptions{}),
-               femorax::io::UnsupportedComponent);
+  const auto cr = femorax::compile::compile_model(with_rot, femorax::compile::CompileOptions{});
+  ASSERT_EQ(cr.dofs.num_constrained(), 6);
+  for (int d = 3; d < 6; ++d) {
+    double sum = 0.0;
+    for (auto k = cr.dofs.con_start[d]; k < cr.dofs.con_start[d + 1]; ++k)
+      sum += cr.dofs.con_weight[static_cast<std::size_t>(k)];
+    EXPECT_NEAR(sum, 0.0, 1e-14);
+  }
 }
 
 }  // namespace
