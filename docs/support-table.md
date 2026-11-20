@@ -38,8 +38,8 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 | fix | in progress (1a) | |
 | equalDOF | in progress (1a) | |
 | laminar boundary | in progress (1a) | Femora exports it as equalDOF pairs |
-| rigidDiaphragm, rigidLink (beam, bar) | in progress | exact (u = T q), explicit with exact block masses and implicit; schema 1.2; no OpenSees comparison yet (docs/design.md, "Exact constraints u = T q") |
-| ASDEmbeddedNodeElement (embedded node) | in progress | an exact tie to its host brick's shape functions (not OpenSees' penalty); `-rot`: the rotations tied to half the curl of the host's displacement; `-K`, `-KP` ignored; schema 1.2 (a host brick, or OpenSees' four corners); docs/deviations.md |
+| rigidDiaphragm, rigidLink (beam, bar) | in progress | exact (u = T q), explicit with exact block masses and implicit; schema 1.2; against OpenSees' Transformation handler within 3.4e-15 (a diaphragm frame with a rigid link; docs/design.md, "Exact constraints u = T q") |
+| ASDEmbeddedNodeElement (embedded node) | in progress | an exact tie to its host brick's shape functions (not OpenSees' penalty); `-rot`: the rotations tied to half the curl of the host's displacement; `-K`, `-KP` ignored; schema 1.2 (a host brick, or OpenSees' four corners); OpenSees' penalty converges to it as 1 / K (1.7e-7 at K = 1e12); docs/deviations.md |
 
 ## Damping
 

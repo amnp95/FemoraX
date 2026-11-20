@@ -258,4 +258,11 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/pile_in_soil/pile_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_pile_in_soil
                    ${femorax_pile_tol})
+  # Rigid links, a rigid diaphragm and embedded nodes against stored OpenSees output: the frame
+  # to rounding, the embedded pile converging to FemoraX's exact tie as 1 / K
+  # (tests/system/constraints/constraints_check.sh).
+  add_test(NAME system.constraints_vs_stored_opensees
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/constraints/constraints_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_constraints
+                   ${femorax_pile_tol})
 endif()

@@ -562,9 +562,11 @@ its peak (tolerance 5e-4). CPU and CUDA builds reproduced the event sequence exa
   and leaves an error of order 1 / K; the exact tie has neither, and the brick host needs no
   tetrahedra. The dominant lumping is never below the exact mass (Cauchy-Schwarz), so the
   element stable step stays an upper bound.
-- Effect on results: against OpenSees, the penalty's error (converging to the exact tie as K
-  grows; the comparison waits for schema 1.2 and the converter); explicit against implicit, the
-  lumping of the rotary inertia (5.9e-4 of the peak for a pile in a soil column).
+- Effect on results: against OpenSees, the penalty's error, which falls as 1 / K: a pile embedded
+  with -rot in a soil column differs by 1.65e-3, 1.68e-5, 1.69e-7 of the peak at K = 1e8, 1e10,
+  1e12 (OpenSees' default is 1e18 times the cube root of the tetrahedron's volume, where its
+  solve's rounding grows instead); explicit against implicit, the lumping of the rotary inertia
+  (5.9e-4 of the peak for a pile in a soil column).
 - Test: `BeamKernels.EmbeddedPileRunsAsTheEqualDofPile`, `BeamKernels.EmbeddedRotationTieLumpsADominantMass`,
   `LinearConstraints.EmbeddedNodeInABrickReproducesLinearFields`,
-  `DrmFreeField.AnEmbeddedNodeInsideTheBoxFollowsItsHost`.
+  `DrmFreeField.AnEmbeddedNodeInsideTheBoxFollowsItsHost`, `system.constraints_vs_stored_opensees`.

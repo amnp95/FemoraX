@@ -28,6 +28,7 @@ several partitions are kept once (their coordinates must agree). Recognised:
       node embedded in the tetrahedron of its four corners, an exact tie; -K and -KP are
       OpenSees' penalty and have no counterpart; -p and the triangle form are refused)
   fixX / fixY / fixZ coordinate dofs... -tol tol
+  fix node flags...
   region tag -ele ... -rayleigh alphaM betaK betaKinit betaKcomm    (inside eval "...")
   damping Uniform tag ratio freq1 freq2 [-activateTime Ta] [-deactivateTime Td] [-fact ts]
   region tag -ele ... -damp dampingTag                               (inside eval "...")
@@ -161,6 +162,7 @@ def convert(tcl: Path) -> dict:
     diaphragms: list[tuple[int, int, list[int]]] = []   # (perp, master, slaves)
     embedded: list[tuple[int, list[int], int]] = []     # (node, four corners, rot)
     fixes: list[tuple[int, float, list[int], float]] = []  # (axis, coordinate, dofs, tol)
+    node_fixes: list[tuple[int, list[int]]] = []           # fix node flags...
     regions: list[tuple[list[int], list[float]]] = []
     uniform_defs: dict[int, dict] = {}
     uniform_regions: list[tuple[list[int], int]] = []
@@ -275,6 +277,8 @@ def convert(tcl: Path) -> dict:
                              (float(tok[12]), float(tok[13]), float(tok[14]))))
         elif head == "equalDOF":
             ties.append((int(tok[1]), int(tok[2]), [int(x) for x in tok[3:]]))
+        elif head == "fix":
+            node_fixes.append((int(tok[1]), [int(x) for x in tok[2:]]))
         elif head in ("fixX", "fixY", "fixZ"):
             z = float(var[tok[1][1:]]) if tok[1].startswith("$") else float(tok[1])
             t = tok.index("-tol")
@@ -357,7 +361,7 @@ def convert(tcl: Path) -> dict:
     return dict(materials=materials, nodes=[(t, *x) for t, x in nodes.items()], node_ndf=node_ndf, sections=sections,
                 transfs=transfs, beams=beams, masses=masses, elements=elements, ties=ties,
                 rigid_links=rigid_links, diaphragms=diaphragms, embedded=embedded,
-                fixes=fixes, regions=regions, uniform_defs=uniform_defs, uniform_regions=uniform_regions, series=series, pattern=pattern, drm=drm, recorder=recorder,
+                fixes=fixes, node_fixes=node_fixes, regions=regions, uniform_defs=uniform_defs, uniform_regions=uniform_regions, series=series, pattern=pattern, drm=drm, recorder=recorder,
                 node_recorders=node_recorders, process=process)
 
 
@@ -427,6 +431,12 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", exp
                         fixed.add((t, d))
                         fix_node.append(t)
                         fix_dof.append(d)
+    for (t, flags) in m["node_fixes"]:
+        for d, on in enumerate(flags, start=1):
+            if on and (t, d) not in fixed:
+                fixed.add((t, d))
+                fix_node.append(t)
+                fix_dof.append(d)
     ret, con, dof = [], [], []
     for (r, c, ds) in m["ties"]:
         for d in ds:

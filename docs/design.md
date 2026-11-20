@@ -1312,6 +1312,16 @@ rot half the curl of the linear field; a node outside or flat corners refused), 
 `ASDEmbeddedNodeElement C R1 R2 R3 R4` converts one to one without tetrahedron elements; the Tcl
 converter reads `rigidLink`, `rigidDiaphragm` and `ASDEmbeddedNodeElement` (`-K`, `-KP` ignored with a
 warning; `-p` and the triangle form refused). Next: the OpenSees comparisons.
+Step 5 done (2026-11-20): the OpenSees comparisons (`system.constraints_vs_stored_opensees`,
+`tests/system/constraints/`; OpenSees 955ceb0 run once, its output stored). A one-storey frame (four
+elastic dispBeamColumn columns, a rigid diaphragm with an off-centre master, an eccentric mass on a
+rigid link off a free column node; Newmark with Newton; OpenSees' Transformation handler): FemoraX
+within 3.4e-15 of the peak (master, mass, column). A pile through a soil column off the soil nodes,
+each pile node embedded with `ASDEmbeddedNodeElement -rot` in a Kuhn tetrahedron of its brick: FemoraX's
+exact tie against OpenSees' penalty at K = 1e8, 1e10, 1e12 differs by 1.65e-3, 1.68e-5, 1.69e-7 of the
+peak displacement (rotations 1.80e-3, 1.82e-5, 1.82e-7): exactly 1 / K, so FemoraX is the limit of
+OpenSees' penalty. The converter reads `fix node flags...` too. Next: LTS with constraints, benchmarks
+of the expand and contract kernels (TACC), Femora's export (the user's side).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
