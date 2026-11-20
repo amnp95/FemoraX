@@ -123,9 +123,11 @@ damping in the basic system, the consistent mass with torsional and rotary inert
 step 4a, beams in explicit stages through the real kernels (583e640; found: cached geometry gave
 a beam no force at all); 4b, the implicit operator (91d11e2); 4c = todo 22, nodal masses in the
 element's stable step (30752ab); step 5, schema 1.1 approved by the user with option (a) for
-mass_per_length (b2bed66). Next: step 6, the Tcl converter for beams (6-DOF nodes, section
-Elastic, geomTransf, element dispBeamColumn, nodal `mass` commands) with the pile-in-soil system
-test against OpenSees and the LTS checkpoint; then step 7, TACC benchmarks. Earlier plan text:
+mass_per_length (b2bed66); step 6's first part, the Tcl converter for beams and a converted
+cantilever run end to end (c4df103). Next: the pile in a soil column against OpenSees (beam
+nodes tied to the soil with equalDOF; the OpenSees reference build on Stampede3) and the LTS
+checkpoint (an undamped pile in soil, LTS against a global small step); then step 7, TACC
+benchmarks. Earlier plan text:
 step 3's Rayleigh damping terms and the consistent mass; then step 4 (registry, batches with 6-DOF nodes,
 kernels), step 5 (schema 1.1, ask the user with the exact text), step 6 (system tests and the
 LTS checkpoint: an undamped pile in soil). The OpenSees reference build on Stampede3 is
