@@ -165,6 +165,15 @@ InternalForce::InternalForce(const compile::Compiled& c, GeometryCache cache)
                                                                   nnodes_));
   }
   gather_ = SlotGather(nslots, neq_, pairs);
+  // The nodal masses' shares, for the stable step of elements that take them (beams).
+  if (!c.nodal_mass_share.empty()) {
+    bool any = false;
+    for (const double x : c.nodal_mass_share) any |= x != 0.0;
+    if (any) {
+      const Vec share = upload("nodal_mass_share", c.nodal_mass_share);
+      for (auto& b : batches_) b->set_nodal_share(share);
+    }
+  }
   Kokkos::fence();
 }
 

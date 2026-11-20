@@ -106,6 +106,9 @@ struct DispBeam3d {
   static constexpr bool GEOMETRY_CACHEABLE = false;
   static constexpr MaterialKind MATERIAL_KIND = MaterialKind::Section3d;
   static constexpr TangentSymmetry TANGENT = Sec::TANGENT;  // PDelta's geometric term is symmetric
+  // The stable step takes the element's share of its nodes' masses (critical_dt's extra_mass):
+  // Femora's beams may have no mass of their own (density 0, the masses on the nodes).
+  static constexpr bool NODAL_MASS_IN_STEP = true;
 
   struct Params {
     typename Sec::Params mat;  // the section (named mat, as every element names its material)

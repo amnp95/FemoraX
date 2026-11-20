@@ -89,6 +89,10 @@ struct Compiled {
   // damping coefficient per equation, for CentralDifference's diagonal system).
   std::vector<double> lumped_alpha_mass;
   std::vector<double> nodal_mass;  // [num_equations]: the nodal masses alone (matrix-free M)
+  // [num_equations]: each equation's nodal mass split equally among the element DOFs that touch
+  // it (a partition of the assembled nodal mass): the share an element adds to its own mass in
+  // its stable step (docs/todo.md item 22; elements that take it declare NODAL_MASS_IN_STEP).
+  std::vector<double> nodal_mass_share;
   // [num_equations]: alphaM times the nodal masses, alphaM of each node's Rayleigh region
   // (the nodal masses' damping C = alphaM M; zero without nodal masses in damped regions)
   std::vector<double> nodal_alpha_mass;

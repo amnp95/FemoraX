@@ -1101,6 +1101,15 @@ initial-stiffness variant); Newmark with Newton under base shaking with Rayleigh
 `run_model` equals host Newmark on the reference matrices (Eigen LDLT) within 1.5e-12 (lumped)
 and 9.8e-13 (consistent) of the peak. Next: step 5 (schema 1.1, asked first), step 6 (system tests
 and the LTS checkpoint), todo 22 (nodal masses in the element's stable step).
+Step 4c done (2026-11-20): todo 22. Each equation's nodal mass is split equally among the
+element DOFs that touch it (`Compiled::nodal_mass_share`, a partition of the assembled mass, so
+the element eigenvalue bound stays valid); an element with `NODAL_MASS_IN_STEP` (the beam) adds
+its share to its own mass in its stable step (`critical_dt`'s extra mass, gathered by the
+stable-step kernels; also the levels of local time stepping), the solids keep their own mass
+only (conservative; their bits unchanged). Beams with density 0 run in explicit stages; an
+explicit stage refuses a free DOF without any mass, naming the node and the DOF (rule 5 of
+"Structures"). Test: a density-0 cantilever whose element masses sit on its nodes gets the same
+stable step as the beam with its density (1.660910e-04 both) and runs.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

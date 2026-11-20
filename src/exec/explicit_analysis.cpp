@@ -170,9 +170,8 @@ void ed_lts_finish(const Vec& z, const Vec& un, const Vec& u, const Vec& vh, con
 }
 
 // What beams cannot do in explicit stages (docs/design.md, "Beams", step 4): Rayleigh stiffness
-// damping (refused on beams by design: "Structures"), and beams without a mass of their own
-// (their nodal masses do not reach the element's stable step yet, docs/todo.md item 22, so the
-// step would be overstated). Implicit stages take both.
+// damping (refused on beams by design: "Structures"). Implicit stages take it. Beams without a
+// mass of their own are fine: their share of the nodal masses enters their stable step.
 void check_beams(const io::Model& model, const compile::Compiled& c, const io::AnalysisStep& an) {
   if (!io::is_explicit(an.integrator)) return;
   for (const auto& b : c.batches) {
@@ -184,13 +183,22 @@ void check_beams(const io::Model& model, const compile::Compiled& c, const io::A
                              "\" (dispBeamColumn) has Rayleigh stiffness damping, which FemoraX refuses on beams in "
                              "explicit stages (it cuts the stable step and gives spurious damping forces in yielding "
                              "frames); use mass-proportional damping (docs/design.md, \"Structures\")");
-      if (g.beam.density <= 0.0 && g.beam.mass_per_length <= 0.0)
-        throw io::ModelError("stage \"" + an.name + "\": element group \"" + g.id +
-                             "\" (dispBeamColumn) has no mass of its own (density 0): give the beams their density "
-                             "(FemoraX computes their mass, rotations included); nodal masses alone do not reach the "
-                             "element's stable step yet");
     }
   }
+}
+
+// Every free DOF of an explicit stage needs mass (docs/design.md, "Structures", rule 5):
+// names the first node and DOF without it.
+void check_masses(const compile::Compiled& c, const io::AnalysisStep& an) {
+  for (std::int32_t node = 0; node < c.dofs.num_nodes(); ++node)
+    for (int d = 0; d < c.dofs.ndf[static_cast<std::size_t>(node)]; ++d) {
+      const std::int32_t q = c.dofs.equation(node, d);
+      if (q >= 0 && !(c.lumped_mass[static_cast<std::size_t>(q)] > 0.0))
+        throw io::ModelError("stage \"" + an.name + "\": node " + std::to_string(c.dofs.node_tag[static_cast<std::size_t>(node)]) +
+                             " DOF " + std::to_string(d + 1) +
+                             " has no mass: an explicit stage needs mass on every free DOF (give its elements a "
+                             "density, or add a nodal mass)");
+    }
 }
 
 bool all_finite(const Vec& u) {
@@ -391,6 +399,7 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
       st.integrator = io::to_string(an->integrator);
       st.dt = an->dt;
       check_beams(model, c, *an);
+      check_masses(c, *an);
       const bool ed = an->integrator == io::Integrator::ExplicitDifference;
       const ExplicitScheme scheme = ed ? ExplicitScheme::ExplicitDifference : ExplicitScheme::CentralDifference;
       // Batches whose stable step cannot change keep it for the whole stage: computed once

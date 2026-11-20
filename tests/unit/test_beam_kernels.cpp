@@ -285,7 +285,7 @@ TEST(BeamKernels, RefusesWhatBeamsCannotDoYet) {
     m.process.push_back({"1", "", stage(femorax::io::Integrator::CentralDifference)});
     EXPECT_THROW(femorax::exec::run_model(m, o), femorax::io::ModelError);
   }
-  {
+  {  // density 0 and no nodal masses: free DOFs without mass
     Model m = cantilever(0);
     m.elements[0].beam.density = 0.0;
     m.process.push_back({"1", "", stage(femorax::io::Integrator::CentralDifference)});
@@ -458,6 +458,54 @@ TEST(BeamKernels, NewmarkRunFollowsTheHostRecurrence) {
     EXPECT_GT(peak, 0.0);
     EXPECT_LE(err, 1e-9 * peak);
   }
+}
+
+// docs/todo.md item 22: a beam whose mass sits on its nodes (density 0, Femora's export today)
+// gets the same stable step as the beam with the density, when the nodal masses are the
+// element masses lumped to the nodes (each element's share is then exactly its own mass).
+TEST(BeamKernels, NodalMassesEnterTheStableStep) {
+  const Model dense = cantilever(0);
+  femorax::compile::CompileOptions co;
+  co.renumbering = femorax::compile::Renumbering::Off;
+  const auto cd = femorax::compile::compile_model(dense, co);
+  Model light = dense;
+  light.elements[0].beam.density = 0.0;
+  // The element masses as nodal masses, DOF by DOF (the compile step's lumped mass of `dense`,
+  // free DOFs only; the base node's are fixed).
+  for (std::int32_t node = 0; node < cd.dofs.num_nodes(); ++node)
+    for (int d = 0; d < 6; ++d) {
+      const std::int32_t q = cd.dofs.equation(node, d);
+      if (q < 0) continue;
+      light.mass.node.push_back(cd.dofs.node_tag[static_cast<std::size_t>(node)]);
+      light.mass.dof.push_back(d + 1);
+      light.mass.value.push_back(cd.lumped_mass[static_cast<std::size_t>(q)]);
+    }
+  const auto cl = femorax::compile::compile_model(light, co);
+  double dt_dense = 0.0, dt_light = 0.0;
+  {
+    femorax::exec::InternalForce f(cd, femorax::exec::GeometryCache::Auto);
+    dt_dense = f.min_critical_dt(femorax::ExplicitScheme::CentralDifference);
+  }
+  {
+    femorax::exec::InternalForce f(cl, femorax::exec::GeometryCache::Auto);
+    dt_light = f.min_critical_dt(femorax::ExplicitScheme::CentralDifference);
+  }
+  std::printf("[ stable step: density %.6e, nodal masses %.6e ]\n", dt_dense, dt_light);
+  ASSERT_TRUE(std::isfinite(dt_light));
+  // The two partitions differ only at the base element (its base node is fixed: its share of
+  // that node is not there in either model) and in rounding.
+  EXPECT_NEAR(dt_light, dt_dense, 1e-6 * dt_dense);
+  // And the run itself goes through (an explicit stage with only nodal masses on the beams).
+  Model run = light;
+  femorax::io::AnalysisStep a;
+  a.name = "s";
+  a.dt = 0.5 * dt_light;
+  a.num_steps = 5;
+  a.integrator = femorax::io::Integrator::CentralDifference;
+  run.process.push_back({"1", "", a});
+  femorax::exec::RunOptions o;
+  o.verbose = false;
+  EXPECT_NO_THROW(femorax::exec::run_model(run, o));
 }
 
 }  // namespace

@@ -77,6 +77,7 @@ struct InternalForce::Batch {
   virtual bool has_state() const = 0;
   virtual void commit_state() = 0;
   virtual void set_step(const StepContext& s) = 0;
+  virtual void set_nodal_share(const Vec& share) = 0;  // the equations' nodal-mass shares
   // updateMaterialStage for the parameter sets of model material `material` (an index into
   // model.materials); returns whether any set of this batch uses it.
   virtual bool set_material_stage(std::int32_t material, int stage) = 0;
@@ -396,6 +397,7 @@ struct TypedBatch final : InternalForce::Batch {
     }
   }
   void commit_state() override { b.current = 1 - b.current; }
+  void set_nodal_share(const Vec& share) override { b.nodal_share = share; }
   void set_step(const StepContext& s) override { b.step = s; }
   bool set_material_stage(std::int32_t material, int stage) override {
     using MP = typename Elem::Material::Params;

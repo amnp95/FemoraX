@@ -251,6 +251,19 @@ Compiled compile_model(const io::Model& m, const CompileOptions& opt) {
       }
     }
   }
+  // The nodal masses' shares: each equation's nodal mass over the element DOFs touching it.
+  c.nodal_mass_share.assign(c.nodal_mass.size(), 0.0);
+  {
+    std::vector<std::int32_t> touching(c.nodal_mass.size(), 0);
+    for (const auto& b : c.batches)
+      for (std::int32_t e = 0; e < b.count; ++e)
+        for (int k = 0; k < b.ndof; ++k) {
+          const std::int32_t q = b.eq[static_cast<std::size_t>(k) * static_cast<std::size_t>(b.padded) + static_cast<std::size_t>(e)];
+          if (q >= 0) ++touching[static_cast<std::size_t>(q)];
+        }
+    for (std::size_t q = 0; q < touching.size(); ++q)
+      if (touching[q] > 0) c.nodal_mass_share[q] = c.nodal_mass[q] / touching[q];
+  }
   return c;
 }
 

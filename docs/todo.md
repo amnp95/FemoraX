@@ -241,7 +241,11 @@ Recorded 2026-11-09 from the review of milestone 2 so far. Not being worked on n
     (the last region wins, as for elements); an optional `element_only` attribute for
     `-eleOnly` (a schema addition: ask the user). Test: a mass on a spring node in a damped
     region against OpenSees.
-22. **The stable step with nodal masses (with the beams' element contract).** Elements bound
+22. **Done (2026-11-20, 4c): the stable step with nodal masses.** `Compiled::nodal_mass_share`
+    (each equation's nodal mass over the element DOFs touching it); elements with
+    `NODAL_MASS_IN_STEP` (the beam) add their share to their own mass in `critical_dt`; the solids
+    keep ignoring it (conservative, their bits unchanged). An explicit stage refuses a free DOF
+    without mass, naming the node and the DOF. Was: **The stable step with nodal masses (with the beams' element contract).** Elements bound
     their omega^2 with their own mass; ignoring the nodal masses lowers the estimated step (safe:
     less mass, higher frequencies), but an element with no mass of its own (Femora's beams:
     element density 0, `/mass` on the nodes) gets no bound at all. Needs the nodes' masses as an

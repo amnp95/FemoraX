@@ -38,6 +38,9 @@ struct DevBatch {
   Index count = 0, padded = 0;
   Kokkos::View<Index*, Space> node, eq, param, color_elements;
   std::vector<Index> color_start;  // host: launch bounds per color
+  // Equation space: each equation's share of the nodal masses (compile::Compiled::
+  // nodal_mass_share), read by the stable step of elements with NODAL_MASS_IN_STEP.
+  Vec nodal_share;
   Kokkos::View<DevParams<Elem>*, Space> params;
   // Geometry cache, per Gauss point: value[k * (NGP * padded) + e * NGP + gp], k < NGEOM.
   Vec geometry;
@@ -413,11 +416,37 @@ void launch_team(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
       });
 }
 
+// One element's stable step: with its share of the nodal masses for elements that take them
+// (NODAL_MASS_IN_STEP: a plain trait, nvcc crashes on requires-expressions over functions here).
+template <class Elem>
+inline constexpr bool kNodalMassInStep = [] {
+  if constexpr (requires { Elem::NODAL_MASS_IN_STEP; }) return Elem::NODAL_MASS_IN_STEP;
+  else return false;
+}();
+
+template <class Elem>
+KOKKOS_INLINE_FUNCTION double element_dt(const DevParams<Elem>& pr, ExplicitScheme scheme, const double (*xe)[Elem::NDM],
+                                         PointArray<const double> committed, const Vec& share,
+                                         const Kokkos::View<Index*, Space>& eq, Index e, Index P) {
+  if constexpr (kNodalMassInStep<Elem>) {
+    double extra[Elem::NDOF];
+    for (int k = 0; k < Elem::NDOF; ++k) {
+      const Index q = eq(k * P + e);
+      extra[k] = (q >= 0 && share.extent(0) > 0) ? share(q) : 0.0;
+    }
+    return Elem::critical_dt(pr.p, pr.damp, scheme, xe, committed, extra);
+  } else {
+    (void)share, (void)eq, (void)e, (void)P;
+    return Elem::critical_dt(pr.p, pr.damp, scheme, xe, committed);
+  }
+}
+
 // Smallest stable explicit step over the batch's elements (Elem::critical_dt at the
 // committed state).
 template <class Elem>
 double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, ExplicitScheme scheme) {
-  const auto node = b.node, param = b.param;
+  const auto node = b.node, param = b.param, eq = b.eq;
+  const Vec share = b.nodal_share;
   const auto params = b.params;
   const auto sc = b.state[b.current];
   const Index P = b.padded;
@@ -431,7 +460,7 @@ double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, Expl
           for (int d = 0; d < Elem::NDM; ++d) xe[a][d] = coords(d * N + n);
         }
         const DevParams<Elem>& pr = params(param(e));
-        const double dt = Elem::critical_dt(pr.p, pr.damp, scheme, xe, state_of<Elem>(sc, e, P));
+        const double dt = element_dt<Elem>(pr, scheme, xe, state_of<Elem>(sc, e, P), share, eq, e, P);
         if (dt < m) m = dt;
       },
       Kokkos::Min<double>(result));
@@ -442,7 +471,8 @@ double min_critical_dt(const DevBatch<Elem>& b, const Vec& coords, Index N, Expl
 // levels of local time stepping (compile/lts_levels.hpp).
 template <class Elem>
 void element_critical_dts(const DevBatch<Elem>& b, const Vec& coords, Index N, ExplicitScheme scheme, const Vec& out) {
-  const auto node = b.node, param = b.param;
+  const auto node = b.node, param = b.param, eq = b.eq;
+  const Vec share = b.nodal_share;
   const auto params = b.params;
   const auto sc = b.state[b.current];
   const Index P = b.padded;
@@ -455,7 +485,7 @@ void element_critical_dts(const DevBatch<Elem>& b, const Vec& coords, Index N, E
           for (int d = 0; d < Elem::NDM; ++d) xe[a][d] = coords(d * N + n);
         }
         const DevParams<Elem>& pr = params(param(e));
-        out(e) = Elem::critical_dt(pr.p, pr.damp, scheme, xe, state_of<Elem>(sc, e, P));
+        out(e) = element_dt<Elem>(pr, scheme, xe, state_of<Elem>(sc, e, P), share, eq, e, P);
       });
 }
 
