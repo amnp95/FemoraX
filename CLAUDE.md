@@ -109,8 +109,10 @@ ctest --preset cpu-debug
 ```
 
 - Build trees go to `build/<preset>/`. Presets build with `-Werror`.
-- The unit-test binary also runs as a whole with 1 and 8 OpenMP threads
-  (`unit_all.threads1`, `unit_all.threads8`).
+- In release presets the unit-test binary also runs as a whole with 1 and 8 OpenMP threads
+  (`unit_all.threads1`, `unit_all.threads8`); Debug presets (debug, UBSan, ASan) run each
+  case on its own only. `scripts/check.sh` builds the presets in turn, then runs their test
+  suites at the same time (logs: `build/<preset>.test.log`).
 - `physics_purity.*` tests enforce rule 2: a source scan (`cmake/CheckPhysicsPurity.cmake`)
   and a standalone compile of every physics header with `-fno-exceptions -fno-rtti` and no
   Kokkos on the include path.

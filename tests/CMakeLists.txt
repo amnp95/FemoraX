@@ -68,8 +68,10 @@ add_test(NAME unit.MemoryEstimate.WithinTenPercentOfTheAllocatedPeak
 set_tests_properties(unit.MemoryEstimate.WithinTenPercentOfTheAllocatedPeak PROPERTIES
   RUN_SERIAL TRUE ENVIRONMENT "OMP_NUM_THREADS=2;OMP_PROC_BIND=false")
 
-# OpenMP builds: the whole binary again with 1 and 8 threads (thread-count dependence).
-if(Kokkos_ENABLE_OPENMP)
+# OpenMP release builds: the whole binary again with 1 and 8 threads (thread-count
+# dependence). Not in Debug builds (debug, UBSan, ASan): there every case already ran on its
+# own, and the repeats cost most of their test time (single-threaded UBSan: 23 minutes).
+if(Kokkos_ENABLE_OPENMP AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
   foreach(nthreads 1 8)
     add_test(NAME unit_all.threads${nthreads}
              COMMAND femorax_unit_tests --kokkos-num-threads=${nthreads})
