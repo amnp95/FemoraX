@@ -181,6 +181,12 @@ class InternalForce {
   void expand_slots(const Vec& x) const;
   void contract_slots(const Vec& y, bool squared = false) const;
   void copy_equations(const Vec& dst, const Vec& src) const;  // the first num_equations values
+  // dst (num_slots long) = src's equations, then its slots expanded: a velocity or an
+  // acceleration with the constrained nodes' values, for the recorders.
+  void expanded_copy(const Vec& src, const Vec& dst) const {
+    copy_equations(dst, src);
+    expand_slots(dst);
+  }
   bool has_constraints() const { return nslots_ > neq_; }
 
   // Smallest stable explicit step over the elements of the chosen batches (docs/design.md,

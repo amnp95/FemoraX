@@ -73,8 +73,11 @@ DrmLoad::DrmLoad(const io::H5DrmPattern& p, const compile::Compiled& c, Internal
       }
     base += n * hb.ndof;
   }
-  forces_ = Vec("drm_forces", static_cast<std::size_t>(neq_));
-  gather_ = SlotGather(base, neq_, pairs);
+  // The forces span the force object's slots (exact constraints): a layer element on a
+  // constrained DOF adds there, and apply contracts the slots onto their equations.
+  const auto nslots = static_cast<std::int32_t>(force.f.extent(0));
+  forces_ = Vec("drm_forces", static_cast<std::size_t>(nslots));
+  gather_ = SlotGather(base, nslots, pairs);
   du_ = Vec("drm_u", static_cast<std::size_t>(3 * nodes));
   da_ = Vec("drm_a", static_cast<std::size_t>(3 * nodes));
   if (damped_) dv_ = Vec("drm_v", static_cast<std::size_t>(3 * nodes));
@@ -235,7 +238,9 @@ void DrmLoad::apply(double t, const Vec& f) {
     force_.drm_forces(l.batch, l.elems, l.masks, node_slot_, du_, da_, dv_, damped_, l.state[l.current],
                       l.state[1 - l.current], gather_.slots(), l.base);
   gather_.gather(forces_);
-  solvers::VectorOps::axpy(-1.0, forces_, f);
+  force_.contract_slots(forces_);
+  const auto n = static_cast<std::size_t>(neq_);
+  solvers::VectorOps::axpy(-1.0, Vec(forces_.data(), n), Vec(f.data(), n));  // the equations
 }
 
 }  // namespace femorax::exec

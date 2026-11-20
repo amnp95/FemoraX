@@ -78,6 +78,7 @@ struct ImplicitStage::Impl {
   int lanes;
   std::int64_t n;
   Vec ut, vt, at, du, du0, b, tmp, mr[3];
+  Vec v_out, a_out;  // with exact constraints: the recorded velocity and acceleration with slots
   std::unique_ptr<VectorOps> ops;
 
   Impl(InternalForce& f, const compile::Compiled& cc, Vec u_, Vec v_, Vec a_, const ForceSettings& s)
@@ -93,6 +94,10 @@ struct ImplicitStage::Impl {
     du0 = Vec("implicit_du0", un);
     b = Vec("implicit_b", un);
     tmp = Vec("implicit_tmp", un);
+    if (f.has_constraints()) {
+      v_out = Vec("implicit_v_out", f.u.extent(0));
+      a_out = Vec("implicit_a_out", f.u.extent(0));
+    }
     ops = std::make_unique<VectorOps>(n, lanes);
     if (os.tangent == TangentSource::Stored) force.enable_stored_tangents();
     // M r for a unit ground acceleration in each direction (the element's own mass, the
@@ -349,8 +354,14 @@ ImplicitStageReport ImplicitStage::run(const io::AnalysisStep& an, double& time,
     // converged displacement), then record.
     force.commit_state();
     motions.commit_drm();
-    force.expand_slots(force.u);  // the embedded nodes' displacements (their slots)
-    recorders.record(time, force.u, is_static ? s.v_committed : v, a);
+    if (force.has_constraints()) {  // the constrained nodes' values (their slots)
+      force.expand_slots(force.u);
+      force.expanded_copy(is_static ? s.v_committed : v, s.v_out);
+      force.expanded_copy(a, s.a_out);
+      recorders.record(time, force.u, s.v_out, s.a_out);
+    } else {
+      recorders.record(time, u, is_static ? s.v_committed : v, a);
+    }
     return true;
   };
 

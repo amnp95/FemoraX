@@ -130,7 +130,10 @@ void damp_uniform(io::Model& m) {
   m.uniform.push_back(r);
 }
 
-double free_field_box(Damping damping, bool implicit = false, bool rotated = false) {
+// embedded: a node (3 DOFs, no mass, no element) embedded at the centre of a brick inside the
+// box (docs/design.md, "Exact constraints u = T q"): the box is unchanged, and the node's
+// recorded displacement, velocity and acceleration are the mean of its host's eight corners.
+double free_field_box(Damping damping, bool implicit = false, bool rotated = false, bool embedded = false) {
 
   // 1. The free field: a 1 x 1 x 8 laminar column, base pulse in x.
   femorax::testing::ColumnSpec cs;
@@ -290,6 +293,35 @@ double free_field_box(Damping damping, bool implicit = false, bool rotated = fal
   box.drm_patterns.push_back(hp);
   const std::string bd = temp_file("box_disp.txt");
   add_node_recorder(box, "d", bd, io::NodeResponse::Disp, inside);
+  std::vector<std::int32_t> corners;
+  const std::int32_t emb = 999999;
+  if (embedded) {
+    const int ci = 2, cj = 3, ck = 4;  // the host's lowest corner
+    for (int dk = 0; dk < 2; ++dk)
+      for (int dj = 0; dj < 2; ++dj)
+        for (int di = 0; di < 2; ++di) corners.push_back(tag(ci + di, cj + dj, ck + dk));
+    std::int32_t host = -1;
+    for (const auto& g : box.elements)
+      for (std::size_t e = 0; e < g.size() && host < 0; ++e) {
+        int hits = 0;
+        for (int a = 0; a < 8; ++a)
+          hits += std::count(corners.begin(), corners.end(), g.connectivity[8 * e + static_cast<std::size_t>(a)]) > 0;
+        if (hits == 8) host = g.tags[e];
+      }
+    EXPECT_GE(host, 0);
+    std::size_t c0 = 0;
+    while (box.nodes.tags[c0] != corners[0]) ++c0;
+    box.nodes.tags.push_back(emb);
+    box.nodes.ndf.push_back(3);
+    box.nodes.coords.insert(box.nodes.coords.end(), {box.nodes.coords[3 * c0] + 0.5, box.nodes.coords[3 * c0 + 1] + 0.5,
+                                                     box.nodes.coords[3 * c0 + 2] + 0.5 * kDz});
+    box.embedded_nodes.push_back({emb, host, false});
+    std::vector<std::int32_t> watched = corners;
+    watched.push_back(emb);
+    add_node_recorder(box, "ed", temp_file("emb_disp.txt"), io::NodeResponse::Disp, watched);
+    add_node_recorder(box, "ev", temp_file("emb_vel.txt"), io::NodeResponse::Vel, watched);
+    add_node_recorder(box, "ea", temp_file("emb_accel.txt"), io::NodeResponse::Accel, watched);
+  }
   box.process.push_back({"1", "", io::PatternStep{3}});
   box.process.push_back({"2", "", implicit ? newmark_stage() : explicit_stage()});
   io::check_supported(box, io::Capabilities{});
@@ -308,6 +340,24 @@ double free_field_box(Damping damping, bool implicit = false, bool rotated = fal
         worst = std::max(worst, std::abs(rb[static_cast<std::size_t>(n)][1 + 3 * q + static_cast<std::size_t>(c)] - want));
       }
     }
+  if (embedded) {
+    for (const char* f : {"emb_disp.txt", "emb_vel.txt", "emb_accel.txt"}) {
+      const auto re = read_rows(temp_file(f));
+      EXPECT_EQ(re.size(), static_cast<std::size_t>(kSteps));
+      double peak = 0.0, err = 0.0;
+      for (const auto& row : re)
+        for (int c = 0; c < 3; ++c) {
+          double mean = 0.0;
+          for (int a = 0; a < 8; ++a) mean += 0.125 * row[static_cast<std::size_t>(1 + 3 * a + c)];
+          peak = std::max(peak, std::abs(mean));
+          err = std::max(err, std::abs(row[static_cast<std::size_t>(1 + 3 * 8 + c)] - mean));
+        }
+      std::printf("[ the embedded node's %s: the mean of its host's corners within %.2e of the peak %.3e ]\n", f,
+                  err / peak, peak);
+      EXPECT_GT(peak, 0.0);
+      EXPECT_LE(err, 1e-13 * peak) << f;
+    }
+  }
   std::printf("[ DRM box%s%s: %zu stations, %zu nodes inside the layer, %d steps: largest difference from the free "
               "field %.2e of its largest displacement %.3e ]\n",
               implicit ? ", implicit (Newmark, Newton)" : rotated ? ", file frame turned" : "",
@@ -315,6 +365,7 @@ double free_field_box(Damping damping, bool implicit = false, bool rotated = fal
               S, inside.size(), kSteps, worst / scale, scale);
   EXPECT_GT(scale, 1e-6);
 
+  if (embedded) return worst / scale;
   // Streaming (drm_load.hpp): history windows of 2 samples (a new window every step) and of 7
   // (boundaries at odd steps) give the same bits as the whole history on the device.
   for (const std::int64_t w : {2, 7}) {
@@ -372,6 +423,15 @@ TEST(DrmFreeField, AUniformDampedFileInATurnedFrameMovesAsTheFreeField) {
 TEST(DrmFreeField, ARayleighDampedFileInATurnedFrameMatchesTheUnturnedOne) {
   const double plain = free_field_box(Damping::Rayleigh), turned = free_field_box(Damping::Rayleigh, false, true);
   EXPECT_NEAR(turned, plain, 1e-9);
+}
+
+// A node embedded in a brick inside the box (exact constraints, docs/design.md): the DRM forces
+// with the force vector's slots; the box still follows the free field, and the node's recorded
+// displacement, velocity and acceleration are its host's (the mean of the corners at the
+// centre), explicit and implicit.
+TEST(DrmFreeField, AnEmbeddedNodeInsideTheBoxFollowsItsHost) {
+  EXPECT_LE(free_field_box(Damping::None, false, false, true), 1e-10);
+  EXPECT_LE(free_field_box(Damping::None, true, false, true), 1e-8);
 }
 
 }  // namespace

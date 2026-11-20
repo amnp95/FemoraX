@@ -1282,6 +1282,14 @@ the floor twisting (`RigidDiaphragmFrameExplicitFollowsNewmark`); with the block
 terms dropped the same test is off by 13.5 %. Next: the rotation tie's mass, the embedded nodes
 with H5DRM and with velocity / acceleration recorders, OpenSees comparisons (with the converter,
 after schema 1.2, asked first).
+Step 3b done (2026-11-20): constraints with H5DRM and every recorder. The DRM forces span the
+force object's slots (a layer element on a constrained DOF adds there) and are contracted before
+they join the equations; the recorders get the velocity and acceleration copied with their slots
+expanded (work vectors only in models with constraints), so node recorders of any response and
+VTKHDF record constrained nodes. Test (`DrmFreeField.AnEmbeddedNodeInsideTheBoxFollowsItsHost`):
+a node embedded at the centre of a brick inside the DRM box (no mass, no element): the box still
+follows the free field (2.2e-14 explicit, 2.7e-14 Newmark), and the node's recorded displacement,
+velocity and acceleration equal the mean of its host's corners exactly.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

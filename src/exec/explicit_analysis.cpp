@@ -455,18 +455,6 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
 
   const double t_setup = now();
   InternalForce force(c, GeometryCache::Auto);
-  if (force.has_constraints()) {
-    // Embedded nodes (docs/design.md, "Exact constraints u = T q", step 2): displacement
-    // recorders so far.
-    if (!model.drm_patterns.empty())
-      throw io::UnsupportedComponent("unsupported component: H5DRM with embedded nodes (not yet)");
-    for (const auto& r : model.recorders) {
-      const auto* nr = std::get_if<io::NodeRecorder>(&r.data);
-      if (!nr || nr->response != io::NodeResponse::Disp)
-        throw io::UnsupportedComponent("unsupported component: recorder " + r.name +
-                                       " with embedded nodes: node displacement recorders only so far");
-    }
-  }
   const Choice choice = choose_force_settings(force, c);
   rep.force_settings = to_string(choice.settings);
   rep.force_settings_source = choice.source;
@@ -481,6 +469,13 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
   Vec v_rec("velocity", static_cast<std::size_t>(neq));     // committed (recorded) velocity
   Vec a("acceleration", static_cast<std::size_t>(neq));     // committed acceleration
   Vec um("previous_displacement", static_cast<std::size_t>(neq));
+  // With exact constraints the recorders read the constrained nodes' slots: the velocity and
+  // acceleration copied with their slots expanded (the displacement is the force object's u).
+  Vec v_out = v_rec, a_out = a;
+  if (force.has_constraints()) {
+    v_out = Vec("recorded_velocity", force.u.extent(0));
+    a_out = Vec("recorded_acceleration", force.u.extent(0));
+  }
   Kokkos::deep_copy(u, 0.0);
   GroundMotions motions(model);
   std::vector<std::unique_ptr<DrmLoad>> drm;
@@ -725,8 +720,12 @@ RunReport run_model(const io::Model& model, const RunOptions& opt) {
         ++k;
         force.commit_state();  // Domain::commit: the materials' trial state becomes committed
         motions.commit_drm();
-        force.expand_slots(u);  // the constrained nodes' displacements (embedded nodes)
-        recorders.record(time, u, v_rec, a);
+        if (force.has_constraints()) {  // the constrained nodes' values (their slots)
+          force.expand_slots(u);
+          force.expanded_copy(v_rec, v_out);
+          force.expanded_copy(a, a_out);
+        }
+        recorders.record(time, u, v_out, a_out);
         if (recheck && k % opt.stable_step_check_interval == 0) {
           // History materials change their stiffness during the stage (PressureDependMultiYield
           // with confinement), so the stable step can fall below dt.
