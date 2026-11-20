@@ -241,4 +241,9 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_femora_example
                    ${femorax_backend})
   set_tests_properties(system.femora_example_vs_stored_opensees PROPERTIES TIMEOUT 900)
+  # The converter's beam commands (schema 1.1) end to end: a Tcl cantilever converted, checked
+  # and run implicit and explicit (tests/system/beam_cantilever/beam_check.sh).
+  add_test(NAME system.beam_cantilever_conversion
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/beam_cantilever/beam_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_beam_cantilever)
 endif()

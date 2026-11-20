@@ -1117,6 +1117,14 @@ space, materials looked up by kind and tag; beam nodes must have 6 DOFs), `check
 (Corotational, point counts outside 2-5), the writer's version, 13 fixtures, the support table.
 Not yet: the Tcl converter (`section Elastic`, `geomTransf`, `element dispBeamColumn`) and
 Femora's exporter (the user's side).
+Step 6, first part done (2026-11-20): the Tcl converter (`tests/system/femora_example/
+tcl_to_femorax.py`) reads `node ... -ndf 6`, `section Elastic`, `geomTransf Linear|PDelta|
+Corotational [-jntOffset]`, `element dispBeamColumn ... [-mass m] [-cMass]` and the nodal `mass`
+command, and writes schema 1.1; `system.beam_cantilever_conversion` converts a Femora-style Tcl
+cantilever (PDelta with a joint offset, -mass plus a nodal mass, base shaking), checks the file's
+beam groups, validates it and runs it implicit (Newmark) and explicit (`--explicit`): explicit
+against implicit within 1.4e-4 of the peak (their step sizes). Next: the pile in a soil column
+against OpenSees and the LTS checkpoint.
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 

@@ -15,8 +15,12 @@ several partitions are kept once (their coordinates must agree). Recognised:
   nDMaterial PressureIndependMultiYield tag nd rho G K cohesi peakShearStra frictionAng
              refPress pressDependCoe noYieldSurf             (Femora's 10 values, no pairs)
   nDMaterial ElasticIsotropic tag E nu rho
-  node tag x y z -ndf 3
+  node tag x y z -ndf 3 (or -ndf 6: beam nodes)
   element stdBrick tag n1 .. n8 mat b1 b2 b3
+  section Elastic tag E A Iz Iy G J                                  (schema 1.1)
+  geomTransf Linear|PDelta|Corotational tag vx vy vz [-jntOffset dXi dYi dZi dXj dYj dZj]
+  element dispBeamColumn tag i j nIP secTag transfTag [-mass m] [-cMass]
+  mass node m1 .. m_ndf                                              (nodal masses)
   equalDOF retained constrained dofs...
   fixX / fixY / fixZ coordinate dofs... -tol tol
   region tag -ele ... -rayleigh alphaM betaK betaKinit betaKcomm    (inside eval "...")
@@ -141,6 +145,11 @@ def convert(tcl: Path) -> dict:
     var: dict[str, str] = {}
     materials: dict[int, dict] = {}
     nodes: dict[int, tuple[float, float, float]] = {}
+    node_ndf: dict[int, int] = {}
+    sections: dict[int, dict] = {}
+    transfs: dict[int, dict] = {}
+    beams: list[tuple[int, list[int], tuple]] = []  # (tag, [i, j], (nip, sec, transf, mass, cmass))
+    masses: list[tuple[int, int, float]] = []       # (node, dof 1-based, value)
     elements: list[tuple[int, list[int], int, tuple[float, float, float]]] = []
     ties: list[tuple[int, int, list[int]]] = []
     fixes: list[tuple[int, float, list[int], float]] = []  # (axis, coordinate, dofs, tol)
@@ -188,11 +197,42 @@ def convert(tcl: Path) -> dict:
             else:
                 raise Unsupported(s)
         elif head == "node":
-            if tok[5:] != ["-ndf", "3"]:
+            if tok[5:] not in (["-ndf", "3"], ["-ndf", "6"]):
                 raise Unsupported(s)
             x = (float(tok[2]), float(tok[3]), float(tok[4]))
             if nodes.setdefault(int(tok[1]), x) != x:
                 raise Unsupported(f"node {tok[1]} appears with different coordinates")
+            node_ndf[int(tok[1])] = int(tok[6])
+        elif head == "section":
+            if tok[1] != "Elastic" or len(tok) != 9:
+                raise Unsupported(s)
+            sections[int(tok[2])] = dict(zip(["E", "A", "Iz", "Iy", "G", "J"], (float(x) for x in tok[3:9])))
+        elif head == "geomTransf":
+            if tok[1] not in ("Linear", "PDelta", "Corotational") or len(tok) not in (6, 13) or \
+                    (len(tok) == 13 and tok[6] != "-jntOffset"):
+                raise Unsupported(s)
+            t = {"type": tok[1], "vecxz": [float(x) for x in tok[3:6]]}
+            if len(tok) == 13:
+                t["joint_offset_i"] = [float(x) for x in tok[7:10]]
+                t["joint_offset_j"] = [float(x) for x in tok[10:13]]
+            transfs[int(tok[2])] = t
+        elif head == "element" and tok[1] == "dispBeamColumn":
+            if len(tok) < 8:
+                raise Unsupported(s)
+            rest = tok[8:]
+            mass, cmass = None, False
+            while rest:
+                if rest[0] == "-mass" and len(rest) >= 2:
+                    mass, rest = float(rest[1]), rest[2:]
+                elif rest[0] == "-cMass":
+                    cmass, rest = True, rest[1:]
+                else:
+                    raise Unsupported(s)
+            beams.append((int(tok[2]), [int(tok[3]), int(tok[4])], (int(tok[5]), int(tok[6]), int(tok[7]), mass, cmass)))
+        elif head == "mass":
+            for d, v in enumerate(tok[2:], start=1):
+                if float(v) != 0.0:
+                    masses.append((int(tok[1]), d, float(v)))
         elif head == "element":
             if tok[1] != "stdBrick" or len(tok) != 15:
                 raise Unsupported(s)
@@ -279,7 +319,8 @@ def convert(tcl: Path) -> dict:
         else:
             raise Unsupported(s)
         i += 1
-    return dict(materials=materials, nodes=[(t, *x) for t, x in nodes.items()], elements=elements, ties=ties,
+    return dict(materials=materials, nodes=[(t, *x) for t, x in nodes.items()], node_ndf=node_ndf, sections=sections,
+                transfs=transfs, beams=beams, masses=masses, elements=elements, ties=ties,
                 fixes=fixes, regions=regions, uniform_defs=uniform_defs, uniform_regions=uniform_regions, series=series, pattern=pattern, drm=drm, recorder=recorder,
                 node_recorders=node_recorders, process=process)
 
@@ -337,9 +378,26 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", exp
             ret.append(r)
             con.append(c)
             dof.append(d)
-    _f, rdt, tcl_responses = m["recorder"]
-    rdt = recorder_dt if recorder_dt is not None else rdt
-    responses = responses if responses is not None else tcl_responses
+    # Beams (schema 1.1): one group per (points, section, transformation, mass, cMass); with
+    # --explicit their consistent mass becomes lumped, as the bricks'.
+    bkeys = sorted({k for (_e, _c, k) in m["beams"]}, key=str)
+    for bi, key in enumerate(bkeys):
+        nip, sec, tr, mpl, cmass = key
+        els = [(e, c) for (e, c, k) in m["beams"] if k == key]
+        attrs = {"type": "dispBeamColumn", "section": w.i32(sec), "transformation": w.i32(tr),
+                 "integration_points": w.i32(nip), "consistent_mass": w.u8(cmass and explicit_dt is None)}
+        if mpl is not None:
+            attrs["mass_per_length"] = w.f64(mpl)  # OpenSees' -mass; without it the beams' mass is nodal
+        groups[f"beam{bi:06d}"] = w.node(attrs=attrs, data={"tags": w.i32([e for e, _ in els]),
+                                                           "connectivity": w.i32([c for _, c in els])})
+    sections = {str(t): w.node(attrs={"type": "Elastic", **{k: w.f64(v) for k, v in p.items()}})
+                for t, p in sorted(m["sections"].items())}
+    transfs = {str(t): w.node(attrs={k: (v if k == "type" else w.f64(v)) for k, v in p.items()})
+               for t, p in sorted(m["transfs"].items())}
+    if m["recorder"] is not None:
+        _f, rdt, tcl_responses = m["recorder"]
+        rdt = recorder_dt if recorder_dt is not None else rdt
+        responses = responses if responses is not None else tcl_responses
 
     def typed(a: dict) -> dict:
         out = {}
@@ -387,9 +445,13 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", exp
     tree = w.node(attrs=w.root_attrs("femora_nonlinear_layered_soil_column",
                                      "femorax tests/system/femora_example/tcl_to_femorax.py"), groups={
         "nodes": w.node(data={"tags": w.i32([n[0] for n in nodes]), "coords": w.f64([list(n[1:]) for n in nodes]),
-                              "ndf": w.i32([3] * len(nodes))}),
+                              "ndf": w.i32([m["node_ndf"].get(n[0], 3) for n in nodes])}),
         "materials": w.node(groups={"nd": w.node(groups=mats)}),
+        **({"sections": w.node(groups=sections)} if sections else {}),
+        **({"transformations": w.node(groups=transfs)} if transfs else {}),
         "elements": w.node(groups=groups),
+        **({"mass": w.node(data={"node": w.i32([x[0] for x in m["masses"]]), "dof": w.i32([x[1] for x in m["masses"]]),
+                                 "value": w.f64([x[2] for x in m["masses"]])})} if m["masses"] else {}),
         "constraints": w.node(groups={
             "sp": w.node(groups={"fix": w.node(data={"node": w.i32(fix_node), "dof": w.i32(fix_dof)})}),
             "mp": w.node(groups={"equal_dof": w.node(data={"retained": w.i32(ret), "constrained": w.i32(con),
@@ -400,8 +462,9 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", exp
             for k, (els, ray) in enumerate(m["regions"])}), **uniform_group(m)}),
         "time_series": w.node(groups=series_groups),
         "patterns": w.node(groups=patterns),
-        "recorders": w.node(groups={"vtkhdf": w.node(attrs={"type": "VTKHDF", "file": femorax_vtkhdf,
-                                                            "dT": w.f64(rdt), "responses": responses}),
+        "recorders": w.node(groups={**({"vtkhdf": w.node(attrs={"type": "VTKHDF", "file": femorax_vtkhdf,
+                                                               "dT": w.f64(rdt), "responses": responses})}
+                                       if m["recorder"] is not None else {}),
                                     **{name: w.node(attrs={"type": "Node", "file": f, "response": resp,
                                                            "time": w.u8(t), "precision": w.i32(prec)},
                                                     data={"nodes": w.i32(nn), "dofs": w.i32(dd)})
