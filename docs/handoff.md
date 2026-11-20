@@ -117,8 +117,9 @@ committed: the Section contract and ElasticSection3d (179510f); the Linear and P
 transformations with joint offsets, bit for bit against OpenSees through a new driver
 (tests/reference/drivers/crd_transf.cpp, fb4776e); DispBeam3d<Section, NIP> physics with the
 lumped mass (physical rotary inertia) and the stable step, verified against Euler-Bernoulli
-cantilevers (53dea5b). Next: step 3's OpenSees DispBeamColumn3d driver (force, tangent), the
-Rayleigh damping terms and the consistent mass; then step 4 (registry, batches with 6-DOF nodes,
+cantilevers (53dea5b), and bit for bit against OpenSees DispBeamColumn3d through a new driver
+(tests/reference/drivers/disp_beam_column.cpp, 03c269b). Next: step 3's Rayleigh damping terms
+and the consistent mass; then step 4 (registry, batches with 6-DOF nodes,
 kernels), step 5 (schema 1.1, ask the user with the exact text), step 6 (system tests and the
 LTS checkpoint: an undamped pile in soil). The OpenSees reference build on Stampede3 is
 build/reference-s3-intel (scripts/stampede3_opensees.sh; a driver alone:
