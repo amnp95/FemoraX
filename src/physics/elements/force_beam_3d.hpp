@@ -16,15 +16,20 @@
 //   Sec::NSTATE values, and EPP slots of the element values spread over the points:
 //   Se (6), kv (36), v (6), and a flag (1 once the state was formed; zeros are a fresh state).
 //
-// Not yet (later steps): the Rayleigh damping, the mass and the stable step (step 2), the
-// registry and kernels (step 3), element loads (FemoraX has none), subdivision of the increment
-// (OpenSees' maxSubdivisions defaults to 1: none).
+// Step 2: the mass, the Rayleigh damping, the matrix-free operator and the stable step, shared
+// with the displacement beam (beam_common_3d.hpp) with this element's basic stiffnesses: the
+// trial kv (tangent), the initial kv0 = (integrated initial flexibility)^-1 and the committed kv
+// (exact: the element stores it, so betaKcomm needs no recomputation).
+// Not yet: the registry and kernels (step 3), element loads (FemoraX has none), subdivision of
+// the increment (OpenSees' maxSubdivisions defaults to 1: none).
 
 #include <array>
 #include <cmath>
 
 #include "physics/common/strided.hpp"
 #include "physics/contracts.hpp"
+#include "physics/elements/beam_common_3d.hpp"
+#include "physics/explicit_stability.hpp"
 #include "physics/macros.hpp"
 #include "physics/transformations/crd_transf_3d.hpp"
 
@@ -446,25 +451,102 @@ struct ForceBeam3d {
     return crd_transf_3d_geometry(p.transf, xe[0], xe[1], g);
   }
 
-  // getResistingForce (q = Se) and, with WantK, getTangentStiff (kb = kv) through the
-  // transformation, the state updated from committed into trial. Returns false when the
-  // element iteration did not converge.
+  // The trial state at the displacement ue (update from the committed state, stored into trial)
+  // and the committed basic stiffness kvc. Returns false when the element iteration failed.
+  FEMORAX_HD static bool trial_state(const Params& p, const CrdTransf3dGeometry& g, const double* ue,
+                                     PointArray<const double> committed, PointArray<double> trial, State& s,
+                                     double (&kvc)[NEBD][NEBD]) {
+    double v[NEBD];
+    crd_transf_3d_basic_disp(p.transf, g, ue, v);
+    load_state(p, g.L, committed, s);
+    for (int a = 0; a < NEBD; ++a)
+      for (int b = 0; b < NEBD; ++b) kvc[a][b] = s.kv[a][b];
+    const bool ok = update(p, g.L, v, committed, trial, s);
+    store_state(s, trial);
+    return ok;
+  }
+
+  // getResistingForce (q = Se) plus the Rayleigh damping forces (alphaM M + betaK Kt + betaK0 K0
+  // + betaKc Kc) ve in the basic system, and with WantK getTangentStiff (kb = kv), the state
+  // updated from committed into trial. Returns false when the element iteration did not converge
+  // (the step fails).
+  template <bool WantK>
+  FEMORAX_HD static bool compute(const Params& p, const Rayleigh& damp, const double (*xe)[NDM], const double* ue,
+                                 const double* ve, PointArray<const double> committed, PointArray<double> trial,
+                                 double* fe, double (*Ke)[NDOF]) {
+    CrdTransf3dGeometry g;
+    geometry(p, xe, g);
+    State s;
+    double kvc[NEBD][NEBD];
+    const bool ok = trial_state(p, g, ue, committed, trial, s, kvc);
+    const double p0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    crd_transf_3d_global_force(p.transf, g, ue, s.Se, p0, fe);
+    if (damp.alphaM != 0.0 || damp.betaK != 0.0 || damp.betaKinit != 0.0 || damp.betaKcomm != 0.0) {
+      double kv0[NEBD][NEBD];
+      if (damp.betaKinit != 0.0) initial_basic_stiffness(p, g.L, kv0);
+      beam3d::add_damping_force(p, damp, g, ve, s.Se, s.kv, kv0, kvc, fe);
+    }
+    if constexpr (WantK) crd_transf_3d_global_stiff(p.transf, g, s.kv, s.Se, true, Ke);
+    return ok;
+  }
+
+  // The undamped force and tangent (no velocities).
   template <bool WantK>
   FEMORAX_HD static bool compute(const Params& p, const double (*xe)[NDM], const double* ue,
                                  PointArray<const double> committed, PointArray<double> trial, double* fe,
                                  double (*Ke)[NDOF]) {
+    const double ve[12] = {};
+    return compute<WantK>(p, Rayleigh{}, xe, ue, ve, committed, trial, fe, Ke);
+  }
+
+  // The matrix-free operator (beam_common_3d.hpp): K_t = the trial kv at ue (the state updated
+  // from committed into trial), K_0 = kv0, K_c = the committed kv.
+  FEMORAX_HD static void operator_apply(const Params& p, const Rayleigh& damp, const OperatorCoefficients& k,
+                                        const double (*xe)[NDM], const double* ue, const double* x,
+                                        PointArray<const double> committed, PointArray<double> trial, bool diagonal,
+                                        double* y) {
     CrdTransf3dGeometry g;
     geometry(p, xe, g);
-    double v[NEBD];
-    crd_transf_3d_basic_disp(p.transf, g, ue, v);
+    State s;
+    double kvc[NEBD][NEBD], kv0[NEBD][NEBD];
+    trial_state(p, g, ue, committed, trial, s, kvc);
+    if (k.initial || damp.betaKinit != 0.0) initial_basic_stiffness(p, g.L, kv0);
+    beam3d::operator_apply(p, damp, k, g, s.Se, s.kv, kv0, kvc, x, diagonal, y);
+  }
+
+  // The mass (beam_common_3d.hpp: lumped with the rotary inertia, or consistent with cMass).
+  FEMORAX_HD static void consistent_mass(const Params& p, const CrdTransf3dGeometry& g, double (*M)[12]) {
+    beam3d::consistent_mass(p, g, M);
+  }
+  FEMORAX_HD static void mass(const Params& p, const double (*xe)[NDM], double* Me) {
+    CrdTransf3dGeometry g;
+    geometry(p, xe, g);
+    beam3d::mass(p, g, Me);
+  }
+  FEMORAX_HD static void lumped_mass_dof(const Params& p, const double (*xe)[NDM], double m[NDOF]) {
+    lumped_mass(p, xe, m);
+  }
+  FEMORAX_HD static void lumped_mass(const Params& p, const double (*xe)[NDM], double m[NDOF]) {
+    CrdTransf3dGeometry g;
+    geometry(p, xe, g);
+    beam3d::lumped_mass(p, g, m);
+  }
+
+  // Largest omega^2 with the lumped mass and the committed basic stiffness and forces (the
+  // element eigenvalue bound); extra_mass: the element's share of nodal masses (may be null).
+  FEMORAX_HD static double max_omega_sq(const Params& p, const double (*xe)[NDM], PointArray<const double> committed,
+                                        const double* extra_mass = nullptr) {
+    CrdTransf3dGeometry g;
+    geometry(p, xe, g);
     State s;
     load_state(p, g.L, committed, s);
-    const bool ok = update(p, g.L, v, committed, trial, s);
-    store_state(s, trial);
-    const double p0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
-    crd_transf_3d_global_force(p.transf, g, ue, s.Se, p0, fe);
-    if constexpr (WantK) crd_transf_3d_global_stiff(p.transf, g, s.kv, s.Se, true, Ke);
-    return ok;
+    return beam3d::max_omega_sq(p, g, s.kv, s.Se, extra_mass);
+  }
+
+  FEMORAX_HD static double critical_dt(const Params& p, const Rayleigh& damp, ExplicitScheme scheme,
+                                       const double (*xe)[NDM], PointArray<const double> committed,
+                                       const double* extra_mass = nullptr) {
+    return stable_dt(scheme, damp, max_omega_sq(p, xe, committed, extra_mass));
   }
 };
 

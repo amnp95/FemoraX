@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "physics/elements/disp_beam_3d.hpp"
 #include "physics/elements/force_beam_3d.hpp"
 #include "physics/sections/elastic_section_3d.hpp"
 #include "reference_data.hpp"
@@ -173,5 +174,156 @@ TEST_P(ForceBeam3dReference, MatchesOpenSees) {
 INSTANTIATE_TEST_SUITE_P(Types, ForceBeam3dReference,
                          ::testing::Values(femorax::CrdTransfType::Linear, femorax::CrdTransfType::PDelta),
                          [](const auto& tp) { return tp.param == femorax::CrdTransfType::Linear ? "Linear" : "PDelta"; });
+
+// Step 2: mass, damping, operator, stable step (beam_common_3d.hpp with the force beam's own
+// basic stiffnesses). An elastic prismatic member: the displacement beam (2+ points) has the
+// exact stiffness too, so both elements must give the same stiffness, the same mass (the same
+// code) and the same largest omega^2; the damping force and the operator equal their matrices.
+template <class Beam>
+void skew_params(typename Beam::Params& p, femorax::CrdTransfType type) {
+  p.mat = {E, A, Iz, Iy, G, J};
+  p.transf.type = type;
+  p.transf.vecxz[0] = -0.2;
+  p.transf.vecxz[1] = 0.3;
+  p.transf.vecxz[2] = 1.0;
+  p.transf.nodeIOffset[0] = 0.25;
+  p.transf.nodeJOffset[2] = -0.15;
+  p.rhoA = 0.39;
+  p.rot[0] = 7.8 * (Iz + Iy);
+  p.rot[1] = 7.8 * Iy;
+  p.rot[2] = 7.8 * Iz;
+}
+
+TEST(ForceBeam3d, MassStiffnessAndStableStepEqualTheElasticDisplacementBeam) {
+  using FB = femorax::ForceBeam3d<ElasticSection3d, 5>;
+  using DB = femorax::DispBeam3d<ElasticSection3d, 3>;
+  const double xe[2][3] = {{0.3, -1.2, 0.7}, {2.9, 0.4, 2.2}};
+  for (const auto type : {femorax::CrdTransfType::Linear, femorax::CrdTransfType::PDelta}) {
+    for (const int cmass : {0, 1}) {
+      FB::Params pf{};
+      DB::Params pd{};
+      skew_params<FB>(pf, type);
+      skew_params<DB>(pd, type);
+      pf.cMass = pd.cMass = cmass;
+      double Mf[144], Md[144];
+      FB::mass(pf, xe, Mf);
+      DB::mass(pd, xe, Md);
+      for (int k = 0; k < 144; ++k) EXPECT_EQ(Mf[k], Md[k]) << k;
+    }
+    FB::Params pf{};
+    DB::Params pd{};
+    skew_params<FB>(pf, type);
+    skew_params<DB>(pd, type);
+    std::vector<double> sc(FB::NSTATE, 0.0), st(FB::NSTATE, 0.0);
+    double u0[12] = {}, ff[12], Kf[12][12], fd[12], Kd[12][12];
+    ASSERT_TRUE((FB::compute<true>(pf, xe, u0, {sc.data(), 1, FB::POINT_STATE}, {st.data(), 1, FB::POINT_STATE}, ff,
+                                   Kf)));
+    DB::compute<true>(pd, xe, u0, {nullptr, 1, 0}, {nullptr, 1, 0}, fd, Kd);
+    double kmax = 0.0, kd = 0.0;
+    for (int a = 0; a < 12; ++a)
+      for (int b = 0; b < 12; ++b) {
+        kmax = std::max(kmax, std::fabs(Kd[a][b]));
+        kd = std::max(kd, std::fabs(Kf[a][b] - Kd[a][b]));
+      }
+    EXPECT_LE(kd, 1e-12 * kmax);
+    const double wf = FB::max_omega_sq(pf, xe, {sc.data(), 1, FB::POINT_STATE});
+    const double wd = DB::max_omega_sq(pd, xe, {nullptr, 1, 0});
+    std::printf("[ force beam against the displacement beam (%s): K %.2e, omega^2 %.6e / %.6e ]\n",
+                type == femorax::CrdTransfType::Linear ? "Linear" : "PDelta", kd / kmax, wf, wd);
+    EXPECT_NEAR(wf, wd, 1e-10 * wd);
+  }
+}
+
+TEST(ForceBeam3d, DampingAndOperatorEqualTheirMatrices) {
+  using FB = femorax::ForceBeam3d<ElasticSection3d, 4>;
+  const double xe[2][3] = {{0.3, -1.2, 0.7}, {2.9, 0.4, 2.2}};
+  for (const auto type : {femorax::CrdTransfType::Linear, femorax::CrdTransfType::PDelta}) {
+    FB::Params p{};
+    skew_params<FB>(p, type);
+    // The committed state at u1, the trial at u2.
+    double u1[12], u2[12], ve[12], x[12];
+    for (int k = 0; k < 12; ++k) {
+      u1[k] = 1e-3 * std::sin(0.9 * k + 0.2);
+      u2[k] = u1[k] + 5e-4 * std::cos(1.3 * k);
+      ve[k] = 0.1 * std::sin(0.4 * k + 1.0);
+      x[k] = std::cos(0.7 * k + 0.5);
+    }
+    std::vector<double> s0(FB::NSTATE, 0.0), sc(FB::NSTATE, 0.0), st(FB::NSTATE, 0.0), sx(FB::NSTATE, 0.0);
+    auto pa = [](std::vector<double>& v) { return femorax::PointArray<double>{v.data(), 1, FB::POINT_STATE}; };
+    auto pc = [](const std::vector<double>& v) {
+      return femorax::PointArray<const double>{v.data(), 1, FB::POINT_STATE};
+    };
+    double f[12], Kc[12][12], Kt[12][12], K0[12][12], zero[12] = {};
+    ASSERT_TRUE((FB::compute<true>(p, xe, u1, pc(s0), pa(sc), f, Kc)));      // commit at u1
+    ASSERT_TRUE((FB::compute<true>(p, xe, u2, pc(sc), pa(st), f, Kt)));      // trial at u2
+    ASSERT_TRUE((FB::compute<true>(p, xe, zero, pc(s0), pa(sx), f, K0)));    // initial
+    // Kc without PDelta's geometric term (the damping's committed stiffness, as the
+    // displacement beam: docs/deviations.md): the committed state's kv through T alone.
+    double Kc_lin[12][12];
+    {
+      femorax::CrdTransf3dGeometry g;
+      FB::geometry(p, xe, g);
+      FB::State s;
+      FB::load_state(p, g.L, pc(sc), s);
+      femorax::crd_transf_3d_global_stiff(p.transf, g, s.kv, s.Se, false, Kc_lin);
+    }
+    double M[144];
+    FB::mass(p, xe, M);
+    double peak = 0.0, worst = 0.0;
+    const double factors[4][4] = {{0.7, 0, 0, 0}, {0, 2e-3, 0, 0}, {0, 0, 1e-3, 0}, {0, 0, 0, 1.5e-3}};
+    for (const auto& fc : factors) {
+      femorax::Rayleigh d{};
+      d.alphaM = fc[0];
+      d.betaK = fc[1];
+      d.betaKinit = fc[2];
+      d.betaKcomm = fc[3];
+      double fdmp[12], fund[12];
+      std::vector<double> t1(FB::NSTATE, 0.0), t2(FB::NSTATE, 0.0);
+      ASSERT_TRUE((FB::compute<false>(p, d, xe, u2, ve, pc(sc), pa(t1), fdmp, nullptr)));
+      ASSERT_TRUE((FB::compute<false>(p, femorax::Rayleigh{}, xe, u2, ve, pc(sc), pa(t2), fund, nullptr)));
+      for (int a = 0; a < 12; ++a) {
+        double want = 0.0;
+        for (int b = 0; b < 12; ++b)
+          want += (d.alphaM * M[12 * a + b] + d.betaK * Kt[a][b] + d.betaKinit * K0[a][b] +
+                   d.betaKcomm * Kc_lin[a][b]) *
+                  ve[b];
+        peak = std::max(peak, std::fabs(want));
+        worst = std::max(worst, std::fabs(fdmp[a] - fund[a] - want));
+      }
+    }
+    // The operator: cK Kt + cC (alphaM M + betaK Kt + betaK0 K0 + betaKc Kc) + cM M, and its diagonal.
+    femorax::Rayleigh d{};
+    d.alphaM = 0.3;
+    d.betaK = 1e-3;
+    d.betaKinit = 2e-3;
+    d.betaKcomm = 3e-3;
+    const femorax::OperatorCoefficients k{1.7, 2.3, 400.0, false};
+    double y[12], yd[12];
+    std::vector<double> t3(FB::NSTATE, 0.0);
+    FB::operator_apply(p, d, k, xe, u2, x, pc(sc), pa(t3), false, y);
+    FB::operator_apply(p, d, k, xe, u2, x, pc(sc), pa(t3), true, yd);
+    double opeak = 0.0, oworst = 0.0, dworst = 0.0;
+    for (int a = 0; a < 12; ++a) {
+      double want = 0.0, diag = 0.0;
+      for (int b = 0; b < 12; ++b) {
+        const double Kab = k.stiffness * Kt[a][b] +
+                           k.damping * (d.alphaM * M[12 * a + b] + d.betaK * Kt[a][b] + d.betaKinit * K0[a][b] +
+                                        d.betaKcomm * Kc_lin[a][b]) +
+                           k.mass * M[12 * a + b];
+        want += Kab * x[b];
+        if (a == b) diag = Kab;
+      }
+      opeak = std::max(opeak, std::fabs(want));
+      oworst = std::max(oworst, std::fabs(y[a] - want));
+      dworst = std::max(dworst, std::fabs(yd[a] - diag) / std::max(1.0, std::fabs(diag)));
+    }
+    std::printf("[ force beam (%s): damping %.2e of %.3e; operator %.2e of %.3e; diagonal %.2e ]\n",
+                type == femorax::CrdTransfType::Linear ? "Linear" : "PDelta", worst / peak, peak, oworst / opeak, opeak,
+                dworst);
+    EXPECT_LE(worst, 1e-11 * peak);
+    EXPECT_LE(oworst, 1e-11 * opeak);
+    EXPECT_LE(dworst, 1e-11);
+  }
+}
 
 }  // namespace

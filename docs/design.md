@@ -1211,7 +1211,16 @@ translation gives no force. Against OpenSees (2026-11-20): a reference driver ca
 with ElasticSection3d and LobattoBeamIntegration in a real Domain (`tests/reference/drivers/
 force_beam_column.cpp`, data in `tests/reference/data/element/`): force within 3.4e-16, tangent within
 1.6e-16 and initial stiffness within 4.0e-17 for four geometries (offsets included) x 3, 5, 7 points x
-two states, Linear and PDelta. Step 1 done. Next: step 2 (mass, damping, stable step).
+two states, Linear and PDelta. Step 1 done. Step 2 done (2026-11-20): the mass, the Rayleigh
+damping force, the matrix-free operator and the stable step, shared with the displacement beam
+(`physics/elements/beam_common_3d.hpp`, moved from `disp_beam_3d.hpp` unchanged: its OpenSees
+comparisons and kernel tests unchanged), with the force beam's own basic stiffnesses: the trial `kv`,
+`kv0` from the initial flexibility and the committed `kv` from its state (exact; the damping's
+committed stiffness without PDelta's geometric term, as the displacement beam). Tests: an elastic
+prismatic member has the displacement beam's mass bit for bit, its stiffness within 8.2e-16 and the
+same largest omega^2 (both elements are exact there); the damping force (each factor alone) within
+4.9e-16 and the operator and its diagonal within 1.0e-15 of their matrices, Linear and PDelta. Next:
+step 3 (registry, kernels, the failed iteration failing the step).
 
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);
