@@ -126,8 +126,10 @@ element's stable step (30752ab); step 5, schema 1.1 approved by the user with op
 mass_per_length (b2bed66); step 6's first part, the Tcl converter for beams and a converted
 cantilever run end to end (c4df103); the LTS checkpoint passed (cf5cf8a): a pile tied into a
 soil column (step ratio 17.6), LTS at the soil's step within 3.05e-3 of a global run at the
-pile's step, 40 of 136 elements in the substeps. Next: the pile in a soil column against
-OpenSees (beam nodes tied with equalDOF; the OpenSees reference build on Stampede3); step 7,
+pile's step, 40 of 136 elements in the substeps; the pile in a soil column against OpenSees
+within 1.9e-15 (daf88b2, stored OpenSees output; Femora's exports should give beams their rotary
+inertia: without it the pile's twist is a massless rigid mode and the implicit solve is
+singular). Next: step 7,
 TACC benchmarks of the beam kernels; then the agreed order (rigid links and diaphragms and the
 exact embedded tie, the force-based beam, fiber sections, LTS 3c and damping). Earlier plan text:
 step 3's Rayleigh damping terms and the consistent mass; then step 4 (registry, batches with 6-DOF nodes,
