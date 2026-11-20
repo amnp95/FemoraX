@@ -169,17 +169,14 @@ void ed_lts_finish(const Vec& z, const Vec& un, const Vec& u, const Vec& vh, con
       });
 }
 
-// What beams cannot do yet (docs/design.md, "Beams", step 4): implicit stages (no matrix-free
-// operator for beams yet); in explicit stages, Rayleigh stiffness damping (refused on beams by
-// design: "Structures") and beams without a mass of their own (their nodal masses do not reach
-// the element's stable step yet, docs/todo.md item 22, so the step would be overstated).
+// What beams cannot do in explicit stages (docs/design.md, "Beams", step 4): Rayleigh stiffness
+// damping (refused on beams by design: "Structures"), and beams without a mass of their own
+// (their nodal masses do not reach the element's stable step yet, docs/todo.md item 22, so the
+// step would be overstated). Implicit stages take both.
 void check_beams(const io::Model& model, const compile::Compiled& c, const io::AnalysisStep& an) {
-  const bool expl = io::is_explicit(an.integrator);
+  if (!io::is_explicit(an.integrator)) return;
   for (const auto& b : c.batches) {
     if (b.element != io::ElementType::DispBeamColumn) continue;
-    if (!expl)
-      throw io::UnsupportedComponent("unsupported component: dispBeamColumn in the implicit stage \"" + an.name +
-                                     "\" (beams run in explicit stages so far; their implicit operator is next)");
     for (const auto& ps : b.params) {
       const auto& g = model.elements[static_cast<std::size_t>(ps.group)];
       if (ps.damping.betaK != 0.0 || ps.damping.betaKinit != 0.0 || ps.damping.betaKcomm != 0.0)

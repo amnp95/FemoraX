@@ -19,6 +19,7 @@
 #include "physics/common/strided.hpp"
 #include "physics/contracts.hpp"
 #include "physics/explicit_stability.hpp"
+#include "physics/operators/element_operator.hpp"
 
 namespace femorax::exec::kernels {
 
@@ -227,6 +228,45 @@ void launch_flat(const DevBatch<Elem>& b, const Vec& coords, Index N, const Vec&
         }
         for (int k = 0; k < NDOF; ++k)
           emit(out, f, slots, base + static_cast<std::int64_t>(k) * P + e, eq(k * P + e), fe[k]);
+      });
+}
+
+// The matrix-free operator of elements that apply it themselves (operator_apply: beams), one
+// thread per element: gather u and x (or the rigid unit translation in unit_dir at every
+// element DOF, fixed ones included: the UniformExcitation load), apply or take the diagonal,
+// emit through the same scatter as the force.
+template <class Elem, bool Diagonal>
+void launch_element_operator(const DevBatch<Elem>& b, const Vec& coords, Index N, const OperatorCoefficients& k,
+                             const Vec& u, const Vec& x, const Vec& y, const Vec& slots, Out out, Index begin,
+                             Index end, bool by_color, int unit_dir) {
+  constexpr int NNODE = Elem::NNODE, NDOF = Elem::NDOF, NDM = Elem::NDM;
+  const auto node = b.node, eq = b.eq, param = b.param, colors = b.color_elements;
+  const auto params = b.params;
+  const auto sc = b.state[b.current], st = b.state[1 - b.current];
+  const Index P = b.padded;
+  const std::int64_t base = b.slot_offset;
+  const StepContext step = b.step;
+  Kokkos::parallel_for(
+      Diagonal ? "element_operator_diagonal_own" : "element_operator_apply_own",
+      Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(begin, end), KOKKOS_LAMBDA(const Index i) {
+        const Index e = by_color ? colors(i) : i;
+        const DevParams<Elem>& pr = params(param(e));
+        double ue[NDOF], xv[NDOF], ye[NDOF], xel[NNODE][NDM];
+        for (int a = 0, kk = 0; a < NNODE; ++a)
+          for (int d = 0; d < Elem::NODE_NDF[a]; ++d, ++kk) {
+            const Index q = eq(kk * P + e);
+            ue[kk] = q >= 0 ? u(q) : 0.0;
+            if (unit_dir >= 0) xv[kk] = d == unit_dir ? 1.0 : 0.0;
+            else xv[kk] = q >= 0 ? x(q) : 0.0;
+          }
+        for (int a = 0; a < NNODE; ++a) {
+          const Index n = node(a * P + e);
+          for (int d = 0; d < NDM; ++d) xel[a][d] = coords(d * N + n);
+        }
+        Elem::operator_apply(pr.p, with_step(pr.damp, step), k, xel, ue, xv, state_of<Elem>(sc, e, P),
+                             state_of<Elem>(st, e, P), Diagonal, ye);
+        for (int kk = 0; kk < NDOF; ++kk)
+          emit(out, y, slots, base + static_cast<std::int64_t>(kk) * P + e, eq(kk * P + e), ye[kk]);
       });
 }
 

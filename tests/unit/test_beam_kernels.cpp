@@ -5,8 +5,13 @@
 //     kernel variant gives the same bits (atomic: to rounding);
 //   - the lumped mass: rho A L on each translation, the rotary inertia on the rotations;
 //   - an explicit CentralDifference run under base shaking (run_model) follows the host
-//     recurrence with the reference stiffness and the compile step's lumped mass.
+//     recurrence with the reference stiffness and the compile step's lumped mass;
+//   - step 4b: the matrix-free operator cK K_t + cC C + cM M, its diagonal and the ground-motion
+//     mass term equal the host reference assembly (Linear and PDelta at a displaced state, lumped
+//     and consistent mass, all four Rayleigh terms, the initial-stiffness variant); a Newmark run
+//     with Newton under base shaking (run_model) equals host Newmark on the reference matrices.
 
+#include <Eigen/SparseCholesky>
 #include <Kokkos_Core.hpp>
 #include <gtest/gtest.h>
 
@@ -247,8 +252,8 @@ TEST(BeamKernels, ExplicitRunFollowsTheHostRecurrence) {
   EXPECT_LE(err, 1e-10 * peak);
 }
 
-// What beams refuse for now: implicit stages, Rayleigh stiffness damping in explicit stages, and
-// beams without a mass of their own (their nodal masses do not reach the stable step yet).
+// What beams refuse in explicit stages: Rayleigh stiffness damping, and beams without a mass of
+// their own (their nodal masses do not reach the stable step yet). Implicit stages run.
 TEST(BeamKernels, RefusesWhatBeamsCannotDoYet) {
   auto stage = [](femorax::io::Integrator integ) {
     femorax::io::AnalysisStep a;
@@ -269,7 +274,7 @@ TEST(BeamKernels, RefusesWhatBeamsCannotDoYet) {
   {
     Model m = cantilever(0);
     m.process.push_back({"1", "", stage(femorax::io::Integrator::Newmark)});
-    EXPECT_THROW(femorax::exec::run_model(m, o), femorax::io::UnsupportedComponent);
+    EXPECT_NO_THROW(femorax::exec::run_model(m, o));
   }
   {
     Model m = cantilever(0);
@@ -285,6 +290,173 @@ TEST(BeamKernels, RefusesWhatBeamsCannotDoYet) {
     m.elements[0].beam.density = 0.0;
     m.process.push_back({"1", "", stage(femorax::io::Integrator::CentralDifference)});
     EXPECT_THROW(femorax::exec::run_model(m, o), femorax::io::ModelError);
+  }
+}
+
+TEST(BeamKernels, OperatorEqualsTheReferenceAssembly) {
+  using femorax::exec::Vec;
+  for (const int transf : {0, 1})
+    for (const bool consistent : {false, true}) {
+      Model m = cantilever(transf);
+      m.elements[0].beam.consistent_mass = consistent;
+      femorax::io::RayleighRegion r;
+      r.alphaM = 0.3, r.betaK = 1e-3, r.betaKinit = 5e-4, r.betaKcomm = 2e-4;
+      r.elements = m.elements[0].tags;
+      m.rayleigh.push_back(r);
+      const auto c = femorax::compile::compile_model(m, femorax::compile::CompileOptions{});
+      const auto n = static_cast<std::size_t>(c.dofs.num_equations);
+      std::vector<double> u(n), x(n);
+      for (std::size_t i = 0; i < n; ++i) {
+        u[i] = 2e-4 * std::sin(0.31 * static_cast<double>(i) + 0.4);
+        x[i] = std::cos(0.53 * static_cast<double>(i));
+      }
+      const auto ref = femorax::testing::assemble_reference(m, c, u);  // K_t at u
+      femorax::exec::InternalForce force(c, femorax::exec::GeometryCache::Auto);
+      auto upload = [&](const std::vector<double>& h) {
+        Vec d("v", n);
+        auto hm = Kokkos::create_mirror_view(d);
+        for (std::size_t i = 0; i < n; ++i) hm(i) = h[i];
+        Kokkos::deep_copy(d, hm);
+        return d;
+      };
+      const Vec du = upload(u), dx = upload(x), dy("y", n);
+      for (const bool initial : {false, true}) {
+        femorax::OperatorCoefficients k;
+        k.stiffness = 1.3, k.damping = 0.7, k.mass = 2.1, k.initial = initial;
+        const auto Kx = ref.multiply(initial ? ref.K0 : ref.K, x), Cx = ref.multiply(ref.C, x),
+                   Mx = ref.multiply(ref.M, x);
+        femorax::exec::OperatorSettings s;
+        force.apply_operator(k, s, du, dx, dy);
+        const auto y = host(dy);
+        double d = 0.0, mm = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+          const double want = k.stiffness * Kx[i] + k.damping * Cx[i] + k.mass * Mx[i];
+          d = std::max(d, std::abs(y[i] - want));
+          mm = std::max(mm, std::abs(want));
+        }
+        EXPECT_LE(d, 1e-12 * mm) << "transf " << transf << " consistent " << consistent << " initial " << initial;
+        // The diagonal.
+        force.operator_diagonal(k, s, du, dy);
+        const auto dg = host(dy);
+        double dd = 0.0, dm = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+          const auto pos = static_cast<std::size_t>(ref.pattern.find(static_cast<std::int32_t>(i), static_cast<std::int32_t>(i)));
+          const double want = k.stiffness * (initial ? ref.K0 : ref.K)[pos] + k.damping * ref.C[pos] + k.mass * ref.M[pos];
+          dd = std::max(dd, std::abs(dg[i] - want));
+          dm = std::max(dm, std::abs(want));
+        }
+        EXPECT_LE(dd, 1e-12 * dm) << "diagonal: transf " << transf << " consistent " << consistent;
+      }
+      // M r_d, the UniformExcitation load (the base's DOFs included in r).
+      for (int dir = 0; dir < 3; ++dir) {
+        force.mass_times_ground(dir, femorax::exec::OperatorSettings{}, du, dy);
+        const auto mr = host(dy);
+        double d = 0.0, mm = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+          d = std::max(d, std::abs(mr[i] - ref.Mr[dir][i]));
+          mm = std::max(mm, std::abs(ref.Mr[dir][i]));
+        }
+        EXPECT_LE(d, 1e-12 * mm) << "M r, direction " << dir;
+      }
+    }
+}
+
+// Newmark (average acceleration) with Newton, Rayleigh damping (alphaM and betaK) and a base
+// pulse in x, through run_model; the host does Newmark on the reference K, C, M (Eigen LDLT).
+TEST(BeamKernels, NewmarkRunFollowsTheHostRecurrence) {
+  for (const bool consistent : {false, true}) {
+    Model m = cantilever(0);
+    m.elements[0].beam.consistent_mass = consistent;
+    femorax::io::RayleighRegion r;
+    r.alphaM = 0.5, r.betaK = 2e-4;
+    r.elements = m.elements[0].tags;
+    m.rayleigh.push_back(r);
+    femorax::compile::CompileOptions co;
+    co.renumbering = femorax::compile::Renumbering::Off;
+    const auto c = femorax::compile::compile_model(m, co);
+    const auto ref = femorax::testing::assemble_reference(m, c);
+    const double dt = 1e-3;
+    const int steps = 200;
+    femorax::io::PathSeries ps;
+    ps.tag = 1;
+    ps.dt = dt;
+    for (int k = 0; k <= steps + 2; ++k) {
+      const double t = k * dt, T = 0.05;
+      ps.values.push_back(t < T ? std::sin(M_PI * t / T) * std::sin(M_PI * t / T) : 0.0);
+    }
+    m.time_series.push_back(ps);
+    m.patterns.push_back({2, 1, 1, 0.0, 1.0, {}});
+    femorax::io::NodeRecorder nr;
+    nr.file = temp_file(consistent ? "newmark_c.txt" : "newmark_l.txt");
+    nr.response = femorax::io::NodeResponse::Disp;
+    nr.time = true;
+    nr.precision = 17;
+    nr.nodes = m.nodes.tags;
+    nr.dofs = {1, 2, 3, 4, 5, 6};
+    m.recorders.push_back({"d", nr, {}});
+    m.process.push_back({"0", "", femorax::io::RecorderStep{"d"}});
+    m.process.push_back({"1", "", femorax::io::PatternStep{2}});
+    femorax::io::AnalysisStep a;
+    a.name = "shake";
+    a.type = femorax::io::AnalysisType::Transient;
+    a.dt = dt;
+    a.num_steps = steps;
+    a.integrator = femorax::io::Integrator::Newmark;
+    a.gamma = 0.5;
+    a.beta = 0.25;
+    a.algorithm = femorax::io::Algorithm::Newton;
+    a.numberer = "Plain";
+    a.system = "BandGeneral";
+    a.test_type = femorax::io::TestType::NormDispIncr;
+    a.test_tol = 1e-14;
+    a.test_max_iter = 10;
+    m.process.push_back({"2", "", a});
+    femorax::exec::RunOptions o;
+    o.verbose = false;
+    o.renumbering = femorax::compile::Renumbering::Off;
+    femorax::exec::run_model(m, o);
+    const auto rows = read_rows(nr.file);
+    ASSERT_EQ(rows.size(), static_cast<std::size_t>(steps));
+
+    // Host Newmark: Khat u(n+1) = p(n+1) + M (a0 u + a2 v + a3 a) + C (a1 u + a4 v + a5 a).
+    const double g = 0.5, b = 0.25;
+    const double a0 = 1.0 / (b * dt * dt), a1 = g / (b * dt), a2 = 1.0 / (b * dt), a3 = 1.0 / (2 * b) - 1.0,
+                 a4 = g / b - 1.0, a5 = dt / 2.0 * (g / b - 2.0);
+    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>> ldlt(ref.to_eigen(ref.effective(1.0, a1, a0)));
+    const auto nq = static_cast<std::size_t>(c.dofs.num_equations);
+    std::vector<double> u(nq, 0.0), v(nq, 0.0), acc(nq, 0.0);
+    double peak = 0.0, err = 0.0;
+    for (int k = 0; k < steps; ++k) {
+      std::vector<double> wm(nq), wc(nq);
+      for (std::size_t q = 0; q < nq; ++q) {
+        wm[q] = a0 * u[q] + a2 * v[q] + a3 * acc[q];
+        wc[q] = a1 * u[q] + a4 * v[q] + a5 * acc[q];
+      }
+      const auto Mw = ref.multiply(ref.M, wm), Cw = ref.multiply(ref.C, wc);
+      Eigen::VectorXd rhs(static_cast<Eigen::Index>(nq));
+      for (std::size_t q = 0; q < nq; ++q)
+        rhs[static_cast<Eigen::Index>(q)] = -ps.values[static_cast<std::size_t>(k + 1)] * ref.Mr[0][q] + Mw[q] + Cw[q];
+      const Eigen::VectorXd un = ldlt.solve(rhs);
+      for (std::size_t q = 0; q < nq; ++q) {
+        const double unq = un[static_cast<Eigen::Index>(q)];
+        const double an = a0 * (unq - u[q]) - a2 * v[q] - a3 * acc[q];
+        v[q] += dt * ((1.0 - g) * acc[q] + g * an);
+        acc[q] = an;
+        u[q] = unq;
+      }
+      for (std::int32_t node = 0; node < c.dofs.num_nodes(); ++node)
+        for (int d = 0; d < 6; ++d) {
+          const std::int32_t q = c.dofs.equation(node, d);
+          if (q < 0) continue;
+          const double run = rows[static_cast<std::size_t>(k)][static_cast<std::size_t>(1 + 6 * node + d)];
+          peak = std::max(peak, std::abs(u[static_cast<std::size_t>(q)]));
+          err = std::max(err, std::abs(run - u[static_cast<std::size_t>(q)]));
+        }
+    }
+    std::printf("[ Newmark cantilever (%s mass) against the host recurrence: %.2e of the peak %.3e ]\n",
+                consistent ? "consistent" : "lumped", err / peak, peak);
+    EXPECT_GT(peak, 0.0);
+    EXPECT_LE(err, 1e-9 * peak);
   }
 }
 

@@ -41,6 +41,7 @@
 #include "physics/contracts.hpp"
 #include "physics/explicit_stability.hpp"
 #include "physics/macros.hpp"
+#include "physics/operators/element_operator.hpp"
 #include "physics/transformations/crd_transf_3d.hpp"
 
 namespace femorax {
@@ -329,6 +330,105 @@ struct DispBeam3d {
         double m[12];
         lumped_mass(p, xe, m);
         for (int k = 0; k < 12; ++k) fe[k] += damp.alphaM * m[k] * ve[k];
+      }
+    }
+  }
+
+  // The element's matrix-free operator (docs/design.md, "The matrix-free operator"):
+  //   y = cK (K_t or, with k.initial, K_0) x + cC (alphaM M + betaK K_t + betaK0 K_0 + betaKc K_c) x
+  //       + cM M x,
+  // every stiffness applied in the basic system (T^T kb T x, plus PDelta's geometric stiffness
+  // of the current axial force with K_t), so no 12 x 12 stiffness is formed (rule 3a); K_t at the
+  // trial displacements ue (the sections updated from committed into trial), K_c from the
+  // sections' committed tangent (no geometric term, as the damping force). With diagonal, y[a]
+  // is the operator's diagonal entry a (the same function applied to unit vectors).
+  FEMORAX_HD static void operator_apply(const Params& p, const Rayleigh& damp, const OperatorCoefficients& k,
+                                        const double (*xe)[NDM], const double* ue, const double* x,
+                                        PointArray<const double> committed, PointArray<double> trial, bool diagonal,
+                                        double* y) {
+    CrdTransf3dGeometry g;
+    geometry(p, xe, g);
+    const double cS = k.stiffness, cC = k.damping, cM = k.mass;
+    const double zero_q[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    // The basic tangents: current (with q), initial, committed.
+    double v[6], q[6], kbt[6][6], kb0[6][6], kbc[6][6], qq[6];
+    crd_transf_3d_basic_disp(p.transf, g, ue, v);
+    basic_response(
+        g.L, v,
+        [&](int i, const double* e, double* s, double (*ks)[ORDER]) {
+          Sec::update(p.mat, committed.point(i), trial.point(i), e, s, ks);
+        },
+        q, kbt);
+    const bool need0 = k.initial || damp.betaKinit != 0.0, needc = damp.betaKcomm != 0.0;
+    if (need0)
+      basic_response(
+          g.L, zero_q,
+          [&](int, const double*, double* s, double (*ks)[ORDER]) {
+            Sec::initial_tangent(p.mat, ks);
+            for (int j = 0; j < ORDER; ++j) s[j] = 0.0;
+          },
+          qq, kb0);
+    if (needc)
+      basic_response(
+          g.L, zero_q,
+          [&](int i, const double*, double* s, double (*ks)[ORDER]) {
+            Sec::committed_tangent(p.mat, committed.point(i), ks);
+            for (int j = 0; j < ORDER; ++j) s[j] = 0.0;
+          },
+          qq, kbc);
+    // The combined basic stiffness and the factor of K_t's geometric term.
+    const double ct = (k.initial ? 0.0 : cS) + cC * damp.betaK;
+    const double c0 = (k.initial ? cS : 0.0) + cC * damp.betaKinit;
+    const double cc = cC * damp.betaKcomm;
+    double kb[6][6];
+    for (int a = 0; a < 6; ++a)
+      for (int b = 0; b < 6; ++b)
+        kb[a][b] = ct * kbt[a][b] + (need0 ? c0 * kb0[a][b] : 0.0) + (needc ? cc * kbc[a][b] : 0.0);
+    const double mcoef = cM + cC * damp.alphaM;
+    double ml[12] = {}, Mc[12][12];
+    if (mcoef != 0.0) {
+      if (p.cMass) consistent_mass(p, g, Mc);
+      else lumped_mass(p, xe, ml);
+    }
+    auto apply = [&](const double* xv, double* out) {
+      double vb[6], qb[6];
+      crd_transf_3d_basic_disp(p.transf, g, xv, vb);
+      for (int a = 0; a < 6; ++a) {
+        double t = 0.0;
+        for (int b = 0; b < 6; ++b) t += kb[a][b] * vb[b];
+        qb[a] = t;
+      }
+      CrdTransf3dParams lin = p.transf;
+      lin.type = CrdTransfType::Linear;
+      const double p0[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+      crd_transf_3d_global_force(lin, g, xv, qb, p0, out);
+      if (ct != 0.0 && p.transf.type == CrdTransfType::PDelta) {
+        const double qa[6] = {q[0], 0.0, 0.0, 0.0, 0.0, 0.0};
+        double fg[12], fl[12];
+        crd_transf_3d_global_force(p.transf, g, xv, qa, p0, fg);
+        crd_transf_3d_global_force(lin, g, xv, qa, p0, fl);
+        for (int a = 0; a < 12; ++a) out[a] += ct * (fg[a] - fl[a]);
+      }
+      if (mcoef != 0.0) {
+        for (int a = 0; a < 12; ++a) {
+          double t = 0.0;
+          if (p.cMass) {
+            for (int b = 0; b < 12; ++b) t += Mc[a][b] * xv[b];
+          } else {
+            t = ml[a] * xv[a];
+          }
+          out[a] += mcoef * t;
+        }
+      }
+    };
+    if (!diagonal) {
+      apply(x, y);
+    } else {
+      for (int a = 0; a < 12; ++a) {
+        double e[12] = {}, col[12];
+        e[a] = 1.0;
+        apply(e, col);
+        y[a] = col[a];
       }
     }
   }

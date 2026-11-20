@@ -301,6 +301,22 @@ struct TypedBatch final : InternalForce::Batch {
       } else {
         launch(0, b.count, false);
       }
+    } else if constexpr (requires { &Elem::operator_apply; }) {
+      // Elements that apply their operator themselves (beams): the tangent from u, any source.
+      auto launch = [&](Index begin, Index end, bool by_color) {
+        if (diagonal)
+          kernels::launch_element_operator<Elem, true>(b, coords, N, k, u, x, y, slots, out, begin, end, by_color,
+                                                       unit_dir);
+        else
+          kernels::launch_element_operator<Elem, false>(b, coords, N, k, u, x, y, slots, out, begin, end, by_color,
+                                                        unit_dir);
+      };
+      if (s.scatter == Scatter::Colored) {
+        for (std::size_t col = 0; col + 1 < b.color_start.size(); ++col)
+          launch(b.color_start[col], b.color_start[col + 1], true);
+      } else {
+        launch(0, b.count, false);
+      }
     } else {
       Kokkos::abort("InternalForce: this element has no matrix-free operator (MatrixFreeElement)");
     }

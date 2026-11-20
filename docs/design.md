@@ -1087,6 +1087,20 @@ own force for PDelta) in every variant, bit for bit between the deterministic on
 mass (rho A on the translations, the rotary inertia on the rotations, global axes); an explicit
 CentralDifference run under base shaking through `run_model` equal to the host recurrence
 within 9.3e-13 of the peak; the refusals. Next: 4b, the implicit operator for beams.
+Step 4b done (2026-11-20): the implicit operator. `DispBeam3d::operator_apply` (cK K_t + cC C +
+cM M, or cK K_0 with `initial`): every stiffness in the basic system (T^T kb T x, plus PDelta's
+geometric stiffness of the current axial force with K_t), the tangent from the trial
+displacements (any tangent source: the beam recomputes), K_c from the committed section
+tangent; its diagonal from the same function on unit vectors. The launch layer runs it for
+elements that apply their operator themselves (`launch_element_operator`, one thread per element,
+the force's scatter; the solids keep their pointwise operator), the UniformExcitation mass term
+included. Implicit stages now take beams (Rayleigh stiffness damping and nodal masses alone are
+fine there). Tests: the operator, its diagonal and M r_d equal the host reference within 1e-12
+(Linear and PDelta at a displaced state, lumped and consistent mass, all four Rayleigh terms, the
+initial-stiffness variant); Newmark with Newton under base shaking with Rayleigh damping through
+`run_model` equals host Newmark on the reference matrices (Eigen LDLT) within 1.5e-12 (lumped)
+and 9.8e-13 (consistent) of the peak. Next: step 5 (schema 1.1, asked first), step 6 (system tests
+and the LTS checkpoint), todo 22 (nodal masses in the element's stable step).
 
 ## Local time stepping (plan 2026-11-17; approved by the user 2026-11-19 after a literature review)
 
