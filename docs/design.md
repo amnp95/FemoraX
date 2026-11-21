@@ -1384,6 +1384,19 @@ Closed forms: elastic fibers give EA, EIz, EIy of the rectangle; the tangent is 
 the resultants on a yielding section. Open for step 4: the section's Params hold the fiber table
 (28 bytes per fiber of the size class per parameter set); check how the kernels pass Params
 before choosing the classes.
+Step 3 done (2026-11-21): both beams take the fiber section with no change to their code
+(`ForceBeam3d<FiberSection3d<32>, 5>`, `DispBeam3d<FiberSection3d<32>, 3>`). Against OpenSees
+(reference driver `fiber_beam_column`: ForceBeamColumn3d and DispBeamColumn3d with a 32-fiber RC
+section in a Domain, Linear and PDelta; a 3 m column driven through lateral cycles of 0.3 %, 1 %
+and 2.5 % drift in both directions with axial shortening and twist, one update and one commit per
+step, 120 steps; the tangent's first entry goes from 26,769 to -360:
+the column softens): the displacement beam's force and tangent bit for bit (18,864 values per file); the
+force beam's force within 3.2e-15, its tangent within 5.8e-15 and its initial stiffness within
+8.8e-18 of the peak (the element iteration converged at every step; the last bits are the 6 x 6
+inversions). So the force beam's nonlinear iteration (written with the elastic section, first run
+with yielding fibers here) agrees with OpenSees when both start from a committed state; the
+difference across Newton iterates (OpenSees warm-starts from its last trial state) shows only in
+system runs and is measured at step 6.
 
 ## Exact constraints u = T q: rigid links, rigid diaphragms, embedded nodes (plan approved by the user, 2026-11-20)
 
