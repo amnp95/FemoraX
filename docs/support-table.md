@@ -30,7 +30,9 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 | Femora / OpenSees | Status | Notes |
 |---|---|---|
 | section Elastic (3D) | **supported** (schema 1.1) | port of `ElasticSection3d.cpp` (`955ceb0`); with dispBeamColumn and forceBeamColumn |
-| all others | planned | milestone 3 onward |
+| uniaxialMaterial Elastic, Steel01, Concrete02 | **physics done** (2026-11-21), not yet reachable from a model (the fiber section, then schema 1.4) | ports of `ElasticMaterial.cpp`, `Steel01.cpp`, `Concrete02.cpp` (`955ceb0`): stress and tangent bit for bit along 48 strain paths with commits, thrown-away trials and repeated iterates (reference driver `uniaxial_material`; 14,080 values). Not ported: Elastic's `eta`, the energies and sensitivities |
+| section Fiber | in progress (docs/design.md, "Fiber sections and uniaxial materials") | |
+| all others | planned | uniaxial materials in tiers (docs/design.md) |
 
 ## Constraints
 

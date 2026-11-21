@@ -62,6 +62,7 @@ build/reference/drivers/brick_element tests/reference/data/element
 build/reference/drivers/crd_transf tests/reference/data/transf
 build/reference/drivers/disp_beam_column tests/reference/data/element
 build/reference/drivers/force_beam_column tests/reference/data/element
+build/reference/drivers/uniaxial_material tests/reference/data/uniaxial
 .venv/bin/python tests/reference/make_constraint_cases.py tests/reference/data/constraints/cases
 for f in tests/reference/data/constraints/cases/*.txt; do
   build/reference/drivers/dof_numbering $f tests/reference/data/constraints/$(basename $f)
@@ -91,6 +92,7 @@ produced it; a port's tests check that it matches the pinned commit.
 
 | Driver | Covers | Output |
 |---|---|---|
+| `uniaxial_material` | Uniaxial materials of fiber sections (Elastic, Steel01, Concrete02; the copy a fiber gets) along strain paths (monotonic, growing cycles, compression cycles into tension, random reversals, steps around DBL_EPSILON), with commits, thrown-away trials and repeated iterates | `data/uniaxial/<Material>_<case>_<path>.txt` |
 | `nd_material` | nD materials along strain paths (monotonic, cyclic, volumetric load/unload, random reversals), with commit and revert | `data/nd/<Material>_<case>_<path>.txt` |
 | `soil_material` | PressureDependMultiYield and PressureIndependMultiYield (the copy an element gets) along strain paths at the Gauss-point level: elastic-stage consolidation, the switch to the plastic stage (`updateParameter`, as `updateMaterialStage` does), then monotonic and cyclic constant-volume shear at several amplitudes and confinements, random reversals, confinement changes, extension, a switch with sheared stress, switching back and forth; every 7th step a discarded trial; Femora's three soils and a user G/Gmax backbone; for PressureIndependMultiYield Femora's basin clay, a frictional material and user backbones, with a switch at rest (no strain increment). Columns: stage, the discarded trial, strain, stress, tangent | `data/nd/PressureDependMultiYield_<case>_<path>.txt`, `data/nd/PressureIndependMultiYield_<case>_<path>.txt` |
 | `dof_numbering` | OpenSees `TransformationConstraintHandler` + `PlainNumberer` on node/fix/equalDOF cases (`make_constraint_cases.py`): each nodal DOF's equation through the transformation matrix | `data/constraints/<case>.txt` |

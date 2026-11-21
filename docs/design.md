@@ -1315,6 +1315,59 @@ gain from one element per member.
 OpenSees driver; (2) mass, damping, stable step; (3) registry, kernels, operator; (4) schema 1.3
 (asked with the exact text), reader, converter; (5) system tests against OpenSees; (6) benchmarks.
 
+## Fiber sections and uniaxial materials (plan approved by the user, 2026-11-21)
+
+**What Femora writes** (`../Femora/src/femora/components/section/fiber/`): `section Fiber tag
+[-GJ GJ] { fiber y z A mat; patch rect|quad|circ ...; layer straight|circ ... }`: every building
+block of OpenSees' fiber section command; `section RC`, `Aggregator`, `Parallel`. Uniaxial
+materials in Femora today: Elastic and Steel01 only (no concrete: Femora's side to add). Ports from
+OpenSees 955ceb0: `FiberSection3d.cpp`, `ElasticMaterial.cpp`, `Steel01.cpp`, `Concrete02.cpp`.
+
+**Decisions with the user (2026-11-21):**
+- The fiber section is complete from the start: every patch and layer is a list of fibers
+  (y, z, area, material), and the section takes any list.
+- Uniaxial materials in tiers, not all of OpenSees' (about 165 headers, most of them not fiber
+  materials): first Elastic, Steel01, Concrete02; then Steel02, Concrete01, ElasticPP, Hardening,
+  ENT; then Concrete04/06, ReinforcingSteel, Hysteretic, SteelMPF, ConcreteCM and the wrappers
+  (MinMax, InitStrain, Parallel, Series); any other when a model names it. Each is one header, one
+  case in the dispatcher and one OpenSees strain-path test. Anything not ported is refused with a
+  message.
+- Mixed materials in one section: the material is chosen per fiber at run time from the registered
+  list (`physics/materials/uniaxial/uniaxial.hpp`: a type and up to 7 parameters per material,
+  `kUniaxialState` = 8 doubles of state per fiber and buffer), fibers grouped by material: one
+  section kernel, not one instantiation per material combination.
+- Fiber counts: compile-time size classes (for example up to 32, 128 and 512 fibers); a section
+  takes the smallest class that holds it, more is refused with a message.
+- **GPU layout: a team of threads per beam element, the threads sharing the fibers** (the user's
+  choice). The fiber loops are written with `inner_for` / `inner_reduce` from the start (each
+  fiber reads and writes its own state only; the sums over fibers in a fixed order, so every lane
+  split gives the same bits). The one-thread-per-element layout stays: CPUs use it, and it is the
+  reference the team layout is tested against bit for bit. The force beam's element iteration is
+  sequential; the fiber work inside each pass is what the team shares, and its convergence
+  decision is a pure function of the reduced values, the same on every lane.
+- Known difference from OpenSees: the force beam iterates from the committed state (OpenSees: from
+  the last Newton iterate), so with yielding fibers results agree within the element tolerance, not
+  bit for bit; measured and recorded in docs/deviations.md at step 3.
+
+**Steps (one commit each):** (1) the uniaxial contract (`UniaxialMaterial` in `contracts.hpp`) with
+Elastic, Steel01, Concrete02, each bit for bit against the OpenSees class along strain paths with
+commits and thrown-away trials; (2) the fiber section (`FiberSection3d`: P, Mz, My from the fibers,
+elastic torsion GJ), against OpenSees along moment-curvature paths in both axes with axial load;
+(3) both beams with the fiber section (the force beam's nonlinear iteration; element drivers);
+(4) kernels, state, the team layout; CPU and H200; (5) schema 1.4 (asked with the exact text):
+uniaxial materials, fiber sections as explicit fiber lists; the converter discretizes patches and
+layers as OpenSees does; (6) system tests against OpenSees: a cyclic pushover of an RC cantilever,
+a yielding frame under shaking; (7) benchmarks (flat against team, by fiber count). Then the next
+material tiers and the RC, WF, Aggregator and Parallel sections.
+Step 1 done (2026-11-21): `physics/materials/uniaxial/` (`elastic_uniaxial.hpp`, `steel01.hpp`,
+`concrete02.hpp`, the dispatcher `uniaxial.hpp`), the `UniaxialMaterial` concept. A state of zeros
+is each material's initial state (Steel01 keeps its shifts minus one and which of its two tangents
+is current; Concrete02 a flag for its tangent), so fresh buffers need no initialization. Against
+OpenSees (reference driver `uniaxial_material`, data in `tests/reference/data/uniaxial/`, from the
+Vista build): 8 parameter sets x 6 strain paths, every stress and tangent bit for bit (14,080
+values), through the dispatcher and strided state; closed forms (Steel01's bilinear kinematic
+law, Concrete02's envelopes).
+
 ## Exact constraints u = T q: rigid links, rigid diaphragms, embedded nodes (plan approved by the user, 2026-11-20)
 
 Backed by the literature review `docs/research/embedded_and_constraints/` ("eliminate the tie,

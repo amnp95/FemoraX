@@ -124,6 +124,29 @@ concept Material = requires {
 };
 
 // ---------------------------------------------------------------------------
+// Uniaxial material contract (the fibers of a fiber section; docs/design.md, "Fiber sections")
+// ---------------------------------------------------------------------------
+// One strain in, the stress and the tangent out, from the committed state (the trial state
+// written whole). A state of zeros is the material's initial state, so fresh buffers need no
+// initialization. Parameters pack into at most a fixed number of doubles (pack / unpack), so a
+// fiber's material can be chosen at run time (physics/materials/uniaxial/uniaxial.hpp).
+template <class M>
+concept UniaxialMaterial = requires {
+  typename M::Params;
+  requires std::is_trivially_copyable_v<typename M::Params>;
+  requires M::KIND == MaterialKind::Uniaxial;
+  requires detail::is_constexpr_int<decltype(M::NSTATE)>;
+  requires detail::is_constexpr_int<decltype(M::NPARAM)>;
+  requires M::NSTATE >= 0 && M::NPARAM > 0;
+} && requires(const typename M::Params& p, Strided<const double> committed, Strided<double> trial,
+              double strain, double& stress, double& tangent, const double* cv, double* v) {
+  { M::update(p, committed, trial, strain, stress, tangent) } -> std::same_as<void>;
+  { M::initial_tangent(p) } -> std::same_as<double>;
+  { M::unpack(cv) } -> std::same_as<typename M::Params>;
+  { M::pack(p, v) } -> std::same_as<void>;
+};
+
+// ---------------------------------------------------------------------------
 // Section contract (beam sections; docs/design.md, "Beams")
 // ---------------------------------------------------------------------------
 // The section's geometry for the beam's own mass (docs/design.md, "Structures"): the element
