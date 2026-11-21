@@ -183,6 +183,7 @@ class InternalForce {
   // equations; compute fills them from the equations first and adds their forces back after.
   // expand_slots(u) refreshes the slots of u (before recording a constrained node).
   void expand_slots(const Vec& x) const;
+  void expand_slots(const Vec& x, const Vec& y) const;  // both in one launch
   void contract_slots(const Vec& y, bool squared = false) const;
   void copy_equations(const Vec& dst, const Vec& src) const;  // the first num_equations values
   // dst (num_slots long) = src's equations, then its slots expanded: a velocity or an

@@ -1273,7 +1273,10 @@ First H200 numbers (2026-11-21, Vista gh, 40^3, `benchmarks/results/vista-gh-202
 (flat gather); SSPbrick 139 us (flat gather, cached); the undamped column 247 us, with 100 embedded
 piles 270 us (+9 %); expand 9.0 us and contract 8.9 us, so the piles' cost on the GPU is the three
 small launches (expand u, expand v, contract), not arithmetic: fusing the two expands is the first
-optimization candidate. OpenSees on Vista (2026-11-21, asked by the user: no more trips to Stampede3 for OpenSees work):
+optimization candidate. Done (2026-11-21, `expand_slots(u, v)`: one launch, the same bits): the piles
+column 270 -> 268 us on the H200 (+9 % -> +8.5 % over the soil alone), 626 -> 614 us on 72 Grace
+threads: a small gain, so the piles' remaining cost is the beam batch's own launch and the
+contraction, not the expands. OpenSees on Vista (2026-11-21, asked by the user: no more trips to Stampede3 for OpenSees work):
 `scripts/vista_opensees.sh` builds the reference OpenSees and the drivers in `build/reference-vista`
 with GCC 13.2, NVPL (BLAS / LAPACK) and the system's Tcl 8.6, `-ffp-contract=off`; `../OpenSees` is
 read only and Stampede3's `build/reference-s3-intel` is untouched. Checked: the pile against the

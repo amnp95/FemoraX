@@ -303,6 +303,27 @@ void InternalForce::expand_slots(const Vec& x) const {
       });
 }
 
+// The slots of two vectors in one launch (u and v before a force evaluation): the same sums in
+// the same order as two expand_slots calls, so the same bits; one launch less per evaluation.
+void InternalForce::expand_slots(const Vec& x, const Vec& y) const {
+  if (nslots_ <= neq_) return;
+  const auto cs = con_start_;
+  const auto ce = con_eq_;
+  const auto cw = con_w_;
+  const Index n = neq_;
+  Kokkos::parallel_for(
+      "constraint_expand2", Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(0, nslots_ - neq_),
+      KOKKOS_LAMBDA(const Index k) {
+        double sx = 0.0, sy = 0.0;
+        for (auto t = cs(k); t < cs(k + 1); ++t) {
+          sx += cw(t) * x(ce(t));
+          sy += cw(t) * y(ce(t));
+        }
+        x(n + k) = sx;
+        y(n + k) = sy;
+      });
+}
+
 void InternalForce::contract_slots(const Vec& y, bool squared) const {
   if (nslots_ <= neq_) return;
   const auto es = eq_start_;
@@ -332,8 +353,7 @@ void InternalForce::require_no_constraints(const char* what) const {
 
 void InternalForce::compute(const ForceSettings& settings) {
   for (auto& b : batches_) b->set_step(step);
-  expand_slots(u);
-  expand_slots(v);
+  expand_slots(u, v);
   const ForceSettings s = resolve(settings);
   if (s.scatter == Scatter::Colored && !has_coloring_) {
     Kokkos::abort("InternalForce: colored scatter needs CompileOptions::build_coloring");
@@ -377,8 +397,7 @@ std::int64_t InternalForce::subset_elements(int subset) const {
 
 void InternalForce::compute_subset(const ForceSettings& settings, int subset) {
   for (auto& b : batches_) b->set_step(step);
-  expand_slots(u);
-  expand_slots(v);
+  expand_slots(u, v);
   const ForceSettings s = resolve(settings);
   const Subset& sub = subsets_[static_cast<std::size_t>(subset)];
   for (std::size_t bi = 0; bi < batches_.size(); ++bi)
