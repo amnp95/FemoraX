@@ -42,11 +42,11 @@ TEST(ElasticSection3d, ResultantsAndTangentsAreOpenSees) {
 
 TEST(ElasticSection3d, OrderAndPropertiesAreOpenSees) {
   // getType(): P, MZ, MY, T, with OpenSees' code numbers.
-  EXPECT_EQ(static_cast<int>(ElasticSection3d::CODE[0]), 2);
-  EXPECT_EQ(static_cast<int>(ElasticSection3d::CODE[1]), 1);
-  EXPECT_EQ(static_cast<int>(ElasticSection3d::CODE[2]), 4);
-  EXPECT_EQ(static_cast<int>(ElasticSection3d::CODE[3]), 6);
-  EXPECT_EQ(ElasticSection3d::CODE[3], SectionResponse::T);
+  EXPECT_EQ(static_cast<int>(ElasticSection3d::code(0)), 2);
+  EXPECT_EQ(static_cast<int>(ElasticSection3d::code(1)), 1);
+  EXPECT_EQ(static_cast<int>(ElasticSection3d::code(2)), 4);
+  EXPECT_EQ(static_cast<int>(ElasticSection3d::code(3)), 6);
+  EXPECT_EQ(ElasticSection3d::code(3), SectionResponse::T);
   const ElasticSection3d::Params p{1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
   const auto g = ElasticSection3d::properties(p);
   EXPECT_EQ(g.A, 2.0);

@@ -1239,7 +1239,22 @@ retry and substeps take over. Explicit stages: checked on the committed state wi
 (`nan_check_interval`) and at the end of the stage; the run stops naming the element and the step.
 Test (`BeamKernels.ForceBeamFailedIterationFailsTheStep`, an impossible tolerance): the element
 reports it, CentralDifference stops at the first check, Newmark fails its first step, both naming the
-element. Next: step 4 (schema 1.3, asked with the exact text), reader, converter.
+element. Step 4, first part done (2026-11-21, approved by the user with the text as proposed):
+schema 1.3 (`schema/v0/README.md` 3.4.2): `forceBeamColumn` element groups (the displacement beam's
+attributes, Lobatto `integration_points` 3 to 7, optional `max_iterations` (default 10) and
+`tolerance` (default 1e-12)); the reader (1.3; 1.0 to 1.2 still read), 7 fixtures, the writer's
+version. Not yet: the Tcl converter (`nonlinearBeamColumn`), the OpenSees system test.
+**First GPU build of the beams (Vista gh, 2026-11-21): four nvcc problems, none visible on CPUs.**
+(1) A device kernel may not read an element's or section's static `std::array` (`NODE_NDF`, the
+section's `CODE`): the section's codes are now a function `code(j)`, and the beam operator's launch
+captures the node DOFs as a plain array. (2) `std::array::operator[]` is a host function for nvcc
+(warning 20013, not an error): the kernel body then silently did nothing, so the beams' implicit
+operator returned zero on the GPU (forces and explicit runs were right); found with a device-side
+stage test, fixed with the plain array. (3) A function-local type in a device lambda (DRM's rotation)
+and (4) a braced list in a range-for (the reader) do not compile. Rule from now on: a kernel change
+is checked on a GPU node before it counts as done, and warning 20013 in new code is treated as an
+error (seven old instances remain: implicit constructors and quiet_NaN, in code whose GPU tests
+pass). Next: the converter, the OpenSees system test, benchmarks.
 
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);

@@ -124,7 +124,7 @@ struct DispBeam3d {
   FEMORAX_HD static void section_deformation(const double v[6], double oneOverL, double xi, double e[ORDER]) {
     const double xi6 = 6.0 * xi;
     for (int j = 0; j < ORDER; j++) {
-      switch (Sec::CODE[j]) {
+      switch (Sec::code(j)) {
         case SectionResponse::P: e[j] = oneOverL * v[0]; break;
         case SectionResponse::MZ: e[j] = oneOverL * ((xi6 - 4.0) * v[1] + (xi6 - 2.0) * v[2]); break;
         case SectionResponse::MY: e[j] = oneOverL * ((xi6 - 4.0) * v[3] + (xi6 - 2.0) * v[4]); break;
@@ -158,7 +158,7 @@ struct DispBeam3d {
         const double wti = wt[i] * oneOverL;
         double tmp;
         for (int j = 0; j < ORDER; j++) {
-          switch (Sec::CODE[j]) {
+          switch (Sec::code(j)) {
             case SectionResponse::P:
               for (int k = 0; k < ORDER; k++) ka[k][0] += ks[k][j] * wti;
               break;
@@ -183,7 +183,7 @@ struct DispBeam3d {
           }
         }
         for (int j = 0; j < ORDER; j++) {
-          switch (Sec::CODE[j]) {
+          switch (Sec::code(j)) {
             case SectionResponse::P:
               for (int k = 0; k < 6; k++) kb[0][k] += ka[j][k];
               break;
@@ -211,7 +211,7 @@ struct DispBeam3d {
       double si;
       for (int j = 0; j < ORDER; j++) {
         si = s[j] * wt[i];
-        switch (Sec::CODE[j]) {
+        switch (Sec::code(j)) {
           case SectionResponse::P: q[0] += si; break;
           case SectionResponse::MZ:
             q[1] += (xi6 - 4.0) * si;

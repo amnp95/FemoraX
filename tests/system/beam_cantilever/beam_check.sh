@@ -16,7 +16,7 @@ cd "$W"
 "$PY" - <<'PY'
 import h5py, numpy as np
 f = h5py.File("implicit.femorax.h5", "r")
-assert tuple(f.attrs["schema_version"]) == (1, 2), f.attrs["schema_version"]
+assert tuple(f.attrs["schema_version"]) == (1, 3), f.attrs["schema_version"]
 assert set(f["nodes"]["ndf"][...]) == {6}
 s = f["sections"]["1"].attrs
 assert s["type"] == "Elastic" and abs(s["Iz"] - 0.02) < 1e-15

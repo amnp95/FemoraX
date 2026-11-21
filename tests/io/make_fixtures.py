@@ -143,6 +143,20 @@ def m_beam(section=None, transformation=None, beam=None, ndf=6, version=None, se
     return m
 
 
+def m_force_beam(points=5, beam=None, version=None):
+    """The m_beam model with its element group as a forceBeamColumn (schema 1.3): Lobatto
+    `points` (3 to 7 builds), and `beam` attributes (max_iterations, tolerance, ...)."""
+    base = m_beam(beam=beam, version=version)
+
+    def m(f):
+        base(f)
+        g = f["elements"]["beam"]
+        g.attrs["type"] = "forceBeamColumn"
+        g.attrs["integration_points"] = np.int32(points)
+
+    return m
+
+
 def m_minimal(f):
     for name in ("constraints", "damping", "time_series", "patterns", "recorders"):
         del f[name]
@@ -743,9 +757,20 @@ CASES = [
     ("not_hdf5", None, "invalid", "as an HDF5 file", None),
     ("no_version", "explicit", "invalid", "missing / attribute 'schema_version'", m_no_version),
     ("major_version", "explicit", "invalid", "this reader reads 1.x files", m_version(2, 0)),
-    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(1, 3)),
+    ("newer_minor", "explicit", "invalid", "newer than this reader", m_version(1, 4)),
     # schema 1.1: beams (/sections, /transformations, dispBeamColumn)
     ("beam", "explicit", "valid", "", m_beam()),
+    # schema 1.3: forceBeamColumn groups (Lobatto points, the element iteration's settings)
+    ("force_beam", "explicit", "valid", "", m_force_beam()),
+    ("force_beam_settings", "explicit", "valid", "",
+     m_force_beam(beam={"max_iterations": np.int32(20), "tolerance": np.float64(1e-10)})),
+    ("force_beam_in_1_2_file", "explicit", "invalid", "was added in schema 1.3", m_force_beam(version=[1, 2])),
+    ("force_beam_points_2", "explicit", "unsupported", "3 to 7 Lobatto points", m_force_beam(points=2)),
+    ("force_beam_points_8", "explicit", "unsupported", "3 to 7 Lobatto points", m_force_beam(points=8)),
+    ("force_beam_max_iterations_0", "explicit", "invalid", "'max_iterations' must be >= 1",
+     m_force_beam(beam={"max_iterations": np.int32(0)})),
+    ("force_beam_tolerance_0", "explicit", "invalid", "'tolerance' must be finite and > 0",
+     m_force_beam(beam={"tolerance": np.float64(0.0)})),
     ("beam_section_tag_shared_with_a_material", "explicit", "valid", "", m_beam()),
     ("beam_mass_per_length_offsets_consistent", "implicit", "valid", "",
      m_beam(transformation={"type": "Linear", "joint_offset_i": np.array([0.0, 0.0, 0.1])},

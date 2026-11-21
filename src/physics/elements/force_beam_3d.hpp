@@ -157,7 +157,7 @@ struct ForceBeam3d {
 
   FEMORAX_HD static bool has_torsion() {
     for (int j = 0; j < ORDER; ++j)
-      if (Sec::CODE[j] == SectionResponse::T) return true;
+      if (Sec::code(j) == SectionResponse::T) return true;
     return false;
   }
 
@@ -176,7 +176,7 @@ struct ForceBeam3d {
   FEMORAX_HD static void section_forces(double xL, double oneOverL, const double Se[NEBD], double Ss[ORDER]) {
     const double xL1 = xL - 1.0;
     for (int ii = 0; ii < ORDER; ii++) {
-      switch (Sec::CODE[ii]) {
+      switch (Sec::code(ii)) {
         case SectionResponse::P: Ss[ii] = Se[0]; break;
         case SectionResponse::MZ: Ss[ii] = xL1 * Se[1] + xL * Se[2]; break;
         case SectionResponse::VY: Ss[ii] = oneOverL * (Se[1] + Se[2]); break;
@@ -195,7 +195,7 @@ struct ForceBeam3d {
     double fb[ORDER][NEBD] = {};
     double tmp;
     for (int ii = 0; ii < ORDER; ii++) {
-      switch (Sec::CODE[ii]) {
+      switch (Sec::code(ii)) {
         case SectionResponse::P:
           for (int jj = 0; jj < ORDER; jj++) fb[jj][0] += fSec[jj][ii] * wtL;
           break;
@@ -234,7 +234,7 @@ struct ForceBeam3d {
       }
     }
     for (int ii = 0; ii < ORDER; ii++) {
-      switch (Sec::CODE[ii]) {
+      switch (Sec::code(ii)) {
         case SectionResponse::P:
           for (int jj = 0; jj < NEBD; jj++) f[0][jj] += fb[ii][jj];
           break;
@@ -281,7 +281,7 @@ struct ForceBeam3d {
     for (int ii = 0; ii < ORDER; ii++) {
       const double dei = dvs[ii] * wtL;
       double tmp;
-      switch (Sec::CODE[ii]) {
+      switch (Sec::code(ii)) {
         case SectionResponse::P: vr[0] += dei; break;
         case SectionResponse::MZ:
           vr[1] += xL1 * dei;

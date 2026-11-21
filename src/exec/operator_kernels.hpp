@@ -78,6 +78,7 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
   static_assert(MatrixFreeElement<Elem>, "the matrix-free operator needs a MatrixFreeElement");
   using Mat = typename Elem::Material;
   constexpr int NNODE = Elem::NNODE, NDOF = Elem::NDOF, NDM = Elem::NDM, NS = Mat::NSTRAIN;
+  constexpr int kNodeNdf = Elem::NODE_NDF[0];  // a constant: no std::array call in device code
   const auto node = b.node, eq = b.eq, param = b.param, colors = b.color_elements;
   const auto params = b.params;
   const auto geo = b.geometry, cst = b.constants;
@@ -97,7 +98,7 @@ void launch_operator(const DevBatch<Elem>& b, const DevTangents<Elem>& t, const 
         for (int a = 0; a < NDOF; ++a) {
           const Index q = eq(a * P + e);
           eqe[a] = q;
-          if (unit_dir >= 0) xe_e[a] = (a % Elem::NODE_NDF[0]) == unit_dir ? 1.0 : 0.0;
+          if (unit_dir >= 0) xe_e[a] = (a % kNodeNdf) == unit_dir ? 1.0 : 0.0;
           else xe_e[a] = (!Diagonal && q >= 0) ? x(q) : 0.0;
           ue[a] = (SourceI == static_cast<int>(Source::Recomputed) && q >= 0) ? u(q) : 0.0;
         }

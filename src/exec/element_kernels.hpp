@@ -249,6 +249,12 @@ void launch_element_operator(const DevBatch<Elem>& b, const Vec& coords, Index N
   const Index P = b.padded;
   const std::int64_t base = b.slot_offset;
   const StepContext step = b.step;
+  // The node DOFs as a plain array the device lambda captures by value. nvcc cannot read the
+  // element's static NODE_NDF in device code, and std::array's operator[] is a host function
+  // there (warning 20013: the kernel body then silently does nothing, found 2026-11-21: the beam
+  // operator returned zero on GPUs).
+  int ndf[NNODE];
+  for (int a = 0; a < NNODE; ++a) ndf[a] = Elem::NODE_NDF[static_cast<std::size_t>(a)];
   Kokkos::parallel_for(
       Diagonal ? "element_operator_diagonal_own" : "element_operator_apply_own",
       Kokkos::RangePolicy<Space, Kokkos::IndexType<Index>>(begin, end), KOKKOS_LAMBDA(const Index i) {
@@ -256,7 +262,7 @@ void launch_element_operator(const DevBatch<Elem>& b, const Vec& coords, Index N
         const DevParams<Elem>& pr = params(param(e));
         double ue[NDOF], xv[NDOF], ye[NDOF], xel[NNODE][NDM];
         for (int a = 0, kk = 0; a < NNODE; ++a)
-          for (int d = 0; d < Elem::NODE_NDF[a]; ++d, ++kk) {
+          for (int d = 0; d < ndf[a]; ++d, ++kk) {
             const Index q = eq(kk * P + e);
             ue[kk] = q >= 0 ? u(q) : 0.0;
             if (unit_dir >= 0) xv[kk] = d == unit_dir ? 1.0 : 0.0;

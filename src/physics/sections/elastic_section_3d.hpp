@@ -20,8 +20,13 @@ struct ElasticSection3d {
   static constexpr MaterialKind KIND = MaterialKind::Section3d;
   static constexpr int NSTRAIN = 4;
   static constexpr int NSTATE = 0;
-  static constexpr std::array<SectionResponse, NSTRAIN> CODE = {SectionResponse::P, SectionResponse::MZ,
-                                                                SectionResponse::MY, SectionResponse::T};
+  // The response named by each deformation (getType order), as a function: nvcc does not use
+  // static arrays of the section in device code.
+  FEMORAX_HD static constexpr SectionResponse code(int j) {
+    constexpr SectionResponse c[NSTRAIN] = {SectionResponse::P, SectionResponse::MZ, SectionResponse::MY,
+                                            SectionResponse::T};
+    return c[j];
+  }
   static constexpr TangentSymmetry TANGENT = TangentSymmetry::SymmetricPositiveDefinite;
   static constexpr bool CONSTANT_TANGENT = true;
 

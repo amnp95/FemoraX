@@ -1,6 +1,6 @@
-# FemoraX model file, schema version 1.2
+# FemoraX model file, schema version 1.3
 
-Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 and 0.6 approved 2026-11-09; 1.1 and 1.2 approved 2026-11-20**. Every change bumps the version (CLAUDE.md rule 9); see
+Status: **0.0, 0.1 and 0.2 approved 2026-11-05; 0.3 approved 2026-11-06; 0.4 approved 2026-11-07; 0.5 and 0.6 approved 2026-11-09; 1.1 and 1.2 approved 2026-11-20; 1.3 approved 2026-11-21**. Every change bumps the version (CLAUDE.md rule 9); see
 "Versioning".
 
 Scope: what milestone 1 needs to run Femora's layered elastic soil column
@@ -58,6 +58,7 @@ Reference versions: Femora `79bd4f6`, OpenSees `955ceb0` (`docs/dependencies.md`
 | 0.7 | optional `/damping/uniform` (Uniform damping per element region, section 3.7.1) |
 | 1.0 | H5DRM: the DRM file is read as it is, its stations and motions in one frame (no flip of the z motion, which OpenSees and FemoraX 0.x applied), and a coordinate transformation turns the motions with the stations; the box description `drmbox_*` is optional. Breaking: an H5DRM pattern in a 0.x file is refused (section 3.9) |
 | 1.1 | beams: optional `/sections/<tag>` (Elastic, section 3.3.1) and `/transformations/<tag>` (Linear, PDelta, Corotational; section 3.3.2), element type `"dispBeamColumn"` (section 3.4.1). Sections have their own tag space (a section and an nD material may share a tag) |
+| 1.3 | element type `"forceBeamColumn"`: the force-based beam (section 3.4.2) |
 | 1.2 | constraints: optional `/constraints/mp/rigid_link`, `/constraints/mp/rigid_diaphragm/<index>` and `/constraints/mp/embedded_node` (section 3.6) |
 | 0.3 | analysis: `analysis_type` `"Static"` with the `LoadControl` integrator (`load_increment`, optional `num_iter`, `min_increment`, `max_increment`); `algorithm` `"ModifiedNewton"` (optional `modified_newton_initial`, `modified_newton_factor_once`); optional FemoraX solver attributes `solver_tolerance`, `solver_max_iterations`, `preconditioner` |
 
@@ -246,6 +247,28 @@ refused in explicit stages (docs/design.md, "Structures").
 Body force semantics (both elements, from `Brick.cpp` and `SSPbrick.cpp`): while no
 `eleLoad` pattern acts on the element, `b` is applied as a **constant** body force in every
 step, independent of any time series. v0 has no `eleLoad`, so `b` is always applied.
+
+### 3.4.2 `forceBeamColumn` groups *(1.3)*
+
+`element nonlinearBeamColumn <tag> <iNode> <jNode> <numIntgrPts> <secTag> <transfTag> [-mass m]
+-iter maxIters tol` (Femora's force-based beam; OpenSees' `ForceBeamColumn3d` with
+`LobattoBeamIntegration`). The same attributes as `dispBeamColumn` (section 3.4.1), with the
+Lobatto point count and the element iteration's settings:
+
+| Item | Shape, type | Meaning |
+|---|---|---|
+| attr `type` | string | `"forceBeamColumn"` |
+| attr `section` | int32 | tag of a `/sections` group |
+| attr `transformation` | int32 | tag of a `/transformations` group |
+| attr `integration_points` | int32 | Lobatto points; builds run 3 to 7 (another count is unsupported) |
+| attr `density` / `mass_per_length` / `consistent_mass` | as `dispBeamColumn` | the same mass standard |
+| attr `max_iterations` | int32 *(optional, default 10)* | the element iteration's maximum (OpenSees `-iter`), at least 1 |
+| attr `tolerance` | float64 *(optional, default 1e-12)* | the element iteration's tolerance, finite and > 0 |
+| `tags` | `[M]` int32 | element tags |
+| `connectivity` | `[M, 2]` int32 | node tags I and J; both nodes must have `ndf = 6` |
+
+A non-converged element iteration fails the step (docs/design.md, "Beams: the force-based
+beam"): implicit attempts retry through Femora's recovery, explicit runs stop naming the element.
 
 ### 3.5 `/mass` *(optional)*
 

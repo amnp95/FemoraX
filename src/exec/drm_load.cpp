@@ -14,6 +14,12 @@
 namespace femorax::exec {
 
 namespace {
+
+// The turning matrix of a coordinate transformation (namespace scope: a device lambda may not
+// use a function-local type).
+struct DrmRotation {
+  double m[3][3];
+};
 using Index = std::int32_t;
 
 template <class T>
@@ -197,9 +203,7 @@ void DrmLoad::apply(double t, const Vec& f) {
   // transformation, they turn with the stations (u_model = T u_file; docs/deviations.md,
   // "H5DRM: the file's frame"). OpenSees instead flips the z motion and never turns it.
   const bool rotate = pattern_.do_coordinate_transformation;
-  struct Mat3 {
-    double m[3][3];
-  } R{};
+  DrmRotation R{};
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j) R.m[i][j] = pattern_.T[i][j];
   Kokkos::parallel_for(

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <array>
 #include <cmath>
 
 #include <sys/stat.h>
@@ -115,6 +116,14 @@ void require_minor(const Model& m, int minor, const std::string& what) {
   if (m.version.major == 0 && m.version.minor < minor) {
     invalid(what + " was added in schema 0." + std::to_string(minor) + ", but the file declares " +
             std::to_string(m.version.major) + "." + std::to_string(m.version.minor));
+  }
+}
+
+// An item schema 1.3 added (forceBeamColumn element groups).
+void require_1_3(const Model& m, const std::string& what) {
+  if (m.version.major < 1 || (m.version.major == 1 && m.version.minor < 3)) {
+    invalid(what + " was added in schema 1.3, but the file declares " + std::to_string(m.version.major) + "." +
+            std::to_string(m.version.minor));
   }
 }
 
@@ -385,8 +394,9 @@ void read_sections(Group& root, Model& m) {
     d.Iy = g.attr_double("Iy");
     d.G = g.attr_double("G");
     d.J = g.attr_double("J");
-    for (const auto& [k, v] : {std::pair<const char*, double>{"E", d.E}, {"A", d.A}, {"Iz", d.Iz}, {"Iy", d.Iy},
-                               {"G", d.G}, {"J", d.J}})
+    const std::array<std::pair<const char*, double>, 6> values = {
+        {{"E", d.E}, {"A", d.A}, {"Iz", d.Iz}, {"Iy", d.Iy}, {"G", d.G}, {"J", d.J}}};
+    for (const auto& [k, v] : values)
       if (!(std::isfinite(v) && v > 0.0)) invalid(g.attr_item(k) + " must be finite and positive");
     sec.data = d;
     sec.meta = read_meta(g);
@@ -440,10 +450,12 @@ void read_elements(Group& root, Model& m, const std::map<std::int32_t, ElementGr
     if (type == "stdBrick") eg.type = ElementType::StdBrick;
     else if (type == "SSPbrick") eg.type = ElementType::SSPbrick;
     else if (type == "dispBeamColumn") eg.type = ElementType::DispBeamColumn;
-    else unsupported("element type " + quoted(type) + " in " + g.path(), "stdBrick, SSPbrick, dispBeamColumn");
+    else if (type == "forceBeamColumn") eg.type = ElementType::ForceBeamColumn;
+    else unsupported("element type " + quoted(type) + " in " + g.path(), "stdBrick, SSPbrick, dispBeamColumn, forceBeamColumn");
 
-    if (eg.type == ElementType::DispBeamColumn) {
-      require_1_1(m, g.path() + " (type \"dispBeamColumn\")");
+    if (is_beam(eg.type)) {
+      if (eg.type == ElementType::ForceBeamColumn) require_1_3(m, g.path() + " (type \"forceBeamColumn\")");
+      else require_1_1(m, g.path() + " (type \"dispBeamColumn\")");
       eg.material = g.attr_int("section");
       const std::int32_t t = g.attr_int("transformation");
       const auto it = transformations.find(t);
@@ -463,6 +475,17 @@ void read_elements(Group& root, Model& m, const std::map<std::int32_t, ElementGr
         eg.beam.mass_per_length = *mpl;
       }
       eg.beam.consistent_mass = g.opt_attr_bool("consistent_mass").value_or(false);
+      if (eg.type == ElementType::ForceBeamColumn) {
+        // The element iteration (Femora's -iter maxIters tol; OpenSees' defaults 10 and 1e-12).
+        if (const auto it_max = g.opt_attr_int("max_iterations")) {
+          if (*it_max < 1) invalid(g.attr_item("max_iterations") + " must be >= 1");
+          eg.beam.max_iterations = *it_max;
+        }
+        if (const auto tol = g.opt_attr_double("tolerance")) {
+          if (!(std::isfinite(*tol) && *tol > 0.0)) invalid(g.attr_item("tolerance") + " must be finite and > 0");
+          eg.beam.tolerance = *tol;
+        }
+      }
       const int nn = node_count(eg.type);
       auto tags = g.dataset_int("tags");
       auto conn = g.dataset_int("connectivity", nn);

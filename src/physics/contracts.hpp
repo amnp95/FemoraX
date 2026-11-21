@@ -142,7 +142,7 @@ concept Section = requires {
   requires detail::is_constexpr_int<decltype(S::NSTRAIN)>;
   requires detail::is_constexpr_int<decltype(S::NSTATE)>;
   requires S::NSTRAIN > 0 && S::NSTATE >= 0;
-  requires std::is_same_v<std::remove_cv_t<decltype(S::CODE)>, std::array<SectionResponse, S::NSTRAIN>>;
+  requires std::is_same_v<decltype(S::code(0)), SectionResponse>;
   requires std::is_same_v<decltype(S::TANGENT), const TangentSymmetry>;
   requires std::is_same_v<decltype(S::CONSTANT_TANGENT), const bool>;
 } && requires(const typename S::Params& p, Strided<const double> committed, Strided<double> trial,
