@@ -144,6 +144,18 @@ Current:
   and compaction adds a scan, a count copied to the host, the per-point results and a
   second predictor pass in the corrector. CPU (8 threads): no gain either, as expected
   without warp divergence. The question for TACC is the H100/H200 balance. Not baselines.
+- `explicit_force_beams/<n>^3/{disp,force}`: beams alone, n x n vertical cantilevers of n
+  elements each (elastic section, PDelta, their own lumped mass, no damping): `disp` is
+  dispBeamColumn with 3 Gauss-Legendre points, `force` forceBeamColumn with 5 Lobatto points
+  (one element iteration for the elastic section). Traffic: u, v, f, the maps (2 nodes, 12
+  equations, 1 parameter index), the coordinates (beams recompute their geometry), the
+  gather's slots and the force beam's point state (committed read, trial written); `bound` =
+  compute (64,000 beams fit in the caches). Vista gh, 40^3 (64,000 beams), 2026-11-21, not in
+  the baseline yet: H200 `disp` 22 us, `force` 407 us (undamped stdBrick, 64,000 elements:
+  99 us); Grace, 72 threads: 102 us and 958 us (stdBrick 769 us). The force beam costs 9
+  (CPU) to 19 (GPU) displacement beams: its update from the committed state forms and
+  inverts the 6 x 6 flexibility and reads and writes 5 points' state, the first candidate if
+  a model with many force beams shows it.
 
 Planned: the explicit step (time per step and DOFs per second) and the recorders' per-step
 cost.

@@ -34,6 +34,17 @@
 //                                          and with the piles (expand, kernels, contract);
 //                                          traffic: the soil's alone (bound memory), so the
 //                                          piles' cost shows as a lower bandwidth.
+//   explicit_force_beams/<n>^3/{disp,force} beams alone: n x n vertical cantilevers of n
+//                                          elements each, elastic section, PDelta, their own
+//                                          lumped mass, no damping; "disp": dispBeamColumn
+//                                          with 3 Gauss-Legendre points, "force":
+//                                          forceBeamColumn with 5 Lobatto points (one element
+//                                          iteration for the elastic section). The default
+//                                          force evaluation. Traffic: u, v, f, the maps
+//                                          (2 nodes + 12 equations + 1 parameter index), the
+//                                          coordinates (beams recompute their geometry), the
+//                                          gather's slots, and the force beam's point state
+//                                          (committed read, trial written).
 // Compulsory traffic per call: u, v, the element maps (8 nodes + 24 equations + 1 parameter
 // index, int32), f (zeroed, then read-modify-written once per equation), and either the
 // coordinates (recompute) or the geometry cache (cached); the gather scatter adds its slots
@@ -322,8 +333,64 @@ void register_constraints(Registry& registry, const Options& options) {
   }
 }
 
+// n x n vertical cantilevers of n beams each (see the header).
+void register_beams(Registry& registry, const Options& options) {
+  const int n = options.side();
+  compile::CompileOptions co;
+  co.renumbering = compile::Renumbering::RCM;
+  co.simd_width = simd_width();
+  for (const bool force : {false, true}) {
+    io::Model m;
+    m.materials.push_back({1, io::ElasticSection3dData{2.0e8, 0.05, 4.0e-4, 4.0e-4, 7.7e7, 8.0e-4}, {}});
+    io::ElementGroup g;
+    g.id = "beams";
+    g.type = force ? io::ElementType::ForceBeamColumn : io::ElementType::DispBeamColumn;
+    g.material = 1;
+    g.beam.transf = 1;  // PDelta
+    g.beam.vecxz = {1.0, 0.0, 0.0};
+    g.beam.points = force ? 5 : 3;
+    g.beam.density = 7.8;
+    std::int32_t node = 1, elem = 1;
+    for (int i = 0; i < n; ++i)
+      for (int j = 0; j < n; ++j)
+        for (int k = 0; k <= n; ++k) {
+          m.nodes.tags.push_back(node);
+          m.nodes.ndf.push_back(6);
+          m.nodes.coords.insert(m.nodes.coords.end(), {4.0 * i, 4.0 * j, 1.0 * k});
+          if (k == 0)
+            for (int d = 1; d <= 6; ++d) {
+              m.fix.node.push_back(node);
+              m.fix.dof.push_back(d);
+            }
+          else {
+            g.tags.push_back(elem++);
+            g.connectivity.insert(g.connectivity.end(), {node - 1, node});
+          }
+          ++node;
+        }
+    m.elements.push_back(g);
+    const auto compiled = std::make_shared<compile::Compiled>(compile::compile_model(m, co));
+    auto k = std::make_shared<exec::InternalForce>(*compiled, exec::GeometryCache::Off);
+    k->fill(1e-4, 1e-3);
+    const std::int64_t neq = compiled->dofs.num_equations, nel = k->num_elements(), N = compiled->dofs.num_nodes();
+    const auto v = k->resolve(exec::default_force_settings());
+    std::int64_t nstate = 0;
+    for (const auto& b : compiled->batches) nstate += static_cast<std::int64_t>(b.nstate) * b.count;
+    std::int64_t bytes = 2 * neq * 8 + 3 * neq * 8 + nel * 15 * 4 + 3 * N * 8 + 2 * nstate * 8;
+    if (v.scatter == exec::Scatter::Gather) bytes += 2 * nel * 12 * 8 + nel * 12 * 8 + neq * 8;
+    registry.add({.name = "explicit_force_beams/" + std::to_string(n) + "^3/" + (force ? "force" : "disp"),
+                  .unit = "call",
+                  .bytes = bytes,
+                  .items = nel,
+                  .run = [k, v] { k->compute(v); },
+                  .gated = true,
+                  .bound = "compute"});
+  }
+}
+
 void register_explicit(Registry& registry, const Options& options) {
   register_constraints(registry, options);
+  register_beams(registry, options);
   register_model(registry, options, true);
   register_model(registry, options, false);
   register_model(registry, options, true, io::ElementType::SSPbrick);

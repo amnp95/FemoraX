@@ -1285,8 +1285,21 @@ two beams within 9.0e-16 of each other there). The first gh baseline is recorded
 ties it to one node: to be changed to the node type). Femora in `.venv-vista` (2026-11-21): the four system tests
 that need it (single-precision VTKHDF, nonlinear, wide column, Femora's example) now run on Vista
 too. `benchmarks/run_all.sh` ignores an inherited OMP_NUM_THREADS; baselines are named by machine
-and node type (`tacc-vista-gh-cuda270336.json`). Next: the live OpenSees tests on Vista (the
-presets' FEMORAX_OPENSEES), a force-beam frame against OpenSees.
+and node type (`tacc-vista-gh-cuda270336.json`). The live OpenSees tests run on Vista
+(2026-11-21: the presets' FEMORAX_OPENSEES points at `build/reference-vista`). Step 5 done
+(2026-11-21): `system.force_beam_frame_vs_stored_opensees` (`tests/system/force_beam_frame/`): a
+two-storey, one-bay 3D frame, one force beam per member (PDelta columns with 5 and 3 points, Linear
+girders with 7 and 4 points, the first floor's x girders with rigid joint offsets), unequal nodal
+masses so the floors twist, a base pulse, Newmark with Newton, against OpenSees' own
+nonlinearBeamColumn run (stored from the Vista build): within 2.9e-15 of the peak on the CPU and
+2.1e-15 on the H200 (displacements and rotations of a node per floor, every joint's x). Step 6 done
+(2026-11-21): `explicit_force_beams/<n>^3/{disp,force}` (`benchmarks/bench_explicit.cpp`,
+benchmarks/README.md): 64,000 beams alone, Vista gh: the displacement beam (3 points) 22 us on the
+H200 and 102 us on 72 Grace threads, the force beam (5 points) 407 us and 958 us (the undamped
+stdBrick column of 64,000 elements: 99 us and 769 us). The force beam's cost is its update from the
+committed state (the 6 x 6 flexibility formed and inverted, five points' state read and written):
+an optimization candidate only if a model with many force beams shows it. Not in the gh baseline
+yet (a baseline changes only with the user's approval).
 
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);
