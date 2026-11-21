@@ -41,6 +41,12 @@ compiler keeps the order of floating-point operations. It writes a launcher,
 the `s3-*` presets use it for the live comparisons (`system.vtkhdf_vs_opensees`,
 `system.implicit_vs_opensees`, both passing).
 
+On Vista, `scripts/vista_opensees.sh` (on a compute node, about 3 minutes) builds it with GCC 13.2,
+NVIDIA's NVPL for BLAS and LAPACK and the system's Tcl 8.6 into `build/reference-vista`, with
+`-ffp-contract=off` (aarch64); its `OpenSees.sh` launcher and `drivers/` work like Stampede3's. Its
+output equals the stored reference data to rounding (the pile test within 9e-16, the
+`force_beam_column` driver within 1.2e-18).
+
 The stored data stays the GCC data from the laptop. The Intel drivers agree with it to
 rounding (2026-11-10): constraints 11 of 11 files identical; elements 22 of 32 identical,
 the others within 8.4e-15 of each file's largest value; materials 57 of 86 identical, the

@@ -1273,7 +1273,17 @@ First H200 numbers (2026-11-21, Vista gh, 40^3, `benchmarks/results/vista-gh-202
 (flat gather); SSPbrick 139 us (flat gather, cached); the undamped column 247 us, with 100 embedded
 piles 270 us (+9 %); expand 9.0 us and contract 8.9 us, so the piles' cost on the GPU is the three
 small launches (expand u, expand v, contract), not arithmetic: fusing the two expands is the first
-optimization candidate. Next: baselines (with the user), OpenSees' own force-beam references.
+optimization candidate. OpenSees on Vista (2026-11-21, asked by the user: no more trips to Stampede3 for OpenSees work):
+`scripts/vista_opensees.sh` builds the reference OpenSees and the drivers in `build/reference-vista`
+with GCC 13.2, NVPL (BLAS / LAPACK) and the system's Tcl 8.6, `-ffp-contract=off`; `../OpenSees` is
+read only and Stampede3's `build/reference-s3-intel` is untouched. Checked: the pile against the
+stored Stampede3 output within 9.0e-16, the `force_beam_column` driver against its stored data
+within 1.2e-18. With it the force beam has its direct reference: OpenSees' nonlinearBeamColumn run
+of the pile (stored, `opensees_force_pile.txt`), FemoraX within 2.1e-15 of the peak (and OpenSees'
+two beams within 9.0e-16 of each other there). The first gh baseline is recorded
+(`benchmarks/baselines/`, approved by the user; its file is named after the node's hostname, which
+ties it to one node: to be changed to the node type). Next: the live OpenSees tests on Vista (the
+presets' FEMORAX_OPENSEES, Femora in `.venv-vista`), a force-beam frame against OpenSees.
 
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);

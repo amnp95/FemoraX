@@ -293,8 +293,8 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/pile_in_soil/pile_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_pile_in_soil
                    ${femorax_pile_tol})
-  # The same pile as force-based beams (schema 1.3) against the same stored OpenSees output (an
-  # elastic prismatic member: OpenSees' two beams coincide; pile_check.sh, "force").
+  # The same pile as force-based beams (schema 1.3) against OpenSees' own nonlinearBeamColumn run
+  # of it (stored; pile_check.sh, "force").
   add_test(NAME system.force_beam_pile_in_soil_vs_stored_opensees
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/pile_in_soil/pile_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON}
