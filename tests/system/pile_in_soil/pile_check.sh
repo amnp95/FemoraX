@@ -3,9 +3,14 @@
 # stored OpenSees output (OpenSees 955ceb0, Stampede3 Intel build; regenerate with
 #   python make_pile.py <dir> && cd <dir> && OpenSees pile.tcl
 # and copy opensees_pile.txt and the Tcl's sha256 to tests/reference/data/system/pile_in_soil/).
-#   tests/system/pile_in_soil/pile_check.sh <femorax> <python> <work dir> [tolerance]
+#   tests/system/pile_in_soil/pile_check.sh <femorax> <python> <work dir> [tolerance] [force]
+# With "force" the pile's elements are rewritten as `element nonlinearBeamColumn ... -iter 10 1e-12`
+# (the force-based beam, schema 1.3) before the conversion. The pile is elastic and prismatic,
+# where OpenSees' force beam and displacement beam are the same member, so the stored output (its
+# dispBeamColumn run) is the reference: an indirect check until OpenSees' own nonlinearBeamColumn
+# run is stored (it needs the Stampede3 reference build).
 set -euo pipefail
-FX=$1; PY=$2; W=$3; TOL=${4:-1e-12}
+FX=$1; PY=$2; W=$3; TOL=${4:-1e-12}; KIND=${5:-disp}
 HERE=$(cd "$(dirname "$0")" && pwd)
 DATA=$HERE/../../reference/data/system/pile_in_soil
 rm -rf "$W"
@@ -15,6 +20,10 @@ if [ "$(sha256sum "$W/pile.tcl" | cut -d' ' -f1)" != "$(cat "$DATA/pile.tcl.sha2
   exit 1
 fi
 cd "$W"
+if [ "$KIND" = force ]; then
+  sed -E -i 's/^element dispBeamColumn (.*)$/element nonlinearBeamColumn \1 -iter 10 1e-12/' pile.tcl
+  grep -q "^element nonlinearBeamColumn" pile.tcl
+fi
 "$PY" "$HERE/../femora_example/tcl_to_femorax.py" pile.tcl pile.femorax.h5
 OMP_NUM_THREADS=2 "$FX" run pile.femorax.h5 --quiet > femorax.log 2>&1 || { cat femorax.log; exit 1; }
 "$PY" - "$DATA/opensees_pile.txt" "$TOL" <<'PY'
@@ -27,4 +36,4 @@ d = np.abs(o[:, 1:] - f[:, 1:]).max() / np.abs(o[:, 1:]).max()
 print(f"== pile x displacement, FemoraX against OpenSees: {d:.2e} of the peak")
 sys.exit(0 if d <= tol else 1)
 PY
-echo "pile_in_soil: ok"
+echo "pile_in_soil ($KIND beams): ok"

@@ -180,6 +180,25 @@ endforeach()
 set(FEMORAX_OPENSEES "${PROJECT_SOURCE_DIR}/build/reference/opensees/OpenSees" CACHE FILEPATH
     "OpenSees executable of the reference build")
 set(FEMORAX_VENV_PYTHON "${PROJECT_SOURCE_DIR}/.venv/bin/python")
+# Machines whose presets name another interpreter (Vista: .venv-vista; /work is shared with
+# Stampede3, whose .venv does not resolve there): the stored-reference system tests use it. Before
+# 2026-11-21 they were silently not registered on Vista.
+if(NOT EXISTS "${FEMORAX_VENV_PYTHON}" AND EXISTS "${FEMORAX_PYTHON}")
+  set(FEMORAX_VENV_PYTHON "${FEMORAX_PYTHON}")
+endif()
+# The tests that read results with femora.results or export with Femora need Femora in that
+# interpreter (docs/dependencies.md); the others need numpy and h5py only.
+set(FEMORAX_HAVE_FEMORA FALSE)
+if(EXISTS "${FEMORAX_VENV_PYTHON}")
+  execute_process(COMMAND ${FEMORAX_VENV_PYTHON} -c "import femora" RESULT_VARIABLE _femora_rc
+                  OUTPUT_QUIET ERROR_QUIET)
+  if(_femora_rc EQUAL 0)
+    set(FEMORAX_HAVE_FEMORA TRUE)
+  else()
+    message(STATUS "FemoraX tests: no femora in ${FEMORAX_VENV_PYTHON}: the system tests that need "
+                   "it are not registered (vtkhdf_single_precision, nonlinear, wide_column, femora_example)")
+  endif()
+endif()
 if(EXISTS "${FEMORAX_OPENSEES}" AND EXISTS "${FEMORAX_VENV_PYTHON}")
   add_test(NAME system.vtkhdf_vs_opensees
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/vtkhdf_check.sh
@@ -194,7 +213,7 @@ if(EXISTS "${FEMORAX_OPENSEES}" AND EXISTS "${FEMORAX_VENV_PYTHON}")
   set_tests_properties(system.implicit_vs_opensees PROPERTIES TIMEOUT 600)
 endif()
 # Single-precision VTKHDF output against the double output of the same run (no OpenSees).
-if(EXISTS "${FEMORAX_VENV_PYTHON}")
+if(FEMORAX_HAVE_FEMORA)
   add_test(NAME system.vtkhdf_single_precision
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/single_precision_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_single_precision)
@@ -214,6 +233,7 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
   else()
     set(femorax_backend host)
   endif()
+  if(FEMORAX_HAVE_FEMORA)
   add_test(NAME system.nonlinear_vs_stored_opensees
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/soil_column/nonlinear_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_nonlinear
@@ -243,11 +263,25 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_femora_example
                    ${femorax_backend})
   set_tests_properties(system.femora_example_vs_stored_opensees PROPERTIES TIMEOUT 900)
+  endif()  # FEMORAX_HAVE_FEMORA
   # The converter's beam commands (schema 1.1) end to end: a Tcl cantilever converted, checked
   # and run implicit and explicit (tests/system/beam_cantilever/beam_check.sh).
   add_test(NAME system.beam_cantilever_conversion
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/beam_cantilever/beam_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_beam_cantilever)
+  # The converter's force-beam command (schema 1.3) end to end: the same cantilever as
+  # nonlinearBeamColumn elements, against its displacement-beam run (an elastic prismatic member:
+  # the same stiffness and mass; tests/system/beam_cantilever/force_beam_check.sh). GPUs: rounding
+  # of the solves.
+  if(femorax_device_build)
+    set(femorax_force_beam_tol 1e-7)
+  else()
+    set(femorax_force_beam_tol 1e-9)
+  endif()
+  add_test(NAME system.force_beam_cantilever_conversion
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/beam_cantilever/force_beam_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_force_beam_cantilever
+                   ${femorax_force_beam_tol})
   # A pile tied into a soil column against stored OpenSees output (beams, bricks, equalDOF,
   # Newmark; tests/system/pile_in_soil/pile_check.sh). GPUs: rounding of the solves.
   if(femorax_device_build)
@@ -259,6 +293,12 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/pile_in_soil/pile_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_pile_in_soil
                    ${femorax_pile_tol})
+  # The same pile as force-based beams (schema 1.3) against the same stored OpenSees output (an
+  # elastic prismatic member: OpenSees' two beams coincide; pile_check.sh, "force").
+  add_test(NAME system.force_beam_pile_in_soil_vs_stored_opensees
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/pile_in_soil/pile_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON}
+                   ${CMAKE_CURRENT_BINARY_DIR}/system_force_beam_pile_in_soil ${femorax_pile_tol} force)
   # Rigid links, a rigid diaphragm and embedded nodes against stored OpenSees output: the frame
   # to rounding, the embedded pile converging to FemoraX's exact tie as 1 / K
   # (tests/system/constraints/constraints_check.sh).

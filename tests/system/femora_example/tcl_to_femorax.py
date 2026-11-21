@@ -20,6 +20,8 @@ several partitions are kept once (their coordinates must agree). Recognised:
   section Elastic tag E A Iz Iy G J                                  (schema 1.1)
   geomTransf Linear|PDelta|Corotational tag vx vy vz [-jntOffset dXi dYi dZi dXj dYj dZj]
   element dispBeamColumn tag i j nIP secTag transfTag [-mass m] [-cMass]
+  element nonlinearBeamColumn|forceBeamColumn tag i j nIP secTag transfTag [-mass m]
+          [-iter maxIters tol]                                       (schema 1.3: Lobatto points)
   mass node m1 .. m_ndf                                              (nodal masses)
   equalDOF retained constrained dofs...
   rigidLink beam|bar master slave                                    (schema 1.2)
@@ -154,7 +156,9 @@ def convert(tcl: Path) -> dict:
     node_ndf: dict[int, int] = {}
     sections: dict[int, dict] = {}
     transfs: dict[int, dict] = {}
-    beams: list[tuple[int, list[int], tuple]] = []  # (tag, [i, j], (nip, sec, transf, mass, cmass))
+    # (tag, [i, j], (nip, sec, transf, mass, cmass, kind, maxIters, tol)); kind: "dispBeamColumn" or
+    # "forceBeamColumn" (maxIters and tol: the force beam's -iter, None for the defaults)
+    beams: list[tuple[int, list[int], tuple]] = []
     masses: list[tuple[int, int, float]] = []       # (node, dof 1-based, value)
     elements: list[tuple[int, list[int], int, tuple[float, float, float]]] = []
     ties: list[tuple[int, int, list[int]]] = []
@@ -238,7 +242,22 @@ def convert(tcl: Path) -> dict:
                     cmass, rest = True, rest[1:]
                 else:
                     raise Unsupported(s)
-            beams.append((int(tok[2]), [int(tok[3]), int(tok[4])], (int(tok[5]), int(tok[6]), int(tok[7]), mass, cmass)))
+            beams.append((int(tok[2]), [int(tok[3]), int(tok[4])],
+                          (int(tok[5]), int(tok[6]), int(tok[7]), mass, cmass, "dispBeamColumn", None, None)))
+        elif head == "element" and tok[1] in ("nonlinearBeamColumn", "forceBeamColumn"):
+            if len(tok) < 8:
+                raise Unsupported(s)
+            rest = tok[8:]
+            mass, iters, tol = None, None, None
+            while rest:
+                if rest[0] == "-mass" and len(rest) >= 2:
+                    mass, rest = float(rest[1]), rest[2:]
+                elif rest[0] == "-iter" and len(rest) >= 3:
+                    iters, tol, rest = int(rest[1]), float(rest[2]), rest[3:]
+                else:
+                    raise Unsupported(s)
+            beams.append((int(tok[2]), [int(tok[3]), int(tok[4])],
+                          (int(tok[5]), int(tok[6]), int(tok[7]), mass, False, "forceBeamColumn", iters, tol)))
         elif head == "element" and tok[1] == "ASDEmbeddedNodeElement":
             rest = tok[3:]
             nodes_ = []
@@ -447,10 +466,13 @@ def write_model(m: dict, path: Path, femorax_vtkhdf: str = "femorax.vtkhdf", exp
     # --explicit their consistent mass becomes lumped, as the bricks'.
     bkeys = sorted({k for (_e, _c, k) in m["beams"]}, key=str)
     for bi, key in enumerate(bkeys):
-        nip, sec, tr, mpl, cmass = key
+        nip, sec, tr, mpl, cmass, kind, iters, tol = key
         els = [(e, c) for (e, c, k) in m["beams"] if k == key]
-        attrs = {"type": "dispBeamColumn", "section": w.i32(sec), "transformation": w.i32(tr),
+        attrs = {"type": kind, "section": w.i32(sec), "transformation": w.i32(tr),
                  "integration_points": w.i32(nip), "consistent_mass": w.u8(cmass and explicit_dt is None)}
+        if iters is not None:  # the force beam's element iteration (schema 1.3)
+            attrs["max_iterations"] = w.i32(iters)
+            attrs["tolerance"] = w.f64(tol)
         if mpl is not None:
             attrs["mass_per_length"] = w.f64(mpl)  # OpenSees' -mass; without it the beams' mass is nodal
         groups[f"beam{bi:06d}"] = w.node(attrs=attrs, data={"tags": w.i32([e for e, _ in els]),

@@ -1254,7 +1254,26 @@ stage test, fixed with the plain array. (3) A function-local type in a device la
 and (4) a braced list in a range-for (the reader) do not compile. Rule from now on: a kernel change
 is checked on a GPU node before it counts as done, and warning 20013 in new code is treated as an
 error (seven old instances remain: implicit constructors and quiet_NaN, in code whose GPU tests
-pass). Next: the converter, the OpenSees system test, benchmarks.
+pass). Step 4 done (2026-11-21): the Tcl converter reads `element nonlinearBeamColumn|forceBeamColumn
+tag i j nIP secTag transfTag [-mass m] [-iter maxIters tol]` and writes schema 1.3 groups;
+`system.force_beam_cantilever_conversion` (the Tcl cantilever as force beams, converted, checked and
+run: against its displacement-beam run within 1.4e-12 implicit, 2e-18 explicit). Step 5, first part
+(2026-11-21): `system.force_beam_pile_in_soil_vs_stored_opensees`: the pile in soil with force beams
+against the stored OpenSees output within 1.9e-15 of the peak. Indirect: the stored output is
+OpenSees' dispBeamColumn run; for this elastic prismatic pile OpenSees' two beams are the same member.
+Still to do on Stampede3 (the OpenSees reference build is there): store OpenSees' own
+nonlinearBeamColumn run of the pile and of a frame.
+System tests on Vista (2026-11-21): `tests/CMakeLists.txt` named Stampede3's `.venv`, which does not
+resolve on Vista, so CMake registered no system test there (found when two new tests did not change
+the count). They now use the preset's interpreter; five run on Vista's CPU and GPU builds (the two
+beam conversions, the two piles, the constraints: all pass, the H200 included), and the four that
+need the `femora` package are registered only when it is installed.
+First H200 numbers (2026-11-21, Vista gh, 40^3, `benchmarks/results/vista-gh-20261121T114509Z-
+419b64af4294`, no baseline recorded yet): stdBrick explicit force 103 us (flat atomic) and 171 us
+(flat gather); SSPbrick 139 us (flat gather, cached); the undamped column 247 us, with 100 embedded
+piles 270 us (+9 %); expand 9.0 us and contract 8.9 us, so the piles' cost on the GPU is the three
+small launches (expand u, expand v, contract), not arithmetic: fusing the two expands is the first
+optimization candidate. Next: baselines (with the user), OpenSees' own force-beam references.
 
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);

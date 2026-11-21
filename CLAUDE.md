@@ -147,7 +147,16 @@ ctest --preset cpu-debug
   `vista-cpu-ubsan`; `scripts/check.sh` picks them on Vista. They build with
   `-ffp-contract=off`: GCC fuses multiply-adds on aarch64 by default, which breaks the
   bit-identical tests made on x86. No OpenSees build there: the live OpenSees comparisons are
-  skipped, the stored references run.
+  skipped. The stored-reference system tests that need numpy and h5py only (beams, piles,
+  constraints) run with `.venv-vista` (since 2026-11-21: before, the tests' hardcoded `.venv` made
+  CMake skip every system test on Vista without a message); the four that need the `femora`
+  package (single-precision VTKHDF, nonlinear, wide column, Femora's example) are registered only
+  when `.venv-vista` has Femora, and CMake says so when it has not. On `gh` nodes
+  `scripts/check.sh` adds `vista-cuda-hopper90` (H200): a kernel change is not done until it has
+  passed there, because nvcc rejects or silently breaks code that host compilers accept
+  (docs/design.md, "First GPU build of the beams"). The session may set `OMP_NUM_THREADS=1`, which
+  `nproc` honours: `benchmarks/run_all.sh` then builds with one job and benchmarks one thread
+  (unset it first).
 - Intel GPUs (Stampede3 `pvc` nodes, Data Center GPU Max 1550): `source
   scripts/stampede3_sycl_env.sh` (oneAPI 2026.0), then the preset `s3-sycl-pvc` (Kokkos'
   SYCL backend). Intel's compilers default to fast floating-point math: every Intel build
