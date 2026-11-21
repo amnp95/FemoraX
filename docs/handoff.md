@@ -417,3 +417,40 @@ Next, in order:
    a plan for the user's approval first.
 Notes: on gh nodes `benchmarks/run_all.sh` needs FEMORAX_MODULES with gcc/13.2.0 and cuda/12.6
 (CLAUDE.md); check.sh takes about 12 minutes there with four presets.
+
+## 2026-11-21, later (Vista gh): fiber sections started
+
+Commits of this node (all after `scripts/check.sh` on the four Vista presets, the H200 included;
+not pushed: the nodes have no GitHub key, the user pushes):
+- `d59a827` the Vista presets run the live OpenSees comparisons (`FEMORAX_OPENSEES` =
+  `build/reference-vista/OpenSees.sh`).
+- `c4e0d9e` force-beam step 5: `system.force_beam_frame_vs_stored_opensees` (2.9e-15).
+- `a195495` force-beam step 6: `explicit_force_beams/<n>^3/{disp,force}` benchmarks (H200: 22 us
+  and 407 us for 64,000 beams; not in the gh baseline: ask the user before recording).
+- `307ee29` `expand_slots(u, v)` in one launch (a small gain: 270 -> 268 us).
+- Fiber sections (plan approved by the user 2026-11-21: docs/design.md, "Fiber sections and
+  uniaxial materials"; the user chose a team of threads over the fibers as the GPU layout, and
+  wants the uniaxial materials in tiers): `65f2506` step 1 (Elastic, Steel01, Concrete02: bit for
+  bit), `0a1a68e` step 2 (`FiberSection3d<NF>`: bit for bit), `6eea3f7` step 3 (both beams with
+  the fiber section against OpenSees: dispBeamColumn bit for bit, forceBeamColumn 5.8e-15).
+
+Next, in order:
+1. Fiber step 4: in memory first (`io::FiberSection3dData` holding its fibers and its uniaxial
+   parameter sets, resolved; the schema is step 5), registry entries `FiberSection3dEntry<NF>`
+   (size classes; each is one more instantiation of every beam kernel: watch the nvcc build
+   time), batches with the fiber state, a `test_beam_kernels` case (a fiber cantilever, explicit
+   and implicit, against a host recurrence), then the team layout (a team per element, lanes over
+   the fibers: the section's `update(ctx, ..., work)` with the work array in team scratch),
+   bit-identical to the flat layout; CPU and H200. Check first how the kernels hand the element's
+   `Params` to the physics (by reference from the device array: the section's fiber table is in
+   `Params`, about 28 bytes per fiber of the size class).
+2. Step 5: schema 1.4 (ask the user with the exact text): `/uniaxial_materials/<tag>`, fiber
+   sections as explicit fiber lists (y, z, area, material tag) with `GJ` and the centroid flag;
+   the Tcl converter discretizes `patch` and `layer` as OpenSees does.
+3. Step 6: system tests against OpenSees (cyclic pushover of an RC cantilever; a yielding frame
+   under shaking); here the force beam's iteration from the committed state differs from
+   OpenSees' warm start: measure it, docs/deviations.md.
+4. Step 7: benchmarks, flat against team by fiber count.
+Then Steel02, Concrete01 and the next tiers; RC, WF, Aggregator, Parallel sections; Truss.
+Building a reference driver in `build/reference-vista` re-runs part of the OpenSees build
+(2-4 minutes): start it in the background.
