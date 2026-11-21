@@ -149,8 +149,8 @@ ctest --preset cpu-debug
   bit-identical tests made on x86. The OpenSees reference build there: `scripts/vista_opensees.sh`
   (GCC, NVPL, the system's Tcl 8.6; `build/reference-vista`, launcher `OpenSees.sh`; equal to the
   Stampede3 build within 9e-16 on the pile test), so reference runs and drivers no longer need
-  Stampede3. The live OpenSees comparisons are not wired to it yet (the presets' FEMORAX_OPENSEES)
-  and are skipped. The stored-reference system tests that need numpy and h5py only (beams, piles,
+  Stampede3; the Vista presets point FEMORAX_OPENSEES at it, so the live OpenSees comparisons run
+  there too (skipped when `build/reference-vista` is missing). The stored-reference system tests that need numpy and h5py only (beams, piles,
   constraints) run with `.venv-vista` (since 2026-11-21: before, the tests' hardcoded `.venv` made
   CMake skip every system test on Vista without a message); the four that need the `femora`
   package (single-precision VTKHDF, nonlinear, wide column, Femora's example) are registered only
