@@ -381,3 +381,39 @@ by the section codes, `kv = f^-1`, convergence on |dW| < tol), `getInitialFlexib
 state each evaluation (design.md). Mirror `disp_beam_3d.hpp` for the transformation, mass and
 damping parts; tests: one element of an elastic cantilever exact for end loads; then an OpenSees
 driver like `tests/reference/drivers/disp_beam_column.cpp`.
+
+## 2026-11-21 (Vista: gg, then gh with the H200)
+
+Done, committed locally (419b64a, dc19b1c, 4b417b6, 646ba62; NOT pushed: the compute nodes have
+no GitHub key, the user pushes):
+- Schema 1.3 (`forceBeamColumn` groups), reader, fixtures; the Tcl converter
+  (`nonlinearBeamColumn`); `system.force_beam_cantilever_conversion`;
+  `system.force_beam_pile_in_soil_vs_stored_opensees` against OpenSees' own nonlinearBeamColumn
+  run (2.1e-15).
+- The beams' first GPU build (vista-cuda-hopper90): four nvcc problems fixed; the worst, a
+  `std::array` index in a device kernel (warning 20013 only), made the beams' implicit operator
+  return zero on GPUs. design.md, "First GPU build of the beams".
+- Vista is self-sufficient: `scripts/vista_opensees.sh` (OpenSees and the drivers in
+  `build/reference-vista`, equal to Stampede3's within 9e-16), Femora in `.venv-vista`, every
+  system test registered there (they were silently skipped before), all passing on the CPU
+  presets and on the H200.
+- The first gh baseline (`benchmarks/baselines/tacc-vista-gh-cuda270336.json`, approved by the
+  user). A full-thread CPU run on the gh node's 72 Grace cores is in
+  `benchmarks/results/vista-gh-cpu72-20261121T122531Z-646ba62ef237` (not a baseline: record the gg
+  baseline on a gg node). 40^3: stdBrick explicit force 771 us (CPU) / 103 us (H200); PDMY plastic
+  60 ms / 13.6 ms; 100 embedded piles +11 % / +8 %.
+
+Next, in order:
+1. Wire Vista's OpenSees into the Vista presets (`FEMORAX_OPENSEES` =
+   `build/reference-vista/OpenSees.sh` in CMakePresets.json's four vista presets). Tried by hand in
+   build/vista-cpu-release (its cache has the variable now): `system.vtkhdf_vs_opensees` and
+   `system.implicit_vs_opensees` both pass with Vista's OpenSees. Then a full check on a gh node.
+2. A force-beam frame against OpenSees (stored from the Vista build), completing the force
+   beam's verification list; beam-kernel benchmarks.
+3. First optimizations the numbers ask for: one launch for the two constraint expands; the
+   multi-yield kernel (50-130 x the elastic one).
+4. nvcc warning 20013 as an error in new code; seven old instances to clean up.
+5. The fiber-section plan (Steel01, Concrete02, Fiber section, the force beam's nonlinear path):
+   a plan for the user's approval first.
+Notes: on gh nodes `benchmarks/run_all.sh` needs FEMORAX_MODULES with gcc/13.2.0 and cuda/12.6
+(CLAUDE.md); check.sh takes about 12 minutes there with four presets.
