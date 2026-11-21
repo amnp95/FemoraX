@@ -1282,8 +1282,11 @@ within 1.2e-18. With it the force beam has its direct reference: OpenSees' nonli
 of the pile (stored, `opensees_force_pile.txt`), FemoraX within 2.1e-15 of the peak (and OpenSees'
 two beams within 9.0e-16 of each other there). The first gh baseline is recorded
 (`benchmarks/baselines/`, approved by the user; its file is named after the node's hostname, which
-ties it to one node: to be changed to the node type). Next: the live OpenSees tests on Vista (the
-presets' FEMORAX_OPENSEES, Femora in `.venv-vista`), a force-beam frame against OpenSees.
+ties it to one node: to be changed to the node type). Femora in `.venv-vista` (2026-11-21): the four system tests
+that need it (single-precision VTKHDF, nonlinear, wide column, Femora's example) now run on Vista
+too. `benchmarks/run_all.sh` ignores an inherited OMP_NUM_THREADS; baselines are named by machine
+and node type (`tacc-vista-gh-cuda270336.json`). Next: the live OpenSees tests on Vista (the
+presets' FEMORAX_OPENSEES), a force-beam frame against OpenSees.
 
 **Verification:** closed forms (one element of an elastic member is exact for end forces and
 moments: tip deflections and rotations to 1e-12 with one element, unlike the displacement beam);

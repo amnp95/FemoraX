@@ -53,6 +53,8 @@ FemoraX or Kokkos code. Running on a GPU waits for the hardware.
 `.venv` sees `../Femora/src` through a `.pth` file (`femora_readonly.pth`, which also
 sends bytecode caches to `.venv/pycache`), so nothing is written into the clone. Femora's
 runtime dependencies are installed in `.venv` (pyvista 0.49.2, vtk 9.7.2, ...).
+Vista's `.venv-vista` is set up the same way (2026-11-21; pyvista 0.49.2, vtk 9.7.2; every
+dependency has an aarch64 wheel except pymetis, which pip builds from source there).
 
 Each ported file names its OpenSees source file and this commit in its header comment. A
 port made against a different commit records that commit there and in this table.

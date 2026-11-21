@@ -154,12 +154,15 @@ ctest --preset cpu-debug
   constraints) run with `.venv-vista` (since 2026-11-21: before, the tests' hardcoded `.venv` made
   CMake skip every system test on Vista without a message); the four that need the `femora`
   package (single-precision VTKHDF, nonlinear, wide column, Femora's example) are registered only
-  when `.venv-vista` has Femora, and CMake says so when it has not. On `gh` nodes
+  when the interpreter has Femora, and CMake says so when it has not. `.venv-vista` has it since
+  2026-11-21, as `.venv` does: `femora_readonly.pth` points at `../Femora/src` (nothing is written
+  into the clone) and Femora's dependencies are pip-installed (docs/dependencies.md). On `gh` nodes
   `scripts/check.sh` adds `vista-cuda-hopper90` (H200): a kernel change is not done until it has
   passed there, because nvcc rejects or silently breaks code that host compilers accept
   (docs/design.md, "First GPU build of the beams"). The session may set `OMP_NUM_THREADS=1`, which
-  `nproc` honours: `benchmarks/run_all.sh` then builds with one job and benchmarks one thread
-  (unset it first).
+  `nproc` honours; `benchmarks/run_all.sh` ignores it (every core, or `FEMORAX_BENCH_THREADS`).
+  Its default modules pick GCC 15, which nvcc refuses: on gh nodes pass
+  `FEMORAX_MODULES='gcc/13.2.0 cuda/12.6 cmake/4.1.1 hdf5/1.14.6 eigen/3.4.0 ninja/1.12.1'`.
 - Intel GPUs (Stampede3 `pvc` nodes, Data Center GPU Max 1550): `source
   scripts/stampede3_sycl_env.sh` (oneAPI 2026.0), then the preset `s3-sycl-pvc` (Kokkos'
   SYCL backend). Intel's compilers default to fast floating-point math: every Intel build

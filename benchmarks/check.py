@@ -45,6 +45,13 @@ def show(path: Path) -> str:
 
 
 def machine_key(machine: dict) -> str:
+    # On TACC a baseline belongs to the machine and node type (Slurm partition without -dev), not
+    # to one node's hostname: every gh node of Vista shares tacc-vista-gh-<space><concurrency>.
+    system = os.environ.get("TACC_SYSTEM", "")
+    partition = os.environ.get("SLURM_JOB_PARTITION", "")
+    if system and partition:
+        node = partition.split("-")[0]
+        return f'tacc-{slug(system)}-{slug(node)}-{slug(machine["execution_space"])}{machine["concurrency"]}'
     return "-".join(
         [
             slug(machine["host"]),

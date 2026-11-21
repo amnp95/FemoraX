@@ -36,6 +36,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# The node's cores. TACC sessions may export OMP_NUM_THREADS=1, which nproc honours: the build
+# would then run one job and the CPU benchmarks one thread (found 2026-11-21). The benchmarks use
+# every core unless FEMORAX_BENCH_THREADS says otherwise.
+CORES=$(env -u OMP_NUM_THREADS nproc)
+export OMP_NUM_THREADS="${FEMORAX_BENCH_THREADS:-$CORES}"
+echo "cores $CORES, OpenMP threads $OMP_NUM_THREADS"
 # --- Which machine and node --------------------------------------------------------------
 MACHINE="${TACC_SYSTEM:-}"
 if [ -z "$MACHINE" ]; then
@@ -108,7 +114,7 @@ if [ "$BUILD" = 1 ]; then
   fi
   cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DFEMORAX_BUILD_TESTS=OFF \
         -DFEMORAX_BUILD_BENCHMARKS=ON "${CMAKE_ARGS[@]}"
-  cmake --build "$BUILD_DIR" --target femorax_bench femorax -j "$(nproc)"
+  cmake --build "$BUILD_DIR" --target femorax_bench femorax -j "$CORES"
 fi
 [ "$RUN" = 1 ] || { echo "built: $BUILD_DIR"; exit 0; }
 
@@ -135,7 +141,8 @@ cat > "$OUT/meta.json" <<EOF
   "hostname": "$(hostname)",
   "cpu": "$CPU",
   "cpu_arch": "$CPU_ARCH",
-  "cores": $(nproc),
+  "cores": $CORES,
+  "threads": $OMP_NUM_THREADS,
   "gpu": "$GPU",
   "modules": "$MODULES",
   "build_dir": "$BUILD_DIR",
