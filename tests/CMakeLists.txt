@@ -306,4 +306,11 @@ if(EXISTS "${FEMORAX_VENV_PYTHON}")
            COMMAND ${PROJECT_SOURCE_DIR}/tests/system/constraints/constraints_check.sh
                    $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_constraints
                    ${femorax_pile_tol})
+  # A two-storey 3D frame, one force-based beam per member (PDelta columns, joint offsets, 3 to 7
+  # Lobatto points), against OpenSees' stored nonlinearBeamColumn run
+  # (tests/system/force_beam_frame/frame_check.sh).
+  add_test(NAME system.force_beam_frame_vs_stored_opensees
+           COMMAND ${PROJECT_SOURCE_DIR}/tests/system/force_beam_frame/frame_check.sh
+                   $<TARGET_FILE:femorax> ${FEMORAX_VENV_PYTHON} ${CMAKE_CURRENT_BINARY_DIR}/system_force_beam_frame
+                   ${femorax_pile_tol})
 endif()
