@@ -142,6 +142,7 @@ concept UniaxialMaterial = requires {
               double strain, double& stress, double& tangent, const double* cv, double* v) {
   { M::update(p, committed, trial, strain, stress, tangent) } -> std::same_as<void>;
   { M::initial_tangent(p) } -> std::same_as<double>;
+  { M::committed_tangent(p, committed) } -> std::same_as<double>;
   { M::unpack(cv) } -> std::same_as<typename M::Params>;
   { M::pack(p, v) } -> std::same_as<void>;
 };

@@ -31,7 +31,7 @@ Status: **supported**, **in progress** (milestone named), or **planned**.
 |---|---|---|
 | section Elastic (3D) | **supported** (schema 1.1) | port of `ElasticSection3d.cpp` (`955ceb0`); with dispBeamColumn and forceBeamColumn |
 | uniaxialMaterial Elastic, Steel01, Concrete02 | **physics done** (2026-11-21), not yet reachable from a model (the fiber section, then schema 1.4) | ports of `ElasticMaterial.cpp`, `Steel01.cpp`, `Concrete02.cpp` (`955ceb0`): stress and tangent bit for bit along 48 strain paths with commits, thrown-away trials and repeated iterates (reference driver `uniaxial_material`; 14,080 values). Not ported: Elastic's `eta`, the energies and sensitivities |
-| section Fiber | in progress (docs/design.md, "Fiber sections and uniaxial materials") | |
+| section Fiber (3D) | **physics done** (2026-11-21), not yet in the beams or the schema (docs/design.md, "Fiber sections and uniaxial materials") | port of `FiberSection3d.cpp` (`955ceb0`) with elastic torsion (`-GJ`): initial tangent, resultants and tangent bit for bit for three sections x four deformation paths (reference driver `fiber_section`; 43,032 values). Not ported: `-torsion` with another material, section integrations |
 | all others | planned | uniaxial materials in tiers (docs/design.md) |
 
 ## Constraints

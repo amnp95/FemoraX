@@ -5,7 +5,7 @@
 // Port of OpenSees SRC/material/uniaxial/ElasticMaterial.cpp, OpenSees commit
 // 955ceb0a55f7b5764856ea82fc9a9cc7f07a1eea (`uniaxialMaterial Elastic tag E <eta> <Eneg>`).
 // getStress: Epos * strain for strain >= 0, Eneg * strain otherwise; getTangent the modulus of
-// the strain's sign. No history. Not ported: eta (the damping tangent; a fiber section never
+// the strain's sign. State: the strain (for the committed tangent of Epos != Eneg). Not ported: eta (the damping tangent; a fiber section never
 // passes a strain rate, so it has no effect there).
 
 #include "physics/common/strided.hpp"
@@ -16,7 +16,7 @@ namespace femorax {
 
 struct ElasticUniaxial {
   static constexpr MaterialKind KIND = MaterialKind::Uniaxial;
-  static constexpr int NSTATE = 0;
+  static constexpr int NSTATE = 1;
   static constexpr int NPARAM = 2;
 
   struct Params {
@@ -32,7 +32,7 @@ struct ElasticUniaxial {
   FEMORAX_HD static void update(const Params& p, Strided<const double> committed, Strided<double> trial,
                                 double strain, double& stress, double& tangent) {
     (void)committed;
-    (void)trial;
+    trial[0] = strain;
     if (strain >= 0.0) {
       stress = p.Epos * strain;
       tangent = p.Epos;
@@ -43,6 +43,9 @@ struct ElasticUniaxial {
   }
 
   FEMORAX_HD static double initial_tangent(const Params& p) { return p.Epos; }
+  FEMORAX_HD static double committed_tangent(const Params& p, Strided<const double> committed) {
+    return committed[0] >= 0.0 ? p.Epos : p.Eneg;
+  }
 };
 
 }  // namespace femorax

@@ -164,6 +164,9 @@ struct Concrete02 {
   }
 
   FEMORAX_HD static double initial_tangent(const Params& p) { return 2.0 * p.fc / p.epsc0; }
+  FEMORAX_HD static double committed_tangent(const Params& p, Strided<const double> committed) {
+    return committed[5] != 0.0 ? committed[4] : 2.0 * p.fc / p.epsc0;
+  }
 };
 
 }  // namespace femorax

@@ -117,6 +117,9 @@ struct Steel01 {
   }
 
   FEMORAX_HD static double initial_tangent(const Params& p) { return p.E0; }
+  FEMORAX_HD static double committed_tangent(const Params& p, Strided<const double> committed) {
+    return committed[7] != 0.0 ? p.b * p.E0 : p.E0;
+  }
 };
 
 }  // namespace femorax

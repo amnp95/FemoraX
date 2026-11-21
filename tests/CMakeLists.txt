@@ -46,6 +46,7 @@ add_executable(femorax_unit_tests
   unit/test_disp_beam_3d.cpp
   unit/test_force_beam_3d.cpp
   unit/test_uniaxial.cpp
+  unit/test_fiber_section_3d.cpp
   unit/test_beam_kernels.cpp
   unit/test_linear_constraints.cpp)
 target_link_libraries(femorax_unit_tests PRIVATE femorax::exec femorax::solvers femorax::compile GTest::gtest

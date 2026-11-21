@@ -1367,6 +1367,23 @@ OpenSees (reference driver `uniaxial_material`, data in `tests/reference/data/un
 Vista build): 8 parameter sets x 6 strain paths, every stress and tangent bit for bit (14,080
 values), through the dispatcher and strided state; closed forms (Steel01's bilinear kinematic
 law, Concrete02's envelopes).
+Step 2 done (2026-11-21): `physics/sections/fiber_section_3d.hpp`, `FiberSection3d<NF>` (NF the
+size class; each fiber's strain `d0 - y d1 + z d2` from the centroid as OpenSees accumulates it,
+the material by the dispatcher, the resultants and the tangent summed in the section's fiber
+order, elastic torsion; one `inner_for` over the fibers writing each fiber's two results to the
+caller's work array, then `inner_reduce` per entry). Fibers are kept in the section's order, not
+grouped by material: OpenSees sums in that order and a regrouping would change the last bits.
+The uniaxial materials gained their committed tangent (Elastic keeps its strain for it). Against
+OpenSees (reference driver `fiber_section`, data in `tests/reference/data/section/`): three
+sections (an RC rectangle off the origin with core, cover and bars: 84 fibers; a Steel01 I shape;
+elastic, steel and concrete fibers with -noCentroid) x four paths (bending about z under
+compression, about y, biaxial cycles, a random walk; commits and thrown-away trials): the initial
+tangent, every resultant and every tangent entry bit for bit (43,032 values); a reversed lane
+order gives the same bits and state; the committed tangent equals the tangent just computed.
+Closed forms: elastic fibers give EA, EIz, EIy of the rectangle; the tangent is the derivative of
+the resultants on a yielding section. Open for step 4: the section's Params hold the fiber table
+(28 bytes per fiber of the size class per parameter set); check how the kernels pass Params
+before choosing the classes.
 
 ## Exact constraints u = T q: rigid links, rigid diaphragms, embedded nodes (plan approved by the user, 2026-11-20)
 

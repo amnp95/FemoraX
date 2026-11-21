@@ -7,7 +7,7 @@
 // materials; a material uses the first NSTATE of them).
 //
 // Adding a material: its header (the UniaxialMaterial concept of contracts.hpp), one enumerator,
-// one case in uniaxial_update and uniaxial_initial_tangent, and its strain-path reference test.
+// one case in uniaxial_update, uniaxial_initial_tangent and uniaxial_committed_tangent, and its strain-path reference test.
 
 #include "physics/contracts.hpp"
 #include "physics/macros.hpp"
@@ -64,6 +64,19 @@ FEMORAX_HD inline double uniaxial_initial_tangent(const UniaxialParams& u) {
     case UniaxialType::Elastic:
     default:
       return ElasticUniaxial::initial_tangent(ElasticUniaxial::unpack(u.v));
+  }
+}
+
+// The tangent at the committed state (getTangent after a commit).
+FEMORAX_HD inline double uniaxial_committed_tangent(const UniaxialParams& u, Strided<const double> committed) {
+  switch (static_cast<UniaxialType>(u.type)) {
+    case UniaxialType::Steel01:
+      return Steel01::committed_tangent(Steel01::unpack(u.v), committed);
+    case UniaxialType::Concrete02:
+      return Concrete02::committed_tangent(Concrete02::unpack(u.v), committed);
+    case UniaxialType::Elastic:
+    default:
+      return ElasticUniaxial::committed_tangent(ElasticUniaxial::unpack(u.v), committed);
   }
 }
 
